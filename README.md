@@ -1,9 +1,11 @@
 # 知行 Next
 
-独立的新一代知行 App，使用 React Native、Expo 和 TypeScript。
+面向用户本人的个人助手，客户端使用 React Native、Expo 和 TypeScript。
 
-2026-09-22 初始化：代码仅包含移动端启动页面。用户已确认服务器优先，后端优先 Deep Agents / LangGraph；
-后端与代码沙盒处于[架构讨论](docs/ARCHITECTURE.md)阶段，尚未实现。App 虚拟执行环境与外部 harness 编排后续扩展。
+2026-09-22：代码仅包含移动端启动页面。用户计划先在 myVPS 运行，Mac mini 到货后作为常驻主机，
+通过隧道连接 myVPS 公网入口。Mac 配置为 16GB，主模型调用云 API，本地只考虑轻量模型。
+后端优先 Deep Agents / LangGraph，具体方案见[架构讨论](docs/ARCHITECTURE.md)；后端与部署均未实现。
+App 虚拟执行环境与外部 harness 编排后续扩展。
 
 ## 本地开发
 
