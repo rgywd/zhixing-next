@@ -12,6 +12,7 @@
 - 用户于 2026-09-22 提供的主机计划：先在 myVPS 运行；已购买的 Mac mini 到货后放在公司常驻运行，
   通过内网穿透连接 myVPS，并在 Mac 上配置对外访问代理。Mac 内存为 16GB，具体设备与网络尚未验收。
 - 主模型只调用云 API；本地仅考虑极轻量模型。
+- Chat 模型接入支持三套协议：OpenAI 兼容的 Chat Completions、OpenAI Responses、Gemini 原生协议。
 - 记忆以写入、整理、获取三个过程为主线，进一步区分该记什么、怎么记。
 - Work 的长期方向是基于拓扑关系管理模型与智能体工作；外部 harness 编排仍留作后续扩展。
 
@@ -112,6 +113,40 @@ flowchart LR
 
 运行状态、客户端事件和 LangGraph 内部状态各有归属，需要定义一致性和恢复策略；选定框架不等于这些产品语义自动完成。
 
+## 模型接入协议
+
+2026-09-22 确定三协议接入范围，Gemini 是用户正在使用的服务。以下为后端接入设计，尚未安装 SDK 或实现调用。
+
+| 协议 | 接入用途 | 建议实现 |
+| --- | --- | --- |
+| OpenAI 兼容 Chat Completions | OpenAI 及兼容该格式的服务，支持自定义 API 地址与模型 ID | 使用 `langchain-openai` 的 `ChatOpenAI`，显式选择 Chat Completions |
+| OpenAI Responses | 原生 Responses 条目、工具调用与多轮续接 | 使用 `ChatOpenAI` 的 `use_responses_api=True`，保留所需条目与续接信息 |
+| Gemini 原生 | 直接使用 Gemini 的消息、工具调用与多模态格式 | 使用 `langchain-google-genai` 的 `ChatGoogleGenerativeAI`；先按 Developer API 设计，实际端点接入时确认 |
+
+协议、服务端点和模型分别配置，不根据模型名称猜测协议。配置最少包含协议、API 地址、模型 ID、
+服务端凭据引用和必要的模型参数；允许同一服务端点配置多个模型或协议。密钥保留在服务端，App 只引用模型配置。
+第一版直接复用现有 LangChain 集成，在运行时模块集中选择模型，不额外部署模型网关或编写通用 SDK 框架。
+
+三套协议统一映射到产品自己的文本增量、工具执行进度、结果、用量与错误事件。运行时保留 SDK 的完整消息和
+必要的协议元数据，不能仅从 App 展示文本重建下一轮请求：
+
+- Responses 的 `output` 包含不同类型的条目；工具调用和回传通过 `call_id` 关联。采用本地历史或服务端
+  response ID 续接时都要保留所需上下文，产品任务记录不能仅依赖供应商的会话 ID。
+- Gemini 的 thought signature 随原消息保留和回传；持久化、流式聚合、上下文整理后仍需验证续接。
+  签名作为不透明协议数据处理，不进入个人记忆或跨供应商传递。
+- 模型切换发生在完整回合边界；跨协议时由可移植内容重新构建上下文，不能沿用另一供应商的签名或 response ID。
+  有未完成工具调用时先处理该运行，不承诺任意时刻无损切换。
+
+能力按“端点 + 协议 + 模型”验证，分别标明工具调用、图片输入、结构化输出与推理参数等支持情况。
+OpenAI 兼容不意味着所有扩展字段都兼容：`ChatOpenAI` 不保留部分第三方推理字段，实际使用的服务若依赖这些字段，
+优先采用其现有专用集成；其协议归属仍是 Chat Completions 或 Responses。缺少必要能力时给出明确提示，
+不静默丢弃工具或切换协议。供应商托管搜索、代码执行等内置工具按实际需求单独接入。
+
+接入验收至少覆盖每套协议的流式文本、工具调用参数聚合、工具结果回传后的继续回答，以及保存和恢复后的多轮续接。
+工具参数未完整且未校验时不执行；一个模型回合完成不等于整个任务完成。另需验证取消、限流与断流回执，
+重试不能重复执行已有副作用的工具；供应商未返回用量时标为未知。图片、结构化输出等仅对声明支持的配置验收。
+Gemini 应列入首批真实服务验收，SDK 可用或模拟响应通过均不等于用户实际端点已经验证。
+
 ## 代码执行的关键约束
 
 智能体运行时负责作出下一步决策，沙盒负责实际运行代码。智能体能调用 Shell，不意味着能直接管理宿主机。
@@ -155,6 +190,10 @@ App 内部内容可以通过工具接口操作。手机内脚本沙盒和远端�
 - [Deep Agents 文件后端](https://docs.langchain.com/oss/python/deepagents/backends)
 - [Deep Agents 代码执行沙盒](https://docs.langchain.com/oss/python/deepagents/sandboxes)
 - [LangGraph 状态持久化](https://docs.langchain.com/oss/python/langgraph/persistence)
+- [OpenAI Chat Completions 与 Responses 的消息、工具和续接差异](https://developers.openai.com/api/docs/guides/migrate-to-responses)
+- [LangChain OpenAI 接入与第三方兼容边界](https://docs.langchain.com/oss/python/integrations/chat/openai)
+- [LangChain Gemini 接入与 thought signature 保留](https://docs.langchain.com/oss/python/integrations/chat/google_generative_ai)
+- [Gemini 原生内容生成 API](https://ai.google.dev/api/generate-content)
 - [移动端后台任务的系统调度与停止边界](https://docs.expo.dev/versions/v57.0.0/sdk/background-task/)
 - [Docker Engine 安全边界](https://docs.docker.com/engine/security/)
 - [gVisor 隔离模型](https://gvisor.dev/docs/)
