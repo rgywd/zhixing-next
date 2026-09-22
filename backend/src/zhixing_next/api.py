@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import hmac
-import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -20,6 +19,7 @@ from starlette.exceptions import HTTPException
 
 from . import files
 from .config import Settings, load_settings
+from .models import model_ready
 from .schemas import (
     AssistantInput,
     ConversationInput,
@@ -119,12 +119,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def status():
         from .tools import capability_status
 
-        ready = all(
-            role in settings.roles
-            and settings.roles[role] in settings.models
-            and bool(os.environ.get(settings.models[settings.roles[role]].api_key_env))
-            for role in ("chat", "task")
-        )
+        ready = all(model_ready(settings, role) for role in ("chat", "task"))
         capability = capability_status(settings)
         return {
             "model_ready": ready,

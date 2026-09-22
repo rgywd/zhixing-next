@@ -33,6 +33,7 @@ npx expo-doctor
 ```
 
 `bundle:*` 生成 `dist/` 下的 JS/Hermes 产物，不是 APK 或 iOS 安装包。原生构建和真机验收另行执行。
+本次实际结果与未通过项见[验收记录](docs/VERIFICATION.md)。
 
 ## 入口
 

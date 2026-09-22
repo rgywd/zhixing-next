@@ -165,6 +165,8 @@ def test_status_reports_configuration_and_heartbeat_without_model_calls(client, 
         protocol="gemini", model="test-model", api_key_env="ZHIXING_TEST_MODEL_KEY"
     )
     client.app.state.settings.models = {"chat": config, "task": config}
+    monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", " \t\n ")
+    assert client.get("/v1/status").json()["model_ready"] is False
     monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "test-value-must-not-be-returned")
     client.app.state.store.heartbeat()
     ready = client.get("/v1/status")
