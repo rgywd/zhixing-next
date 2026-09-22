@@ -1,7 +1,7 @@
-const { defineConfig, globalIgnores } = require('eslint/config');
-const expoConfig = require('eslint-config-expo/flat');
+const { defineConfig, globalIgnores } = require("eslint/config");
+const expoConfig = require("eslint-config-expo/flat");
 
 module.exports = defineConfig([
-  globalIgnores(['dist/**', '.expo/**']),
+  globalIgnores(["dist/**", ".expo/**", "backend/**", "android/**", "ios/**"]),
   expoConfig,
 ]);

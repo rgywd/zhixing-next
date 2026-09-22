@@ -1,0 +1,32 @@
+# Copy to an ignored local file, e.g. config.local.toml. All paths are relative to this file.
+data_dir = ".data"
+workspace_root = ".data/workspaces"
+api_token_env = "ZHIXING_API_TOKEN"
+
+[roles]
+chat = "primary"
+task = "primary"
+# Memory organization is not enabled yet. Its model can be configured separately later.
+
+# Replace model IDs with models actually available from your provider.
+[models.primary]
+protocol = "gemini"
+model = "YOUR_GEMINI_MODEL_ID"
+api_key_env = "ZHIXING_GEMINI_API_KEY"
+
+# [models.execution]
+# protocol = "responses"
+# model = "YOUR_RESPONSES_MODEL_ID"
+# api_key_env = "ZHIXING_OPENAI_API_KEY"
+# base_url = "https://your-provider.example/v1"
+
+# [models.memory]
+# protocol = "chat_completions"
+# model = "YOUR_COMPATIBLE_MODEL_ID"
+# api_key_env = "ZHIXING_COMPATIBLE_API_KEY"
+# base_url = "https://your-provider.example/v1"
+
+# Directory grants are server-side configuration, never model-generated permissions.
+# [[grants]]
+# path = "/absolute/path/to/reference-materials"
+# writable = false

@@ -2,9 +2,10 @@
 
 面向用户本人的个人助手，客户端使用 React Native、Expo 和 TypeScript。
 
-2026-09-22：代码仅包含移动端启动页面。用户计划先在 myVPS 运行，Mac mini 到货后作为常驻主机，
+2026-09-22：已实现 SQLite 后端、Deep Agents 会话任务与文件交付链路，移动端为连接真实后端的功能样板房，版式尚未定案。
+用户计划先在 myVPS 运行，Mac mini 到货后作为常驻主机，
 通过隧道连接 myVPS 公网入口。Mac 配置为 16GB，主模型调用云 API，本地只考虑轻量模型。
-后端优先 Deep Agents / LangGraph，具体方案见[架构讨论](docs/ARCHITECTURE.md)；后端与部署均未实现。
+后端使用 Deep Agents / LangGraph，运行方式和实际边界见[后端说明](backend/README.md)；尚未部署到 myVPS 或 Mac。
 App 虚拟执行环境与外部 harness 编排后续扩展。
 
 ## 本地开发
@@ -16,14 +17,16 @@ npm ci
 npm start
 ```
 
-开发服务器启动后，可以通过 Expo Go 或兼容的开发客户端连接。`npm run android`、`npm run ios`
-用于打开相应目标，需先准备设备或模拟器。当前起点为官方空白模板，未启用额外原生模块。
+开发服务器启动后，可以通过匹配 SDK 的 Expo Go 或开发客户端连接。`npm run android`、`npm run ios`
+用于本地原生开发构建，需先准备相应 SDK、设备或模拟器。后端按[启动说明](backend/README.md#启动)单独配置。
+手机页面用于验证能力与讨论版式；网络请求、草稿存储和会话状态与页面组件分开。
 
 ## 验证
 
 ```powershell
 npm run typecheck
 npm run lint
+npm run test:mobile
 npm run bundle:android
 npm run bundle:ios
 npx expo-doctor
@@ -37,5 +40,7 @@ npx expo-doctor
 - [文档索引](docs/README.md)
 - [第一版产品与首次使用](docs/PRODUCT.md)
 - [架构讨论稿](docs/ARCHITECTURE.md)
+- [后端启动、已实现能力与边界](backend/README.md)
+- [HTTP 与运行接口](docs/API.md)
 
 本仓库的 Git 历史独立维护；远程仓库、发布渠道和数据迁移方案尚未配置。

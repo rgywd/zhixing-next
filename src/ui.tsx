@@ -1,0 +1,240 @@
+import type { ReactNode } from "react";
+import {
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type TextInputProps,
+} from "react-native";
+
+export const colors = {
+  paper: "#F5F3ED",
+  white: "#FFFEFA",
+  ink: "#263A34",
+  green: "#3B6654",
+  muted: "#78827A",
+  line: "#DDDCD2",
+  pale: "#E7EEE6",
+  red: "#9C483D",
+  amber: "#8A642D",
+};
+export function Button({
+  children,
+  onPress,
+  disabled = false,
+  secondary = false,
+  danger = false,
+  small = false,
+}: {
+  children: ReactNode;
+  onPress: () => void;
+  disabled?: boolean;
+  secondary?: boolean;
+  danger?: boolean;
+  small?: boolean;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
+      onPress={onPress}
+      style={({ pressed }) => [
+        s.button,
+        secondary && s.secondary,
+        small && s.smallButton,
+        disabled && s.disabled,
+        pressed && s.pressed,
+      ]}
+    >
+      <Text
+        style={[s.buttonText, secondary && s.secondaryText, danger && s.danger]}
+      >
+        {children}
+      </Text>
+    </Pressable>
+  );
+}
+export function Field({ label, ...props }: TextInputProps & { label: string }) {
+  return (
+    <View style={s.field}>
+      <Text style={s.label}>{label}</Text>
+      <TextInput
+        accessibilityLabel={label}
+        placeholderTextColor={colors.muted}
+        {...props}
+        style={[s.input, props.multiline && s.multiline, props.style]}
+      />
+    </View>
+  );
+}
+export function Empty({
+  title,
+  children,
+}: {
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <View style={s.empty}>
+      <View style={s.brand}>
+        <Text style={s.brandText}>知</Text>
+      </View>
+      <Text accessibilityRole="header" style={s.emptyTitle}>
+        {title}
+      </Text>
+      <Text style={s.emptyBody}>{children}</Text>
+    </View>
+  );
+}
+export const humanError = (error: unknown) =>
+  error instanceof Error ? error.message : "操作未完成，请重试。";
+export const timeLabel = (date: string) =>
+  new Date(date).toLocaleString("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+export const runLabels = {
+  queued: "等待执行",
+  running: "正在执行",
+  completed: "已完成",
+  failed: "执行失败",
+  cancelled: "已取消",
+  interrupted: "执行中断",
+};
+export const s = StyleSheet.create({
+  root: { flex: 1, backgroundColor: colors.paper },
+  body: { flex: 1 },
+  content: { padding: 22, gap: 18, paddingBottom: 36 },
+  row: { flexDirection: "row", alignItems: "center", gap: 10 },
+  spread: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+  },
+  grow: { flex: 1 },
+  header: {
+    paddingHorizontal: 22,
+    paddingTop: 16,
+    paddingBottom: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  brand: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
+    backgroundColor: colors.green,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  brandText: { color: colors.white, fontSize: 23, fontWeight: "500" },
+  eyebrow: {
+    fontSize: 10,
+    letterSpacing: 2.5,
+    color: colors.muted,
+    marginBottom: 3,
+  },
+  heading: { fontSize: 25, fontWeight: "600", color: colors.ink },
+  title: { fontSize: 18, lineHeight: 27, fontWeight: "600", color: colors.ink },
+  text: { fontSize: 15, lineHeight: 24, color: colors.ink },
+  muted: { fontSize: 12, lineHeight: 19, color: colors.muted },
+  label: { fontSize: 13, fontWeight: "500", color: colors.ink },
+  field: { gap: 8 },
+  input: {
+    borderWidth: 1,
+    borderColor: colors.line,
+    backgroundColor: colors.white,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: colors.ink,
+    minHeight: 48,
+  },
+  multiline: { minHeight: 120, textAlignVertical: "top", lineHeight: 23 },
+  button: {
+    minHeight: 46,
+    paddingHorizontal: 17,
+    paddingVertical: 12,
+    borderRadius: 14,
+    backgroundColor: colors.green,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  smallButton: { paddingHorizontal: 12, paddingVertical: 8, minHeight: 40 },
+  buttonText: { color: colors.white, fontWeight: "600", fontSize: 14 },
+  secondary: { backgroundColor: colors.pale },
+  secondaryText: { color: colors.green },
+  disabled: { opacity: 0.4 },
+  pressed: { opacity: 0.72 },
+  danger: { color: colors.red },
+  error: { color: colors.red, fontSize: 13, lineHeight: 20 },
+  notice: { padding: 13, borderRadius: 12, backgroundColor: "#EEE6D5", gap: 6 },
+  noticeText: { color: colors.amber, fontSize: 12, lineHeight: 19 },
+  card: {
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.line,
+    borderRadius: 18,
+    padding: 17,
+    gap: 12,
+  },
+  divider: { height: 1, backgroundColor: colors.line },
+  tabs: {
+    flexDirection: "row",
+    borderTopWidth: 1,
+    borderTopColor: colors.line,
+    paddingHorizontal: 14,
+    paddingTop: 7,
+    gap: 6,
+  },
+  tab: {
+    flex: 1,
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 12,
+  },
+  activeTab: { backgroundColor: colors.pale },
+  tabText: { color: colors.muted, fontSize: 14, fontWeight: "500" },
+  activeTabText: { color: colors.green, fontWeight: "700" },
+  empty: {
+    flex: 1,
+    padding: 32,
+    gap: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 280,
+  },
+  emptyTitle: {
+    fontSize: 23,
+    color: colors.ink,
+    fontWeight: "500",
+    textAlign: "center",
+  },
+  emptyBody: {
+    color: colors.muted,
+    fontSize: 14,
+    lineHeight: 24,
+    textAlign: "center",
+  },
+  chip: {
+    paddingVertical: 9,
+    paddingHorizontal: 13,
+    borderRadius: 12,
+    backgroundColor: "#EAE9E1",
+    minHeight: 40,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  chipActive: { backgroundColor: colors.green },
+  chipText: { color: colors.muted, fontSize: 12 },
+  chipActiveText: { color: colors.white },
+  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+});

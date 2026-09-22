@@ -41,3 +41,18 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# Python backend and local personal data
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+backend/.data/
+backend/config.local.toml
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
