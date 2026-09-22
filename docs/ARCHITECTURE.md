@@ -8,6 +8,8 @@
 - 产品定位为服务用户本人的真正个人助手。
 - 第一阶段优先服务器执行，App 虚拟执行环境后续再扩展。
 - 后端优先采用 Deep Agents / LangGraph 或同类成熟技术。
+- 后端与存储前期保持轻量，优先 SQLite；出现实际容量、性能或部署瓶颈后再评估 PostgreSQL。
+- 持久任务调度与跨目录执行参考 Codex harness 的行为和权限边界，具体实现适配本项目。
 - 后续需要与其他 harness 交互并编排它们；第一阶段不实现该能力。
 - 用户于 2026-09-22 提供的主机计划：先在 myVPS 运行；已购买的 Mac mini 到货后放在公司常驻运行，
   通过内网穿透连接 myVPS，并在 Mac 上配置对外访问代理。Mac 内存为 16GB，具体设备与网络尚未验收。
@@ -39,7 +41,7 @@ flowchart LR
   App[React Native App] <-->|HTTPS| VPS[myVPS 公网入口]
   VPS <-->|Mac 主动建立的认证加密隧道| API[Mac mini 上的助手 API]
   API <--> Worker[Deep Agents / LangGraph worker]
-  API <--> Data[个人数据与运行记录]
+  API <--> Data[SQLite 与持久工作文件]
   Worker <--> Data
   Worker <--> Sandbox[隔离代码执行环境]
   Worker --> Proxy[Mac 出站代理]
@@ -51,7 +53,7 @@ flowchart LR
 | App 域名、HTTPS 与公网入口 | myVPS | myVPS，保持 App 接入地址稳定 |
 | 助手 API、任务 worker、调度器 | myVPS | Mac mini，同机不同进程 |
 | 个人资料、记忆、事项、checkpoints 与工作文件 | myVPS 的持久存储 | Mac mini 的持久存储，保持一份权威数据 |
-| 代码执行 | myVPS 上隔离执行 | Mac 上经选定虚拟化/沙盒方案隔离执行 |
+| 代码执行 | Linux 上按授权范围执行，沙盒接入待验证 | macOS 上按授权范围执行，沙盒接入待验证 |
 | 模型推理 | 云 API | 云 API；Mac 上的出站代理按服务配置 |
 | 备份 | 独立备份位置待定 | 可向 myVPS 保存加密备份，并验证可恢复性 |
 
@@ -99,7 +101,68 @@ flowchart LR
 
 初版建议保持一个后端代码库，API 与任务 worker 分进程运行；先不拆多个业务服务。
 数据库保存任务状态与有序事件，客户端重连按序号补齐；代码产物保存为文件，通过引用访问。
-建议后端首选 Python，具体 API 框架、数据库和沙盒提供方待下一轮确定。
+建议后端首选 Python，定时调度循环放在 worker 内，数据库采用 SQLite；具体 API 框架与沙盒接入仍需选定。
+初版不引入 Redis、独立消息队列或分布式工作流平台。交互聊天与执行任务分别分配运行容量，
+不能因唯一的执行槽位被长任务占用，就阻塞聊天、接收引导或取消请求。
+
+## SQLite 持久化方案
+
+以下为单用户、单台活动主机的实现建议，尚未创建数据库或接入持久化组件。
+
+| 数据 | 初版保存方式 |
+| --- | --- |
+| 会话、消息、个人记忆、项目与文件索引 | 产品 SQLite 表，明确版本与迁移记录 |
+| 任务、运行、待处理输入、定时计划、进度事件与工具回执 | 产品 SQLite 表；接收成功以事务提交为准 |
+| LangGraph 执行状态 | 评估官方 SQLite checkpointer，由 SDK 管理其存储格式 |
+| 原始附件、工作文件、生成产物 | 本机持久目录，数据库保存位置、版本及来源等元数据 |
+
+SQLite 位于 API 与 worker 所在主机的本地磁盘；Mac 与 VPS 不通过隧道共享一个可写数据库文件。
+建议使用 WAL、短写事务、连接级外键校验与有限锁等待；模型调用、网络请求和文件处理不放在数据库事务里。
+[SQLite WAL](https://sqlite.org/wal.html) 允许读写并行，但同一时刻仍只有一个写入者，且要求所有访问进程在同一主机。
+接收回执涉及的写入应验证持久化配置，初版优先 `synchronous=FULL`；不能只设置 WAL 就承诺断电不丢已接收任务。
+部署时核验 Python 实际链接的 SQLite 版本，采用已修复 WAL-reset 问题的版本（3.51.3 或后续维护版本，
+或官方明确包含修复的回移版本），不只检查 Python 包版本。
+
+[LangGraph 的 SQLite saver](https://reference.langchain.com/python/langgraph/checkpoints) 面向轻量使用，
+官方并不将其推荐为通用生产方案。这里按单用户自托管范围评估，接入前验证并发聊天、单任务执行及崩溃恢复。
+产品事务与 SDK checkpoint 不能假设原子提交；通过运行 ID、输入 ID、checkpoint ID 和工具回执对齐恢复位置，
+区分已持久接收、已纳入执行和已产生副作用。SQLite saver 不满足验收时再调整实现，不能用内存 saver 替代持久化。
+
+备份使用 [SQLite Backup API](https://sqlite.org/backup.html) 等一致性备份方式；运行中的 `.db` 文件不能单独裸复制。
+跨产品数据、checkpoint 与工作文件的完整备份需要共同恢复边界，初版可短暂停止接收与执行后制作备份，
+记录文件清单并做恢复验证。迁往 Mac 时按前述停写迁移流程整体转移，保留未消费的 Queue 与待处理运行。
+
+升级 PostgreSQL 的判断依据是持续锁等待、写入吞吐、查询/维护成本、多个主机同时写入或可用性要求，
+不预设某个记录数或文件大小就是上限。现在保留清晰的数据模型、稳定 ID 与可验证的迁移脚本即可；
+不预建两套数据库实现或通用存储框架。检索先使用本机能力，中文与语义检索方案按记忆样例验收后选定。
+
+## 持久任务调度与 Codex 参考边界
+
+参考 [Codex App Server](https://learn.chatgpt.com/docs/app-server) 的会话、运行、事件、引导和中断语义，
+以及[定时任务](https://developers.openai.com/codex/app/automations)的后台运行与结果记录体验。
+这些公开接口不能证明其内部使用某种数据库或调度算法；下述 SQLite 调度是知行自身的设计。
+Deep Agents / LangGraph 仍负责模型与工具循环，第一版不接入 Codex 进程或外部 harness 编排。
+
+定时计划决定何时生成任务，持久队列决定任务何时执行，LangGraph checkpoint 决定从哪一步恢复。
+三者通过任务与运行 ID 关联；进程常驻和会话历史本身都不能代替任务恢复。
+
+1. 用户输入先写入 SQLite，再返回接收回执；同一消息的网络重试沿用原 ID，不创建重复输入。
+2. worker 中唯一的调度循环读取到期计划。生成待执行记录和推进下一执行时间在同一事务中完成，
+   对计划 ID 与计划触发时刻建立唯一约束，避免重启后重复生成同一次委托；保存时区与计划版本。
+3. worker 原子领取待执行记录，保留运行和尝试标识；同一运行只由一个执行者推进。
+   单机先限制为一个 worker 实例，无需提前实现分布式租约服务；重启接管前确认旧实例及其子进程状态。
+4. 正常步骤记录进度、checkpoint 和工具执行回执。服务启动后找回待处理与中断的运行，
+   可重入步骤继续执行，副作用结果不确定的操作先核对或等待处理，不能把整个任务无条件重跑。
+5. Queue 保留接收顺序；Steer 绑定当前运行并区分接收与应用。参照 Codex 的 `expectedTurnId` 校验目标，
+   运行结束后的迟到引导不能进入下一次运行。取消走独立控制路径，已取消任务不会在重启时复活。
+
+建议定时计划明确目标会话/项目；目标会话忙时进入该会话的 Queue，不自动作为 Steer。
+周期任务错过多个时点时建议合并为一次补跑，同一计划未完成时不重叠执行；一次性任务与过期时间另行设置。
+这些为默认策略建议，需用具体定时任务样例确认，不默默补跑大量历史任务。
+
+系统进程管理器负责服务异常退出后的重启；worker 负责从持久状态恢复任务。手机连接与任务生命周期无关。
+首轮验收覆盖：接收后立即重启、定时触发中断后重启、工具完成而 checkpoint 未完成、Queue/Steer 重复送达、
+取消与完成同时发生、子进程仍在运行时的恢复，以及 App 重连后进度与产物一致。
 
 ## Deep Agents 接入建议
 
@@ -171,19 +234,26 @@ OpenAI 兼容不意味着所有扩展字段都兼容：`ChatOpenAI` 不保留部
 重试不能重复执行已有副作用的工具；供应商未返回用量时标为未知。图片、结构化输出等仅对声明支持的配置验收。
 Gemini 应列入首批真实服务验收，SDK 可用或模拟响应通过均不等于用户实际端点已经验证。
 
-## 代码执行的关键约束
+## 代码执行与跨目录权限
 
 智能体运行时负责作出下一步决策，沙盒负责实际运行代码。智能体能调用 Shell，不意味着能直接管理宿主机。
+参考 [Codex sandboxing](https://learn.chatgpt.com/docs/sandboxing)：默认工作位置、允许的文件读写范围、
+网络权限与申请扩大权限分别管理；约束覆盖执行的命令及其子进程，不仅覆盖内置文件工具。
+本机 Codex CLI 0.153.4 的帮助已验证 `--add-dir`、工作目录与 sandbox 配置选项，未据此假定 Deep Agents 自动提供等价能力。
 
 - 每个项目有持久工作目录；执行实例与持久文件分离。同项目任务可复用文件，写同一目标时需处理并发冲突。
-- 工作目录以外的内容可通过获准的路径访问：沙盒显式挂载额外目录，或由宿主工具在授权范围内操作。
-  读写范围、实际目标和工具回执可追溯；已覆盖的操作沿用授权，不逐次重复询问。
+- 工作目录以外的内容通过持久授权访问，按目录指定只读或可写，并将该次运行实际使用的授权记入回执。
+  例如项目工作区可写、资料目录只读、导出目录可写。已覆盖的操作沿用授权，超范围访问单独申请或明确拒绝。
+- 原生沙盒将额外路径纳入操作系统策略，容器则显式挂载；不因跨目录需求默认开放整个宿主机。
+  路径校验应处理真实路径与符号链接，Shell 及派生进程仍由系统边界约束，不能只靠模型提示词或路径字符串检查。
 - 执行有时限、CPU/内存/进程数限制，以及明确的网络出口策略。
 - 通用沙盒不默认挂载宿主机根目录、容器管理 socket、业务数据库或服务凭据。
   服务器操作若需要宿主能力，单独明确该任务可用的工具与目标，不能因跨目录文件访问自动提升权限。
 - 回执至少包含执行 ID、退出状态、输出和产物引用；模型描述不能替代真实回执。
 - 超时和取消应终止对应执行进程；进程崩溃后需处理在途调用，不能盲目重放有副作用的操作。
-- 容器只是候选实现。多用户或不可信代码需要评估 gVisor、虚拟机或托管沙盒等隔离方式。
+- 优先评估可复用的原生沙盒能力与现有 Deep Agents sandbox 接入。Codex 的 macOS / Linux 实现可作为技术参考，
+  实际采用的启动器必须在两种系统验证；不自研一套操作系统沙盒，也不默认每个任务都启动 Linux 虚拟机。
+  容器仍是候选实现，需要更强隔离时再评估虚拟机或托管沙盒；未经验证的裸 Shell 不作为等价替代。
 
 ## 后续扩展
 
@@ -201,7 +271,8 @@ App 内部内容可以通过工具接口操作。手机内脚本沙盒和远端�
 
 ## 下一步讨论
 
-1. 确定后端 API、持久化、调度与沙盒组合，以及额外路径授权如何落地；项目文件长期保留的方向已确定。
+1. SQLite 优先、常驻 worker 持久调度与 Codex 风格权限方向已确定；下一步选 API 框架并验证 SQLite checkpointer
+   与 Linux/macOS 沙盒接入，落实额外路径授权。具体存储、恢复和沙盒方案仍是待实现与验收的建议。
 2. 选择首批研究来源、文件格式与实际任务样例，落实聊天、执行、记忆整理的模型配置和预算。
 3. 确定 Android TTS、设备接入与通知方案，以及定时任务错过执行时间时的处理规则。
 4. 是否要求 Mac 离线期间继续提交任务尚未单独确认；建议先以清晰的不可用状态和本地草稿处理。
@@ -218,6 +289,12 @@ App 内部内容可以通过工具接口操作。手机内脚本沙盒和远端�
 - [Deep Agents 文件后端](https://docs.langchain.com/oss/python/deepagents/backends)
 - [Deep Agents 代码执行沙盒](https://docs.langchain.com/oss/python/deepagents/sandboxes)
 - [LangGraph 状态持久化](https://docs.langchain.com/oss/python/langgraph/persistence)
+- [LangGraph checkpointer 与 SQLite 适用边界](https://reference.langchain.com/python/langgraph/checkpoints)
+- [SQLite WAL、同机访问与版本要求](https://sqlite.org/wal.html)
+- [SQLite 一致性备份](https://sqlite.org/backup.html)
+- [Codex App Server 的运行与引导接口](https://learn.chatgpt.com/docs/app-server)
+- [Codex 定时任务](https://developers.openai.com/codex/app/automations)
+- [Codex 沙盒与额外目录权限](https://learn.chatgpt.com/docs/sandboxing)
 - [OpenAI Chat Completions 与 Responses 的消息、工具和续接差异](https://developers.openai.com/api/docs/guides/migrate-to-responses)
 - [LangChain OpenAI 接入与第三方兼容边界](https://docs.langchain.com/oss/python/integrations/chat/openai)
 - [LangChain Gemini 接入与 thought signature 保留](https://docs.langchain.com/oss/python/integrations/chat/google_generative_ai)
