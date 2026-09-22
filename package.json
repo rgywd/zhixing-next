@@ -1,0 +1,27 @@
+{
+  "name": "zhixing-next",
+  "version": "0.1.0",
+  "main": "index.ts",
+  "dependencies": {
+    "expo": "~57.0.24",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-native": "0.86.3"
+  },
+  "devDependencies": {
+    "@types/react": "~19.2.2",
+    "eslint": "^9.39.4",
+    "eslint-config-expo": "~57.0.2",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo start --android",
+    "ios": "expo start --ios",
+    "typecheck": "tsc --noEmit",
+    "lint": "expo lint . --max-warnings 0",
+    "bundle:android": "expo export --platform android --output-dir dist/android",
+    "bundle:ios": "expo export --platform ios --output-dir dist/ios"
+  },
+  "private": true
+}
