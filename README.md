@@ -35,6 +35,7 @@ npx expo-doctor
 
 - [协作规则](AGENTS.md)
 - [文档索引](docs/README.md)
+- [第一版产品与首次使用](docs/PRODUCT.md)
 - [架构讨论稿](docs/ARCHITECTURE.md)
 
 本仓库的 Git 历史独立维护；远程仓库、发布渠道和数据迁移方案尚未配置。
