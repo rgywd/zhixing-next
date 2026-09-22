@@ -5,7 +5,7 @@ API 与 worker 为独立进程；不需要 PostgreSQL、Redis 或独立队列服
 
 ## 启动
 
-需要 Python 3.12+ 与 uv。依赖由 `uv.lock` 锁定。
+需要 uv；仓库通过 `.python-version` 选择已验收的 Python 3.12。依赖由 `uv.lock` 锁定。
 
 ```powershell
 cd backend
