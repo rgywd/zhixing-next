@@ -1,0 +1,23 @@
+# Public configuration for the Singapore region. Keep API keys in process
+# environment variables; this file must never contain their values.
+api_token_env = "ZHIXING_API_TOKEN"
+
+[roles]
+chat = "bailian_chat"
+task = "bailian_task"
+
+[models.bailian_chat]
+protocol = "chat_completions"
+model = "qwen3.8-flash"
+api_key_env = "ZHIXING_BAILIAN_API_KEY"
+base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+reasoning_effort = "none"
+timeout = 60
+
+[models.bailian_task]
+protocol = "chat_completions"
+model = "qwen3.8-flash"
+api_key_env = "ZHIXING_BAILIAN_API_KEY"
+base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+reasoning_effort = "medium"
+timeout = 120

@@ -1,0 +1,32 @@
+[Unit]
+Description=Zhixing Next API
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=zhixing-next
+Group=zhixing-next
+WorkingDirectory=/opt/zhixing-next/backend
+EnvironmentFile=/etc/zhixing-next/service.env
+Environment=ZHIXING_CONFIG=/etc/zhixing-next/config.toml
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/zhixing-next/backend/.venv/bin/python -m uvicorn zhixing_next.api:create_app --factory --host 127.0.0.1 --port 8791 --no-access-log --proxy-headers --forwarded-allow-ips 127.0.0.1
+Restart=on-failure
+RestartSec=3s
+TimeoutStopSec=45s
+UMask=0077
+StateDirectory=zhixing-next
+StateDirectoryMode=0700
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/zhixing-next
+MemoryAccounting=true
+
+[Install]
+WantedBy=multi-user.target

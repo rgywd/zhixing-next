@@ -1,20 +1,28 @@
 import asyncio
+import logging
 from uuid import uuid4
 
+import httpx
 import pytest
 
+from zhixing_next import worker
 from zhixing_next.config import Settings
 from zhixing_next.store import Store
+from zhixing_next.webtools import read_public_page
 from zhixing_next.worker import Worker
 
 
 def setup_store(tmp_path):
-    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "work", poll_interval=0.05)
+    settings = Settings(
+        data_dir=tmp_path / "data", workspace_root=tmp_path / "work", poll_interval=0.05
+    )
     return settings, Store(settings)
 
 
 def submit(store, conversation, prompt, kind="chat"):
-    return store.submit_message(conversation["id"], id=str(uuid4()), content=prompt, kind=kind)["run"]
+    return store.submit_message(conversation["id"], id=str(uuid4()), content=prompt, kind=kind)[
+        "run"
+    ]
 
 
 async def wait_for(predicate):
@@ -97,3 +105,37 @@ async def test_only_one_worker_can_own_a_data_directory(tmp_path):
     finally:
         stop.set()
         await first
+
+
+def test_worker_default_logs_omit_http_query_parameters(monkeypatch, caplog):
+    marker = "audit-query-marker-not-a-secret"
+
+    async def resolver(_url):
+        return "93.184.216.34"
+
+    async def exercise_request():
+        transport = httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200, headers={"content-type": "text/plain"}, text="public document"
+            )
+        )
+        result = await read_public_page(
+            f"https://example.test/document?access_token={marker}",
+            transport=transport,
+            resolver=resolver,
+        )
+        assert result["text"] == "public document"
+        logging.getLogger("httpcore").debug("request target includes %s", marker)
+        worker.logger.info("worker audit request completed")
+
+    monkeypatch.setattr(worker, "_serve", exercise_request)
+    # Restore per-library levels after exercising the real command-line logging setup.
+    with (
+        caplog.at_level(logging.INFO),
+        caplog.at_level(logging.DEBUG, logger="httpx"),
+        caplog.at_level(logging.DEBUG, logger="httpcore"),
+    ):
+        worker.main()
+    assert "worker audit request completed" in caplog.text
+    assert marker not in caplog.text
+    assert "access_token=" not in caplog.text

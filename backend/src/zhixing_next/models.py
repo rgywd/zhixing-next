@@ -51,6 +51,8 @@ def create_model(settings: Settings, kind: str) -> BaseChatModel:
     if config.protocol in {"chat_completions", "responses"}:
         from langchain_openai import ChatOpenAI
 
+        if config.reasoning_effort is not None:
+            options["reasoning_effort"] = config.reasoning_effort
         return ChatOpenAI(**options, use_responses_api=config.protocol == "responses")
     if config.protocol == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI

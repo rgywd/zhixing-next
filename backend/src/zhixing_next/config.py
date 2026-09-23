@@ -17,6 +17,7 @@ class ModelConfig(BaseModel):
     api_key_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     base_url: str | None = None
     temperature: float | None = None
+    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
     timeout: float = Field(default=60, gt=0, le=300)
 
     @field_validator("base_url")
@@ -34,6 +35,12 @@ class ModelConfig(BaseModel):
         if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
             raise ValueError("remote model endpoints require HTTPS")
         return value.rstrip("/")
+
+    @model_validator(mode="after")
+    def validate_reasoning_protocol(self):
+        if self.reasoning_effort is not None and self.protocol == "gemini":
+            raise ValueError("reasoning_effort is only supported by OpenAI-compatible protocols")
+        return self
 
 
 class PathGrant(BaseModel):

@@ -380,6 +380,7 @@ def test_protocol_selection_without_network(tmp_path, monkeypatch, protocol):
             model="test-model",
             api_key_env="ZHIXING_TEST_MODEL_KEY",
             base_url="https://example.invalid/v1",
+            reasoning_effort="none" if protocol != "gemini" else None,
         )
     }
     settings.roles = {"chat": "primary"}
@@ -389,6 +390,7 @@ def test_protocol_selection_without_network(tmp_path, monkeypatch, protocol):
         assert model.base_url == "https://example.invalid/v1"
     else:
         assert model.use_responses_api == (protocol == "responses")
+        assert model.reasoning_effort == "none"
     monkeypatch.delenv("ZHIXING_TEST_MODEL_KEY")
     with pytest.raises(ModelConfigurationError):
         create_model(settings, "chat")

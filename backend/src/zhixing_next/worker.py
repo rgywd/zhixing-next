@@ -126,6 +126,9 @@ async def _serve() -> None:
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    # Transport INFO/DEBUG records can include signed URL query parameters.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     try:
         asyncio.run(_serve())
     except KeyboardInterrupt:

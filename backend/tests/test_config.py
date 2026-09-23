@@ -26,6 +26,19 @@ def test_model_endpoints_reject_plaintext_remote_and_embedded_credentials(url):
         ModelConfig(protocol="responses", model="test", api_key_env="TEST_KEY", base_url=url)
 
 
+def test_reasoning_effort_is_validated_for_openai_compatible_models():
+    config = ModelConfig(
+        protocol="chat_completions", model="qwen3.8-flash",
+        api_key_env="ZHIXING_BAILIAN_API_KEY", reasoning_effort="none",
+    )
+    assert config.reasoning_effort == "none"
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        ModelConfig(
+            protocol="gemini", model="gemini-test", api_key_env="GEMINI_KEY",
+            reasoning_effort="none",
+        )
+
+
 def test_no_config_is_safe_and_unknown_config_fails(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ZHIXING_CONFIG", raising=False)
