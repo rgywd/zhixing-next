@@ -112,6 +112,27 @@ export class ApiError extends Error {
   }
 }
 
+export const MAX_FILE_BYTES = 20 * 1024 * 1024;
+
+export async function fileUploadRequest(
+  connection: Connection,
+  file: { size: number; bytes(): Promise<Uint8Array<ArrayBuffer>> },
+) {
+  if (file.size > MAX_FILE_BYTES) throw new Error("单个文件最多 20 MiB。");
+  // Expo fetch replaces Content-Type with File/Blob.type; raw bytes retain our protocol header.
+  const body = await file.bytes();
+  if (body.byteLength > MAX_FILE_BYTES) throw new Error("单个文件最多 20 MiB。");
+  return {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${connection.token}`,
+      "Content-Type": "application/octet-stream",
+    },
+    body,
+    redirect: "error" as const,
+  };
+}
+
 export async function request<T>(
   connection: Connection,
   path: string,

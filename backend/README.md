@@ -1,6 +1,6 @@
 # 个人助手后端
 
-2026-09-22：已实现首条会话、持久任务、资料读取与文件交付链路。单用户、单活动主机，
+2026-09-23：已实现首条会话、持久任务、资料读取与文件交付链路，并在 myVPS 使用百炼新加坡 `qwen3.8-flash` 完成真实聊天及文件任务验收。单用户、单活动主机，
 API 与 worker 为独立进程；不需要 PostgreSQL、Redis 或独立队列服务。手机端是可更换布局的功能样板房。
 
 ## 启动
@@ -16,6 +16,8 @@ $env:ZHIXING_CONFIG = (Resolve-Path config.local.toml).Path
 
 编辑本机的 `config.local.toml`，将 `YOUR_GEMINI_MODEL_ID` 替换为账号可用的模型 ID。
 示例先让聊天与执行共用一个 Gemini 配置；可以将 `roles.chat` 和 `roles.task` 分别指向不同模型。
+myVPS 使用 [百炼新加坡示例](config.bailian.example.toml)，两个角色目前都指向 `qwen3.8-flash`；
+服务进程从环境变量 `ZHIXING_BAILIAN_API_KEY` 读取密钥，配置文件只保存环境变量名。
 `chat_completions`、`responses`、`gemini` 三种协议均有接入，配置 `base_url` 可使用对应兼容端点。
 记忆整理角色尚未运行，不需要为它配置密钥。
 
@@ -93,5 +95,6 @@ uv run ruff check .
 
 测试覆盖真实 SQLite、多会话 Deep Agents 图、持久 checkpoint、模型协议配置与元数据续接、
 Queue/Steer/取消竞态、调度去重、进程所有权、文件越权与 API→worker→文件回传。
-测试模型与 HTTP transport 只注入测试，不属于产品运行模式；真实云模型、Linux/macOS Shell 与公网部署需独立验收。
+测试模型与 HTTP transport 只注入测试，不属于产品运行模式；百炼新加坡与 myVPS 公网部署的实际验收见
+[验收记录](../docs/VERIFICATION.md)。Linux/macOS Shell 仍未接入。
 HTTP 契约见 [API.md](../docs/API.md)，长期架构目标见 [ARCHITECTURE.md](../docs/ARCHITECTURE.md)。

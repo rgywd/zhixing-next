@@ -12,7 +12,66 @@ import {
   safeDownloadName,
   request,
   ApiError,
+  fileUploadRequest,
+  MAX_FILE_BYTES,
 } from "../src/api.ts";
+
+test("file MIME cannot override the raw upload protocol in Expo fetch", async () => {
+  const source = readFileSync(
+    new URL(
+      "../node_modules/expo/src/winter/fetch/RequestUtils.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const exported = {};
+  runInNewContext(
+    ts.transpileModule(source, {
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+      },
+    }).outputText,
+    {
+      exports: exported,
+      require: () => ({ blobToArrayBufferAsync: (blob) => blob.arrayBuffer() }),
+      Blob,
+      ArrayBuffer,
+      Uint8Array,
+      URLSearchParams,
+      ReadableStream,
+      FormData,
+      TextEncoder,
+      Headers,
+    },
+  );
+  const file = new Blob(["Cedar: 4, 7, 9"], { type: "text/plain" });
+  const directFile = await exported.normalizeBodyInitAsync(file);
+  assert.equal(directFile.overriddenHeaders[0][1], "text/plain");
+  const request = await fileUploadRequest(
+    { url: "https://example.com", token: "test" },
+    file,
+  );
+  const normalized = await exported.normalizeBodyInitAsync(request.body);
+  const headers = exported.overrideHeaders(
+    exported.normalizeHeadersInit(request.headers),
+    normalized.overriddenHeaders ?? [],
+  );
+  assert.equal(
+    Object.fromEntries(headers)["Content-Type"],
+    "application/octet-stream",
+  );
+  assert.equal(new TextDecoder().decode(normalized.body), "Cedar: 4, 7, 9");
+  assert.equal(request.method, "PUT");
+  assert.equal(request.redirect, "error");
+  await assert.rejects(
+    fileUploadRequest({ url: "https://example.com", token: "test" }, {
+      size: MAX_FILE_BYTES + 1,
+      bytes: () => assert.fail("oversized files must not be read"),
+    }),
+    /20 MiB/,
+  );
+});
 
 test("connection URLs never leak credentials or permit remote cleartext", () => {
   assert.equal(

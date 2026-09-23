@@ -2,10 +2,10 @@
 
 面向用户本人的个人助手，客户端使用 React Native、Expo 和 TypeScript。
 
-2026-09-22：已实现 SQLite 后端、Deep Agents 会话任务与文件交付链路，移动端为连接真实后端的功能样板房，版式尚未定案。
-用户计划先在 myVPS 运行，Mac mini 到货后作为常驻主机，
+2026-09-23：已实现 SQLite 后端、Deep Agents 会话任务与文件交付链路，并在 myVPS 完成独立部署与真实百炼模型验收。移动端为连接真实后端的功能样板房，版式尚未定案。
+用户计划在 Mac mini 到货后将其作为常驻主机，
 通过隧道连接 myVPS 公网入口。Mac 配置为 16GB，主模型调用云 API，本地只考虑轻量模型。
-后端使用 Deep Agents / LangGraph，运行方式和实际边界见[后端说明](backend/README.md)；尚未部署到 myVPS 或 Mac。
+后端使用 Deep Agents / LangGraph，运行方式和实际边界见[后端说明](backend/README.md)；myVPS 的入口、恢复步骤与已验收范围见[部署说明](docs/DEPLOYMENT.md)和[验收记录](docs/VERIFICATION.md)。Mac 尚未部署。
 App 虚拟执行环境与外部 harness 编排后续扩展。
 
 ## 本地开发
@@ -43,5 +43,6 @@ npx expo-doctor
 - [架构讨论稿](docs/ARCHITECTURE.md)
 - [后端启动、已实现能力与边界](backend/README.md)
 - [HTTP 与运行接口](docs/API.md)
+- [myVPS 部署与恢复](docs/DEPLOYMENT.md)
 
 本仓库的 Git 历史独立维护；远程仓库、发布渠道和数据迁移方案尚未配置。

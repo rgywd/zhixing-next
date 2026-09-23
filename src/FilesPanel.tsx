@@ -6,11 +6,16 @@ import * as Crypto from "expo-crypto";
 import * as Sharing from "expo-sharing";
 import { Directory, File, Paths } from "expo-file-system";
 import { fetch as expoFetch } from "expo/fetch";
-import { request, safeDownloadName, type Connection } from "./api";
+import {
+  fileUploadRequest,
+  MAX_FILE_BYTES,
+  request,
+  safeDownloadName,
+  type Connection,
+} from "./api";
 import { Button, humanError, s } from "./ui";
 
 type WorkspaceFile = { path: string; name: string; size: number };
-const MAX_BYTES = 20 * 1024 * 1024;
 export function FilesPanel({
   connection,
   conversationId,
@@ -90,7 +95,7 @@ export function FilesPanel({
       if (result.canceled || !alive.current) return;
       const asset = result.assets[0];
       const file = new File(asset.uri);
-      if (file.size > MAX_BYTES)
+      if (file.size > MAX_FILE_BYTES)
         throw new Error("单个文件最多 20 MiB，请选择较小的文件。");
       setUpload({ id: Crypto.randomUUID(), uri: asset.uri, name: asset.name });
     } catch (e) {
@@ -109,14 +114,8 @@ export function FilesPanel({
       const response = await expoFetch(
         `${connection.url}/v1${prefix}/${upload.id}?filename=${encodeURIComponent(upload.name)}`,
         {
-          method: "PUT",
-          headers: {
-            Authorization: `Bearer ${connection.token}`,
-            "Content-Type": "application/octet-stream",
-          },
-          body: new File(upload.uri),
+          ...(await fileUploadRequest(connection, new File(upload.uri))),
           signal: abort.signal,
-          redirect: "error",
         },
       );
       const data = await response.json();
@@ -144,7 +143,7 @@ export function FilesPanel({
     try {
       if (!(await Sharing.isAvailableAsync()))
         throw new Error("此设备暂不支持文件分享。");
-      if (file.size > MAX_BYTES) throw new Error("下载上限为 20 MiB。");
+      if (file.size > MAX_FILE_BYTES) throw new Error("下载上限为 20 MiB。");
       const response = await expoFetch(
         `${connection.url}/v1${prefix}/content?path=${encodeURIComponent(file.path)}`,
         {
@@ -160,7 +159,7 @@ export function FilesPanel({
         );
       }
       const bytes = await response.bytes();
-      if (bytes.length > MAX_BYTES) throw new Error("文件超过下载上限。");
+      if (bytes.length > MAX_FILE_BYTES) throw new Error("文件超过下载上限。");
       const directory = new Directory(
         Paths.cache,
         "zhixing-share",
