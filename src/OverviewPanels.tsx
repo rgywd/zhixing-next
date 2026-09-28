@@ -1,10 +1,9 @@
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import type { Conversation, FinanceSummary, Project, Schedule } from "./api";
+import type { Conversation, Project, Schedule } from "./api";
 import { Button, colors, s, timeLabel } from "./ui";
 
 const styles = StyleSheet.create({
-  page: { paddingBottom: 32 },
   intro: { gap: 7 },
   kicker: { color: colors.accent, fontSize: 12, fontWeight: "700" },
   pageTitle: { color: colors.ink, fontSize: 29, fontWeight: "700" },
@@ -109,7 +108,7 @@ export function HomePanel({
     b.updated_at.localeCompare(a.updated_at),
   )[0];
   return (
-    <ScrollView contentContainerStyle={[s.content, styles.page]}>
+    <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
       <View style={styles.hero}>
         <Text style={styles.kicker}>你的个人助手</Text>
         <Text style={styles.heroTitle}>想聊聊，还是开始一件事？</Text>
@@ -148,43 +147,6 @@ export function HomePanel({
   );
 }
 
-export function LifePanel({ onFinance, finance = { balances: [], recent: [] } }: { onFinance: () => void; finance?: FinanceSummary }) {
-  return (
-    <ScrollView contentContainerStyle={[s.content, styles.page]}>
-      <View style={styles.intro}>
-        <Text style={styles.kicker}>LIFE</Text>
-        <Text style={styles.pageTitle}>生活</Text>
-        <Text style={styles.description}>生活里的服务，从真正用得上的一项开始。</Text>
-      </View>
-      <View style={s.card}>
-        <View style={styles.row}>
-          <Text style={styles.cardTitle}>财务</Text>
-          <Text style={styles.tag}>财务助手</Text>
-        </View>
-        <Text style={styles.description}>
-          和财务助手聊账户、收支与扣费问题。明确告诉它金额后，记录会出现在这里。
-        </Text>
-        <View style={styles.split}>
-          <View style={styles.placeholder}>
-            <Text style={s.label}>账户一览</Text>
-            {finance.balances.length ? finance.balances.slice(0, 4).map((item) => (
-              <Text key={item.id} style={s.text}>{item.platform} · ¥{item.amount}</Text>
-            )) : <Text style={s.muted}>等待真实记录</Text>}
-          </View>
-          <View style={styles.placeholder}>
-            <Text style={s.label}>收支变化</Text>
-            {finance.recent.length ? finance.recent.slice(0, 4).map((item) => (
-              <Text key={item.id} style={s.text}>{item.kind === "income" ? "收入" : "支出"} · {item.platform} ¥{item.amount}</Text>
-            )) : <Text style={s.muted}>等待真实记录</Text>}
-          </View>
-        </View>
-        <Text style={s.muted}>仅显示你提供的观察值，不自动读取账户、对账或推算总资产；截图理解尚未接入。</Text>
-        <Button secondary onPress={onFinance}>和财务助手聊</Button>
-      </View>
-    </ScrollView>
-  );
-}
-
 export function WorkPanel({
   conversations,
   projects,
@@ -206,7 +168,7 @@ export function WorkPanel({
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .slice(0, 3);
   return (
-    <ScrollView contentContainerStyle={[s.content, styles.page]}>
+    <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
       <View style={styles.workIntro}>
         <Image source={require("../assets/work-header-red.png")} resizeMode="cover" style={styles.workArtwork} accessible={false} />
         <Text style={styles.kicker}>WORK</Text>
@@ -295,7 +257,7 @@ export function WorkPanel({
 
 export function ToolboxPanel({ onSettings, onAgents, onModels }: { onSettings: () => void; onAgents: () => void; onModels: () => void }) {
   return (
-    <ScrollView contentContainerStyle={[s.content, styles.page]}>
+    <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
       <View style={styles.intro}>
         <Text style={styles.kicker}>TOOLBOX</Text>
         <Text style={styles.pageTitle}>工具箱</Text>
