@@ -3,7 +3,6 @@ import {
   ActivityIndicator,
   AppState,
   KeyboardAvoidingView,
-  Image,
   Modal,
   Platform,
   Pressable,
@@ -155,16 +154,6 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
   return (
     <View style={s.body}>
-      <View style={s.header}>
-        <Image source={require("../assets/icon.png")} style={s.brand} />
-        <View style={s.grow}>
-          <Text style={s.eyebrow}>ZHIXING · PERSONAL ASSISTANT</Text>
-          <Text style={s.heading}>知行</Text>
-        </View>
-        <Pressable accessibilityRole="button" onPress={() => setTab("chat")} style={s.chip}>
-          <Text style={s.chipText}>未连接</Text>
-        </Pressable>
-      </View>
       {tab === "home" ? (
         <HomePanel conversations={[]} onChat={() => setTab("chat")}
           onOpenConversation={() => setTab("chat")} onLife={() => setTab("life")}
@@ -487,30 +476,8 @@ function Connected({
       if (alive.current) setBusy(false);
     }
   }
-  const statusLabel = syncError
-    ? "连接已断开"
-    : !status
-      ? "连接中"
-      : !status.model_ready
-        ? "模型待配置"
-        : !status.worker_online
-          ? "执行服务离线"
-          : "陪伴在线";
-
   return (
     <View style={s.body}>
-      {tab !== "chat" ? (
-        <View style={s.header}>
-          <Image source={require("../assets/icon.png")} style={s.brand} />
-          <View style={s.grow}>
-            <Text style={s.eyebrow}>ZHIXING · PERSONAL ASSISTANT</Text>
-            <Text style={s.heading}>{assistant?.name || "知行"}</Text>
-          </View>
-          <Pressable accessibilityRole="button" onPress={refresh} style={s.chip}>
-            <Text style={s.chipText}>{statusLabel}</Text>
-          </Pressable>
-        </View>
-      ) : null}
       {syncError ? (
         <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
           <Text style={s.noticeText}>{syncError}</Text>
