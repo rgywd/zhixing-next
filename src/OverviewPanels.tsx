@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   workIntro: { minHeight: 125, justifyContent: "center", gap: 4 },
-  workArtwork: { position: "absolute", left: -22, right: -22, top: -10, height: 145, opacity: 0.88 },
+  workArtwork: { position: "absolute", left: -22, top: -10, width: "112%", height: 145, opacity: 0.88 },
   workTitle: { color: colors.ink, fontSize: 36, lineHeight: 45, fontWeight: "700" },
   workCard: {
     backgroundColor: "#FFFFFF", borderRadius: 23, padding: 17, gap: 11,
