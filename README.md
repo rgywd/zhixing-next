@@ -2,9 +2,12 @@
 
 面向用户本人的个人助手，客户端使用 React Native、Expo 和 TypeScript。
 
+产品方向是让用户直接聊天、发截图或操作服务，由知行完成理解与整理。首页、生活、AI、工作、工具箱是同一助手和服务体系的入口；手机界面仍是样板房。首个生活服务计划做轻量财务总览，工具箱计划提供统一资源库。这些新方向尚未实现，详见[产品文档](docs/PRODUCT.md)。
+
 2026-09-23：已实现 SQLite 后端、Deep Agents 会话任务与文件交付链路，并在 myVPS 完成独立部署与真实百炼模型验收。移动端为连接真实后端的功能样板房，版式尚未定案。
 用户计划在 Mac mini 到货后将其作为常驻主机，
 通过隧道连接 myVPS 公网入口。Mac 配置为 16GB，主模型调用云 API，本地只考虑轻量模型。
+迁移后的 myVPS 只承担新知行的公网入口和隧道；助手服务与权威数据放在 Mac mini。Mac 离线时不承诺接收任务。
 后端使用 Deep Agents / LangGraph，运行方式和实际边界见[后端说明](backend/README.md)；myVPS 的入口、恢复步骤与已验收范围见[部署说明](docs/DEPLOYMENT.md)和[验收记录](docs/VERIFICATION.md)。Mac 尚未部署。
 App 虚拟执行环境与外部 harness 编排后续扩展。
 
