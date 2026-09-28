@@ -1,6 +1,6 @@
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import type { Conversation, FinanceSummary, Project, Schedule } from "./api";
+import type { Conversation, Project, Schedule } from "./api";
 import { Button, colors, s, timeLabel } from "./ui";
 
 const styles = StyleSheet.create({
@@ -143,43 +143,6 @@ export function HomePanel({
           <Text style={styles.description}>对话、项目与计划</Text>
           <Text style={styles.link}>进入工作 ›</Text>
         </Pressable>
-      </View>
-    </ScrollView>
-  );
-}
-
-export function LifePanel({ onFinance, finance = { balances: [], recent: [] } }: { onFinance: () => void; finance?: FinanceSummary }) {
-  return (
-    <ScrollView contentContainerStyle={[s.content, styles.page]}>
-      <View style={styles.intro}>
-        <Text style={styles.kicker}>LIFE</Text>
-        <Text style={styles.pageTitle}>生活</Text>
-        <Text style={styles.description}>生活里的服务，从真正用得上的一项开始。</Text>
-      </View>
-      <View style={s.card}>
-        <View style={styles.row}>
-          <Text style={styles.cardTitle}>财务</Text>
-          <Text style={styles.tag}>财务助手</Text>
-        </View>
-        <Text style={styles.description}>
-          和财务助手聊账户、收支与扣费问题。明确告诉它金额后，记录会出现在这里。
-        </Text>
-        <View style={styles.split}>
-          <View style={styles.placeholder}>
-            <Text style={s.label}>账户一览</Text>
-            {finance.balances.length ? finance.balances.slice(0, 4).map((item) => (
-              <Text key={item.id} style={s.text}>{item.platform} · ¥{item.amount}</Text>
-            )) : <Text style={s.muted}>等待真实记录</Text>}
-          </View>
-          <View style={styles.placeholder}>
-            <Text style={s.label}>收支变化</Text>
-            {finance.recent.length ? finance.recent.slice(0, 4).map((item) => (
-              <Text key={item.id} style={s.text}>{item.kind === "income" ? "收入" : "支出"} · {item.platform} ¥{item.amount}</Text>
-            )) : <Text style={s.muted}>等待真实记录</Text>}
-          </View>
-        </View>
-        <Text style={s.muted}>仅显示你提供的观察值，不自动读取账户、对账或推算总资产；截图理解尚未接入。</Text>
-        <Button secondary onPress={onFinance}>和财务助手聊</Button>
       </View>
     </ScrollView>
   );

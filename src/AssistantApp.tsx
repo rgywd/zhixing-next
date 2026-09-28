@@ -38,7 +38,8 @@ import { AiDrawer } from "./AiDrawer";
 import { MemoryPanel } from "./MemoryPanel";
 import { FinancePage } from "./FinancePage";
 import { ModelsPanel } from "./ModelsPanel";
-import { HomePanel, LifePanel, ToolboxPanel, WorkPanel } from "./OverviewPanels";
+import { HomePanel, ToolboxPanel, WorkPanel } from "./OverviewPanels";
+import { LifePanel } from "./LifePanel";
 import { SchedulesPanel } from "./SchedulesPanel";
 import { ConnectionForm, SettingsPanel } from "./SettingsPanel";
 import { AgentsPanel } from "./AgentsPanel";
@@ -174,7 +175,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           onWork={() => setTab("work")} />
       ) : tab === "life" ? (
         lifeView === "overview" ? (
-          <LifePanel onFinance={() => setLifeView("finance")} finance={{ balances: [], recent: [] }} />
+          <LifePanel onFinance={() => setLifeView("finance")} onChat={() => setTab("chat")} />
         ) : (
           <ScrollView contentContainerStyle={s.content}>
             <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
@@ -245,6 +246,7 @@ function Connected({
   const [showMemory, setShowMemory] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
   const [welcomeDraft, setWelcomeDraft] = useState("");
+  const lastLifePrompt = useRef("");
   const [welcomeKind, setWelcomeKind] = useState<"chat" | "task">("chat");
   const [welcomeModels, setWelcomeModels] = useState<{ chat: string | null; task: string | null }>({ chat: null, task: null });
   const [welcomeEfforts, setWelcomeEfforts] = useState<{ chat: ReasoningEffort | null; task: ReasoningEffort | null }>({ chat: null, task: null });
@@ -585,7 +587,13 @@ function Connected({
         />
       ) : tab === "life" ? (
         lifeView === "overview" ? (
-          <LifePanel onFinance={openFinance} finance={finance} />
+          <LifePanel onFinance={openFinance} finance={finance} onChat={(prompt) => {
+            const previousPrompt = lastLifePrompt.current;
+            setWelcomeDraft((old) => !old.trim() || old === previousPrompt ? prompt : old);
+            lastLifePrompt.current = prompt;
+            setWelcomeKind("chat");
+            openMainChat();
+          }} />
         ) : financeConversation ? (
           <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
         ) : (
