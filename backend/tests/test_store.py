@@ -23,7 +23,7 @@ def test_schema_and_persona_survive_reopen(store):
     reopened = Store(store.settings)
     assert reopened.get_assistant()["persona"] == "记得先核实出处"
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == safe_journal_mode().lower()
 
 
@@ -43,6 +43,8 @@ def test_existing_v1_database_gains_agents_without_losing_conversations(tmp_path
 
 def test_v2_finance_agent_customization_survives_tool_upgrade(store):
     with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE memories")
+        db.execute("ALTER TABLE runs DROP COLUMN memory_processed")
         db.execute("DROP TABLE model_roles")
         db.execute("ALTER TABLE runs DROP COLUMN reasoning_effort")
         db.execute("ALTER TABLE runs DROP COLUMN model_id")
@@ -56,6 +58,21 @@ def test_v2_finance_agent_customization_survives_tool_upgrade(store):
     assert finance["instructions"] == "用户自定要求"
     assert "record_finance_observation" in finance["tools"]
     assert upgraded.list_finance_observations() == {"balances": [], "recent": []}
+
+
+def test_v4_upgrade_keeps_old_conversations_without_reprocessing_them(store):
+    conversation = store.create_conversation("旧对话")["id"]
+    run = enqueue(store, conversation, "old", kind="chat")
+    store.claim_next("chat")
+    store.finish_run(run["id"], "completed", result="旧回复")
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE memories")
+        db.execute("ALTER TABLE runs DROP COLUMN memory_processed")
+        db.execute("PRAGMA user_version=4")
+    upgraded = Store(store.settings)
+    assert upgraded.get_run(run["id"])["memory_processed"] == 1
+    assert upgraded.next_memory_run() is None
+    assert upgraded.get_conversation(conversation)["title"] == "旧对话"
 
 
 def test_duplicate_messages_and_competing_claims_are_atomic(store):

@@ -1,12 +1,12 @@
 # 首条实现链路与接口契约
 
-状态：2026-09-22，首条实现链路。实际能力与限制见[后端说明](../backend/README.md)。
+状态：2026-09-28，后端记忆链路已加入本地实现。实际运行能力与限制见[后端说明](../backend/README.md)。
 
 ## 交付范围
 
 Python FastAPI + SQLite，API 与 worker 独立进程；React Native 客户端连接真实后端。
-本轮实现会话、人格、项目、子智能体、消息 Queue/Steer、取消、进度查询、持久计划及 Deep Agents 模型/文件工具。
-完整记忆整理、外部 harness、推送通知与生产部署留作后续。模型未配置时明确失败，不返回模拟助手回复。
+已实现会话、人格、项目、子智能体、消息 Queue/Steer、取消、进度查询、持久计划、Deep Agents 模型/文件工具及轻量个人记忆。
+文件/图片的自动记忆提取、外部 harness 与推送通知留作后续。模型未配置时明确失败，不返回模拟助手回复。
 
 ## 公共约定
 
@@ -20,7 +20,10 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 
 - `GET /v1/status`: `{model_ready: bool, worker_online: bool, execution_available: bool}`，可增加说明字段；`model_ready` 按当前聊天/执行默认模型及服务端密钥判断，不代表供应商已通过调用。
 - `GET /v1/models`：返回 `{items,roles}`。每个模型只公开 `id,name,model,provider,protocol,ready,reasoning_levels,default_reasoning_effort`；不返回密钥、环境变量名或 Base URL。`roles` 为聊天、执行、记忆整理的当前默认模型 ID。
-- `PUT /v1/models/roles/{role} {model_id}`：`role` 为 `chat|task|memory`，保存角色默认模型。模型须已在服务端配置；记忆整理角色目前尚未运行。
+- `PUT /v1/models/roles/{role} {model_id}`：`role` 为 `chat|task|memory`，保存角色默认模型。模型须已在服务端配置；未配置专用记忆模型时，整理使用当前聊天默认模型。
+- `GET /v1/memories?cursor=&limit=`：返回个人语义记忆 `{items,next_cursor}`；每项含 `id,content,source_message_id,created_at,updated_at,seq`。只读当前记忆，不返回原始聊天或内部去重键。
+- `POST /v1/memories {content}`、`PATCH /v1/memories/{id} {content}`、`DELETE /v1/memories/{id}`：后端直接写入、纠正或忘记；内容最多 500 字，凭据类内容拒绝写入。删除记忆不删除原会话或文件。
+- `GET /v1/memories/status`：返回 `{pending,failed}` 整理运行数；`POST /v1/memories/retry` 将失败的整理重新排队，返回 `{retried}`。手机端目前不展示这些接口。
 - `GET /v1/assistant`, `PUT /v1/assistant`: `{name, persona}`，人格是用户编辑的持久文本。
 - `GET /v1/agents`, `POST /v1/agents`, `GET/PUT/DELETE /v1/agents/{id}`：子智能体配置
   `{id,kind: service|custom,service: string|null,name,description,instructions,tools: string[],visible,created_at,updated_at}`。
@@ -39,7 +42,8 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 - `POST /v1/conversations/{id}/resume`: 清除失败/取消后的队列阻塞，允许尚未开始的排队消息继续。
 - `GET /v1/runs?conversation_id=&cursor=&limit=`: 运行列表；`GET /v1/runs/{id}`: 单个运行。
   运行 `{id,conversation_id,message_id,kind: chat|task,model_id,reasoning_effort,status: queued|running|completed|failed|cancelled|interrupted,
-  prompt,cancel_requested: bool,result: string|null,error: string|null,created_at,started_at,finished_at}`。
+  prompt,cancel_requested: bool,result: string|null,error: string|null,created_at,started_at,finished_at,memory_processed: -1|0|1}`。
+  `memory_processed` 为 0 待整理、1 已处理、-1 整理失败；聊天结果完成与记忆整理状态分离。
 - `POST /v1/runs/{id}/cancel`: queued 立即撤回，不改变会话阻塞状态；running 持久记录取消请求，
   实际停止后暂停其后续队列。取消不删除后续队列。
 - `GET /v1/runs/{id}/events?after=0&limit=100`: `{items: [{seq,run_id,type,data,created_at}],next_cursor}`。
@@ -67,6 +71,7 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 
 代码在 `backend/src/zhixing_next`。config.py 负责配置，store.py 负责业务事务，api.py 负责 HTTP，
 worker.py 负责调度与生命周期，runtime.py/models.py/tools.py 负责实际智能体与工具调用。
+memory.py 在成功运行后整理用户确认的持久事实；整理按运行顺序进行，增删改与处理标记在同一 SQLite 事务提交。运行时只带入少量相关记录，checkpoint 不充当长期记忆。
 
 配置由 `config.py` 提供 `Settings`、`ModelConfig`、`PathGrant` 和 `load_settings()`：
 Settings: data_dir: Path, workspace_root: Path, api_token: str, models: dict[str,ModelConfig],

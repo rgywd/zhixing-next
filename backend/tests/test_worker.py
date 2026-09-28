@@ -1,12 +1,15 @@
 import asyncio
+import json
 import logging
 from uuid import uuid4
 
 import httpx
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 from zhixing_next import worker
 from zhixing_next.config import Settings
+from zhixing_next.memory import organize_run
 from zhixing_next.store import Store
 from zhixing_next.webtools import read_public_page
 from zhixing_next.worker import Worker
@@ -105,6 +108,56 @@ async def test_only_one_worker_can_own_a_data_directory(tmp_path):
     finally:
         stop.set()
         await first
+
+
+async def test_worker_organizes_new_memory_and_explicit_forget(tmp_path, monkeypatch):
+    settings, store = setup_store(tmp_path)
+    conversation = store.create_conversation("设备")
+
+    async def runner(_settings, _run, **_callbacks):
+        return "收到。"
+
+    async def scripted_organizer(settings, store, run):
+        if "忘" in run["prompt"]:
+            actions = [{"op": "forget", "id": store.memory_candidates()[0]["id"]}]
+        else:
+            actions = [{"op": "add", "content": "用户的设备是 Mac mini，内存 16GB"}]
+        model = FakeListChatModel(responses=[json.dumps({"actions": actions}, ensure_ascii=False)])
+        return await organize_run(settings, store, run, model_override=model)
+
+    monkeypatch.setattr(worker, "organize_run", scripted_organizer)
+    stop = asyncio.Event()
+    running = asyncio.create_task(Worker(settings, runner).run(stop))
+    try:
+        first = submit(store, conversation, "我的设备是 Mac mini，内存 16GB")
+        await wait_for(lambda: store.get_run(first["id"])["memory_processed"] == 1)
+        assert len(store.list_memories()["items"]) == 1
+        second = submit(store, conversation, "忘掉我的设备配置")
+        await wait_for(lambda: store.get_run(second["id"])["memory_processed"] == 1)
+        assert store.list_memories()["items"] == []
+    finally:
+        stop.set()
+        await running
+
+
+async def test_explicit_memory_failure_is_not_reported_as_saved(tmp_path):
+    settings, store = setup_store(tmp_path)
+    conversation = store.create_conversation("记忆")
+
+    async def runner(_settings, _run, **_callbacks):
+        return "我理解了你的要求。"
+
+    stop = asyncio.Event()
+    running = asyncio.create_task(Worker(settings, runner).run(stop))
+    try:
+        run = submit(store, conversation, "记住，我喜欢茶")
+        await wait_for(lambda: store.get_run(run["id"])["memory_processed"] == -1)
+        messages = store.list_messages(conversation["id"])["items"]
+        assert "尚未生效" in messages[-1]["content"]
+        assert store.list_memories()["items"] == []
+    finally:
+        stop.set()
+        await running
 
 
 def test_worker_default_logs_omit_http_query_parameters(monkeypatch, caplog):

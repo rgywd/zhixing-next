@@ -1,6 +1,7 @@
 """Single-host product state. Network/model work never runs inside these transactions."""
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -12,6 +13,11 @@ from .config import Settings
 from .sqlite_policy import safe_journal_mode
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
+_CREDENTIAL_WORDS = re.compile(
+    r"api[_ -]?key|password|passwd|token|secret|cookie|密码|密钥|私钥|恢复密钥"
+    r"|\bsk-[A-Za-z0-9_-]{10,}|\bghp_[A-Za-z0-9]{20,}|-----BEGIN .*PRIVATE KEY-----",
+    re.I,
+)
 
 
 class StoreError(Exception):
@@ -34,12 +40,22 @@ def _record(row):
     result = dict(row)
     result.pop("request_json", None)
     result.pop("workspace_path", None)
+    result.pop("content_key", None)
     for key in ("blocked", "cancel_requested", "enabled", "visible"):
         if key in result:
             result[key] = bool(result[key])
     if "tools_json" in result:
         result["tools"] = json.loads(result.pop("tools_json"))
     return result
+
+
+def _memory_content(content):
+    if not isinstance(content, str):
+        raise StoreError("invalid_memory", "Memory must be text", 422)
+    content = " ".join(content.split())
+    if not content or len(content) > 500 or _CREDENTIAL_WORDS.search(content):
+        raise StoreError("invalid_memory", "Memory is empty, too long, or contains credential material", 422)
+    return content
 
 
 class Store:
@@ -54,7 +70,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 4:
+            if version > 5:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -77,6 +93,12 @@ class Store:
                 db.execute("ALTER TABLE runs ADD COLUMN reasoning_effort TEXT")
                 db.execute("CREATE TABLE model_roles(role TEXT PRIMARY KEY,model_id TEXT NOT NULL)")
                 db.execute("PRAGMA user_version=4")
+            if version < 5:
+                db.execute("CREATE TABLE memories(id TEXT PRIMARY KEY,content TEXT NOT NULL,content_key TEXT NOT NULL UNIQUE,source_message_id TEXT REFERENCES messages(id),created_at TEXT NOT NULL,updated_at TEXT NOT NULL)")
+                db.execute("ALTER TABLE runs ADD COLUMN memory_processed INTEGER NOT NULL DEFAULT 0 CHECK(memory_processed IN (-1,0,1))")
+                # Do not silently reinterpret old conversations as new memory input.
+                db.execute("UPDATE runs SET memory_processed=1")
+                db.execute("PRAGMA user_version=5")
             db.commit()
 
     @contextmanager
@@ -125,6 +147,148 @@ class Store:
         with self._connection() as db:
             row = db.execute("SELECT name,persona FROM assistant WHERE id=1").fetchone()
             return dict(row)
+
+    def list_memories(self, cursor=0, limit=50):
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT rowid AS seq,* FROM memories WHERE rowid>? ORDER BY rowid LIMIT ?",
+                (cursor, limit + 1),
+            ).fetchall()
+            return self._page(rows, limit)
+
+    def memory_candidates(self, limit=200):
+        # ponytail: bounded scan; add an index when real memory volume exceeds this window.
+        with self._connection() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT id,content,updated_at FROM memories ORDER BY updated_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()]
+
+    def memory_status(self):
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT memory_processed,COUNT(*) AS count FROM runs "
+                "WHERE status='completed' GROUP BY memory_processed"
+            ).fetchall()
+            counts = {row["memory_processed"]: row["count"] for row in rows}
+            return {"pending": counts.get(0, 0), "failed": counts.get(-1, 0)}
+
+    def add_memory(self, content, source_message_id=None):
+        content = _memory_content(content)
+        key = content.casefold()
+        with self._connection(write=True) as db:
+            if source_message_id:
+                self._require(db, "messages", source_message_id)
+            existing = db.execute("SELECT * FROM memories WHERE content_key=?", (key,)).fetchone()
+            if existing:
+                return _record(existing)
+            identifier, now = str(uuid4()), timestamp()
+            db.execute(
+                "INSERT INTO memories VALUES(?,?,?,?,?,?)",
+                (identifier, content, key, source_message_id, now, now),
+            )
+            return _record(self._require(db, "memories", identifier))
+
+    def update_memory(self, memory_id, content):
+        content = _memory_content(content)
+        with self._connection(write=True) as db:
+            self._require(db, "memories", memory_id)
+            try:
+                db.execute(
+                    "UPDATE memories SET content=?,content_key=?,updated_at=? WHERE id=?",
+                    (content, content.casefold(), timestamp(), memory_id),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise StoreError("memory_conflict", "Memory already exists") from exc
+            return _record(self._require(db, "memories", memory_id))
+
+    def delete_memory(self, memory_id):
+        with self._connection(write=True) as db:
+            self._require(db, "memories", memory_id)
+            db.execute("DELETE FROM memories WHERE id=?", (memory_id,))
+            # Old in-flight runs must not recreate a fact the user just forgot.
+            db.execute("UPDATE runs SET memory_processed=1 WHERE memory_processed=0")
+
+    def next_memory_run(self):
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT id,conversation_id,message_id,prompt,result FROM runs "
+                "WHERE status='completed' AND memory_processed=0 ORDER BY seq LIMIT 1"
+            ).fetchone()
+            return dict(row) if row else None
+
+    def memory_context(self, run_id):
+        with self._connection() as db:
+            run = self._require(db, "runs", run_id)
+            rows = db.execute(
+                "SELECT role,content FROM messages WHERE conversation_id=? AND status='applied' "
+                "AND seq<=(SELECT MAX(seq) FROM messages WHERE run_id=?) "
+                "ORDER BY seq DESC LIMIT 8",
+                (run["conversation_id"], run_id),
+            ).fetchall()
+            return [dict(row) for row in reversed(rows)]
+
+    def apply_memory_actions(self, run_id, actions):
+        with self._connection(write=True) as db:
+            run = self._require(db, "runs", run_id)
+            if run["status"] != "completed" or run["memory_processed"] != 0:
+                return False
+            for action in actions:
+                operation = action["op"]
+                try:
+                    content = _memory_content(action.get("content")) if operation in {"add", "replace"} else ""
+                except StoreError:
+                    continue
+                if operation == "add":
+                    db.execute(
+                        "INSERT OR IGNORE INTO memories VALUES(?,?,?,?,?,?)",
+                        (str(uuid4()), content, content.casefold(), run["message_id"], timestamp(), timestamp()),
+                    )
+                elif operation == "replace":
+                    existing = db.execute("SELECT id FROM memories WHERE id=?", (action["id"],)).fetchone()
+                    if existing:
+                        try:
+                            db.execute(
+                                "UPDATE memories SET content=?,content_key=?,updated_at=? "
+                                "WHERE id=? AND updated_at=?",
+                                (content, content.casefold(), timestamp(), action["id"], action["expected_updated_at"]),
+                            )
+                        except sqlite3.IntegrityError:
+                            pass
+                elif operation == "forget":
+                    removed = db.execute(
+                        "DELETE FROM memories WHERE id=? AND updated_at=?",
+                        (action["id"], action["expected_updated_at"]),
+                    ).rowcount
+                    if removed:
+                        db.execute(
+                            "UPDATE runs SET memory_processed=1 WHERE seq<? AND memory_processed=0",
+                            (run["seq"],),
+                        )
+            db.execute("UPDATE runs SET memory_processed=1 WHERE id=?", (run_id,))
+            return True
+
+    def fail_memory_run(self, run_id):
+        with self._connection(write=True) as db:
+            db.execute(
+                "UPDATE runs SET memory_processed=-1 WHERE id=? AND status='completed' AND memory_processed=0",
+                (run_id,),
+            )
+
+    def add_memory_failure_notice(self, run_id):
+        with self._connection(write=True) as db:
+            run = self._require(db, "runs", run_id)
+            db.execute(
+                "INSERT INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at) "
+                "VALUES(?,?,'assistant',?,'queue',?,'applied',?)",
+                (str(uuid4()), run["conversation_id"], "记忆整理暂时失败，刚才的记住或忘记要求尚未生效。", run_id, timestamp()),
+            )
+
+    def retry_memory_runs(self):
+        with self._connection(write=True) as db:
+            return db.execute(
+                "UPDATE runs SET memory_processed=0 WHERE status='completed' AND memory_processed=-1"
+            ).rowcount
 
     def set_assistant(self, name, persona):
         with self._connection(write=True) as db:
@@ -244,10 +408,13 @@ class Store:
             configured = {row["role"]: row["model_id"] for row in db.execute(
                 "SELECT role,model_id FROM model_roles"
             )}
-            return {
+            roles = {
                 role: configured.get(role, self.settings.roles.get(role))
                 for role in ("chat", "task", "memory")
             }
+            if roles["memory"] not in self.settings.models:
+                roles["memory"] = roles["chat"]
+            return roles
 
     def set_model_role(self, role, model_id):
         if model_id not in self.settings.models:

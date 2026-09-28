@@ -122,6 +122,18 @@ async def test_real_graph_file_tool_and_persistent_conversation(tmp_path):
     ]
 
 
+async def test_new_conversation_receives_relevant_personal_memory(tmp_path):
+    settings = make_settings(tmp_path)
+    Store(settings).add_memory("用户的 Mac mini 内存为 16GB")
+    model = ScriptedModel(replies=[AIMessage(content="你的 Mac mini 是 16GB。")])
+    run = make_run("other-message", "我的 Mac mini 内存是多少？")
+    run["conversation_id"] = "other-conversation"
+    assert await run_agent(settings, run, persona="", emit=ignore,
+                           controls=no_controls, acknowledge=ignore,
+                           model_override=model) == "你的 Mac mini 是 16GB。"
+    assert "用户的 Mac mini 内存为 16GB" in str(model.seen[0])
+
+
 async def test_named_subagent_delegation_and_direct_tool_boundary(tmp_path):
     settings = make_settings(tmp_path)
     finance = {

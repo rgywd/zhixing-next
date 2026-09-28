@@ -5,6 +5,7 @@ api_token_env = "ZHIXING_API_TOKEN"
 [roles]
 chat = "bailian_chat"
 task = "bailian_task"
+memory = "bailian_chat"
 
 [models.bailian_chat]
 protocol = "chat_completions"

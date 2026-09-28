@@ -27,6 +27,7 @@ from .schemas import (
     AssistantInput,
     ConversationInput,
     ConversationModelInput,
+    MemoryInput,
     MessageInput,
     ModelRoleInput,
     ProjectInput,
@@ -169,6 +170,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.put("/models/roles/{role}")
     def update_model_role(role: Literal["chat", "task", "memory"], body: ModelRoleInput):
         return store.set_model_role(role, body.model_id)
+
+    @router.get("/memories")
+    def memories(cursor: Cursor = 0, limit: Limit = 50):
+        return store.list_memories(cursor, limit)
+
+    @router.get("/memories/status")
+    def memory_status():
+        return store.memory_status()
+
+    @router.post("/memories/retry")
+    def retry_memories():
+        return {"retried": store.retry_memory_runs()}
+
+    @router.post("/memories", status_code=201)
+    def create_memory(body: MemoryInput):
+        return store.add_memory(body.content)
+
+    @router.patch("/memories/{memory_id}")
+    def update_memory(memory_id: str, body: MemoryInput):
+        return store.update_memory(memory_id, body.content)
+
+    @router.delete("/memories/{memory_id}")
+    def delete_memory(memory_id: str):
+        store.delete_memory(memory_id)
+        return {"deleted": True}
 
     @router.get("/agents")
     def agents():

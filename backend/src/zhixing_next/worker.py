@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from filelock import FileLock, Timeout
 
 from .config import Settings, load_settings
+from .memory import explicit_memory_request, organize_run
 from .store import Store
 
 logger = logging.getLogger(__name__)
@@ -27,7 +28,26 @@ class Worker:
             runner = run_agent
         self.runner = runner
         self.active: dict[str, tuple[str, asyncio.Task]] = {}
+        self.memory_task: asyncio.Task | None = None
+        self._memory_lock = asyncio.Lock()
         self._last_maintenance = 0.0
+
+    async def _organize(self, run: dict) -> bool:
+        async with self._memory_lock:
+            while self.store.get_run(run["id"])["memory_processed"] == 0:
+                # Apply earlier conversations first, so a later "forget" cannot be
+                # followed by an older extraction recreating the same fact.
+                pending = self.store.next_memory_run()
+                if pending is None:
+                    break
+                try:
+                    await organize_run(self.settings, self.store, pending)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    logger.warning("memory pass for run %s failed (%s)", pending["id"], type(exc).__name__)
+                    self.store.fail_memory_run(pending["id"])
+            return self.store.get_run(run["id"])["memory_processed"] == 1
 
     async def _execute(self, run: dict) -> None:
         run_id = run["id"]
@@ -51,6 +71,8 @@ class Worker:
                 controls=controls, acknowledge=acknowledge,
             )
             self.store.finish_run(run_id, "completed", result=result)
+            if explicit_memory_request(run["prompt"]) and not await self._organize(run):
+                self.store.add_memory_failure_notice(run_id)
         except asyncio.CancelledError:
             requested = self.store.get_controls(run_id)["cancel_requested"]
             self.store.finish_run(
@@ -69,6 +91,9 @@ class Worker:
             self.store.finish_run(run_id, "failed", error=message)
 
     async def tick(self) -> None:
+        if self.memory_task and self.memory_task.done():
+            await self.memory_task
+            self.memory_task = None
         for kind, (run_id, task) in list(self.active.items()):
             if task.done():
                 # Retrieve unexpected persistence errors instead of silently discarding them.
@@ -86,6 +111,10 @@ class Worker:
                 run = self.store.claim_next(kind)
                 if run:
                     self.active[kind] = (run["id"], asyncio.create_task(self._execute(run)))
+        if self.memory_task is None and "chat" not in self.active:
+            pending = self.store.next_memory_run()
+            if pending:
+                self.memory_task = asyncio.create_task(self._organize(pending))
 
     async def run(self, stop: asyncio.Event | None = None) -> None:
         stop = stop or asyncio.Event()
@@ -104,6 +133,8 @@ class Worker:
                             pass
                 finally:
                     pending = [task for _, task in self.active.values()]
+                    if self.memory_task is not None:
+                        pending.append(self.memory_task)
                     for task in pending:
                         if not task.cancelling():
                             task.cancel()

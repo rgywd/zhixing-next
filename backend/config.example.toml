@@ -6,7 +6,7 @@ api_token_env = "ZHIXING_API_TOKEN"
 [roles]
 chat = "primary"
 task = "primary"
-# Memory organization is not enabled yet. Its model can be configured separately later.
+# Memory organization uses the chat model unless a separate memory role is set.
 
 # Replace model IDs with models actually available from your provider.
 [models.primary]

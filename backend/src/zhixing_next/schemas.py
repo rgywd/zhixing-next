@@ -39,6 +39,10 @@ class ModelRoleInput(Input):
     model_id: Identifier
 
 
+class MemoryInput(Input):
+    content: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
+
+
 class AgentInput(Input):
     name: Title
     description: str = Field(min_length=1, max_length=1000)

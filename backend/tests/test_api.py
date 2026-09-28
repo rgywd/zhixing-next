@@ -65,6 +65,23 @@ def test_persona_project_and_conversation_flow(client):
     )
 
 
+def test_memory_management_is_authenticated_and_has_no_mobile_dependency(client):
+    created = client.post("/v1/memories", json={"content": "用户喜欢简洁回答"})
+    assert created.status_code == 201
+    memory = created.json()
+    assert "content_key" not in memory
+    assert client.get("/v1/memories").json()["items"][0]["id"] == memory["id"]
+    assert client.patch(f"/v1/memories/{memory['id']}", json={
+        "content": "用户喜欢直接、简洁的回答"
+    }).json()["content"] == "用户喜欢直接、简洁的回答"
+    assert client.post("/v1/memories", json={"content": "我的 API key 是 abc"}).status_code == 422
+    assert client.get("/v1/memories", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get("/v1/memories/status").json() == {"pending": 0, "failed": 0}
+    assert client.post("/v1/memories/retry").json() == {"retried": 0}
+    assert client.delete(f"/v1/memories/{memory['id']}").json() == {"deleted": True}
+    assert client.get("/v1/memories").json()["items"] == []
+
+
 def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch):
     monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "placeholder-for-unit-test-only")
     settings.models = {
@@ -81,6 +98,7 @@ def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch):
     with TestClient(create_app(settings), headers={"Authorization": f"Bearer {settings.api_token}"}) as client:
         catalog = client.get("/v1/models").json()
         assert catalog["roles"]["chat"] == "one"
+        assert catalog["roles"]["memory"] == "one"
         assert catalog["items"][0]["provider"] == "百炼"
         assert catalog["items"][0]["ready"] is True
         assert "api_key_env" not in str(catalog)
