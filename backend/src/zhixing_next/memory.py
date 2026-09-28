@@ -94,16 +94,20 @@ async def organize_run(
     """Apply one completed run atomically, so a restart never replays its edits."""
     if store.get_run(run["id"])["memory_processed"] != 0:
         return False
-    if run["prompt"].strip().casefold() in {"你好", "谢谢", "好的", "嗯", "ok", "收到", "再见"}:
+    current = store.memory_context(run["id"])
+    user_input = "\n".join(item["content"] for item in current)
+    if user_input.strip().casefold() in {"你好", "谢谢", "好的", "嗯", "ok", "收到", "再见"}:
         return store.apply_memory_actions(run["id"], [])
     existing = store.memory_candidates()
-    history = store.memory_context(run["id"])
+    history = store.memory_context(
+        run["id"], include_previous_assistant=explicit_memory_request(user_input)
+    )
     roles = store.model_roles()
     memory_model = roles.get("memory")
     model_id = memory_model if memory_model in settings.models else roles.get("chat")
     model = model_override or create_model(settings, "chat", model_id)
     request = {
-        "user_input": run["prompt"][:4000],
+        "user_input": user_input[:4000],
         "recent_conversation": [
             {"role": item["role"], "content": item["content"][:3000]}
             for item in history
@@ -129,5 +133,5 @@ async def organize_run(
         HumanMessage(content=json.dumps(request, ensure_ascii=False)),
     ])
     return store.apply_memory_actions(
-        run["id"], _actions(response, {item["id"]: item["updated_at"] for item in existing}, run["prompt"])
+        run["id"], _actions(response, {item["id"]: item["updated_at"] for item in existing}, user_input)
     )

@@ -71,7 +71,8 @@ class Worker:
                 controls=controls, acknowledge=acknowledge,
             )
             self.store.finish_run(run_id, "completed", result=result)
-            if explicit_memory_request(run["prompt"]) and not await self._organize(run):
+            current_input = "\n".join(item["content"] for item in self.store.memory_context(run_id))
+            if explicit_memory_request(current_input) and not await self._organize(run):
                 self.store.add_memory_failure_notice(run_id)
         except asyncio.CancelledError:
             requested = self.store.get_controls(run_id)["cancel_requested"]

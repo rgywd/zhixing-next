@@ -217,16 +217,24 @@ class Store:
             ).fetchone()
             return dict(row) if row else None
 
-    def memory_context(self, run_id):
+    def memory_context(self, run_id, *, include_previous_assistant=False):
         with self._connection() as db:
             run = self._require(db, "runs", run_id)
             rows = db.execute(
-                "SELECT role,content FROM messages WHERE conversation_id=? AND status='applied' "
-                "AND seq<=(SELECT MAX(seq) FROM messages WHERE run_id=?) "
-                "ORDER BY seq DESC LIMIT 8",
-                (run["conversation_id"], run_id),
+                "SELECT role,content FROM messages WHERE run_id=? AND role='user' "
+                "AND status='applied' ORDER BY seq",
+                (run_id,),
             ).fetchall()
-            return [dict(row) for row in reversed(rows)]
+            context = [dict(row) for row in rows]
+            if include_previous_assistant:
+                previous = db.execute(
+                    "SELECT role,content FROM messages WHERE conversation_id=? AND status='applied' "
+                    "AND seq<(SELECT seq FROM messages WHERE id=?) ORDER BY seq DESC LIMIT 1",
+                    (run["conversation_id"], run["message_id"]),
+                ).fetchone()
+                if previous and previous["role"] == "assistant":
+                    context.insert(0, dict(previous))
+            return context
 
     def apply_memory_actions(self, run_id, actions):
         with self._connection(write=True) as db:

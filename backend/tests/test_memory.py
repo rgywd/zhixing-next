@@ -1,7 +1,10 @@
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langchain_core.messages import AIMessage
 
 from zhixing_next.config import Settings
 from zhixing_next.memory import organize_run, relevant_memories
@@ -13,10 +16,10 @@ def setup(tmp_path):
     return settings, Store(settings)
 
 
-def complete(store, conversation_id, message_id, prompt):
+def complete(store, conversation_id, message_id, prompt, result="我理解了。"):
     store.submit_message(conversation_id, id=message_id, content=prompt)
     run = store.claim_next("chat")
-    store.finish_run(run["id"], "completed", result="我理解了。")
+    store.finish_run(run["id"], "completed", result=result)
     return run
 
 
@@ -98,3 +101,53 @@ async def test_forget_blocks_older_in_flight_run_from_recreating_memory(tmp_path
     store.finish_run(old_run["id"], "completed", result="旧任务完成")
     assert store.get_run(old_run["id"])["memory_processed"] == 1
     assert store.next_memory_run() is None
+
+
+async def test_forget_does_not_reextract_from_retained_chat(tmp_path):
+    settings, store = setup(tmp_path)
+    conversation = store.create_conversation("设备")["id"]
+    fact = "我的代号是蓝莓灯塔"
+    first = complete(store, conversation, "fact", fact, result=f"收到，{fact}。")
+    assert await organize_run(settings, store, first, model_override=model(
+        {"op": "add", "content": fact}
+    ))
+    saved = store.list_memories()["items"][0]
+    forgotten = complete(store, conversation, "forget", "忘记我的代号")
+    assert await organize_run(settings, store, forgotten, model_override=model(
+        {"op": "forget", "id": saved["id"]}
+    ))
+    later = complete(store, conversation, "later", "明天聊聊散步")
+    observer = SimpleNamespace(ainvoke=AsyncMock(return_value=AIMessage(content='{"actions":[]}')))
+    assert await organize_run(settings, store, later, model_override=observer)
+    request = json.loads(observer.ainvoke.call_args.args[0][-1].content)
+    assert fact not in json.dumps(request, ensure_ascii=False)
+    assert request["recent_conversation"] == [{"role": "user", "content": "明天聊聊散步"}]
+    assert store.list_memories()["items"] == []
+
+
+async def test_explicit_memory_request_can_reference_last_answer_and_applied_steer(tmp_path):
+    settings, store = setup(tmp_path)
+    conversation = store.create_conversation("项目")["id"]
+    previous = complete(store, conversation, "previous", "给这个项目取个名字", result="叫作青山计划。")
+    assert await organize_run(settings, store, previous, model_override=model())
+    current = complete(store, conversation, "remember", "记住这个")
+    observer = SimpleNamespace(ainvoke=AsyncMock(return_value=AIMessage(content='{"actions":[]}')))
+    assert await organize_run(settings, store, current, model_override=observer)
+    request = json.loads(observer.ainvoke.call_args.args[0][-1].content)
+    assert request["recent_conversation"] == [
+        {"role": "assistant", "content": "叫作青山计划。"},
+        {"role": "user", "content": "记住这个"},
+    ]
+
+    saved = store.add_memory("用户正在推进青山计划")
+    store.submit_message(conversation, id="task", content="继续讨论项目")
+    steered = store.claim_next("chat")
+    store.submit_message(
+        conversation, id="steer", content="忘记青山计划", intent="steer", target_run_id=steered["id"]
+    )
+    store.acknowledge_steers(steered["id"], ["steer"])
+    store.finish_run(steered["id"], "completed", result="收到。")
+    assert await organize_run(settings, store, steered, model_override=model(
+        {"op": "forget", "id": saved["id"]}
+    ))
+    assert store.list_memories()["items"] == []
