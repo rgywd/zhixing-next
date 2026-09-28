@@ -4,7 +4,6 @@ import type { Conversation, Project, Schedule } from "./api";
 import { Button, colors, s, timeLabel } from "./ui";
 
 const styles = StyleSheet.create({
-  page: { paddingBottom: 32 },
   intro: { gap: 7 },
   kicker: { color: colors.accent, fontSize: 12, fontWeight: "700" },
   pageTitle: { color: colors.ink, fontSize: 29, fontWeight: "700" },
@@ -109,7 +108,7 @@ export function HomePanel({
     b.updated_at.localeCompare(a.updated_at),
   )[0];
   return (
-    <ScrollView contentContainerStyle={[s.content, styles.page]}>
+    <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
       <View style={styles.hero}>
         <Text style={styles.kicker}>你的个人助手</Text>
         <Text style={styles.heroTitle}>想聊聊，还是开始一件事？</Text>
@@ -169,7 +168,7 @@ export function WorkPanel({
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .slice(0, 3);
   return (
-    <ScrollView contentContainerStyle={[s.content, styles.page]}>
+    <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
       <View style={styles.workIntro}>
         <Image source={require("../assets/work-header-red.png")} resizeMode="cover" style={styles.workArtwork} accessible={false} />
         <Text style={styles.kicker}>WORK</Text>
@@ -258,7 +257,7 @@ export function WorkPanel({
 
 export function ToolboxPanel({ onSettings, onAgents, onModels }: { onSettings: () => void; onAgents: () => void; onModels: () => void }) {
   return (
-    <ScrollView contentContainerStyle={[s.content, styles.page]}>
+    <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
       <View style={styles.intro}>
         <Text style={styles.kicker}>TOOLBOX</Text>
         <Text style={styles.pageTitle}>工具箱</Text>

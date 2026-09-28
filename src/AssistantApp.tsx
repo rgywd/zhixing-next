@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   AppState,
   BackHandler,
+  Keyboard,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -50,7 +51,7 @@ import {
   removeConnection,
   saveDraft,
 } from "./storage";
-import { Button, colors, Field, humanError, s, timeLabel } from "./ui";
+import { Button, colors, Field, humanError, s, tabBarClearance, timeLabel } from "./ui";
 
 type Tab = "home" | "life" | "chat" | "work" | "toolbox";
 
@@ -123,38 +124,40 @@ export default function AssistantApp() {
 
 function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => void }) {
   return (
-    <View style={s.tabs}>
-      {(
-        [
+    <View pointerEvents="box-none" style={s.floatingTabs}>
+      <View pointerEvents="none" style={s.tabs} />
+      <View pointerEvents="box-none" style={s.tabItems}>
+        {([
           { id: "home", label: "首页", icon: "home-outline" },
           { id: "life", label: "生活", icon: "leaf-outline" },
           { id: "chat", label: "AI", icon: null },
           { id: "work", label: "工作", icon: "briefcase-outline" },
           { id: "toolbox", label: "工具箱", icon: "grid-outline" },
-        ] as const
-      ).map((item) => (
-        <Pressable
-          accessibilityRole="tab"
-          accessibilityLabel={item.label}
-          accessibilityState={{ selected: value === item.id }}
-          key={item.id}
-          onPress={() => onChange(item.id)}
-          style={[s.tab, item.id === "chat" ? s.aiTab : value === item.id && s.activeTab]}
-        >
-          {item.id === "chat" ? (
-            <View style={[s.aiButton, value === "chat" && s.activeAiButton]}>
-              <Text style={s.aiButtonText}>AI</Text>
-            </View>
-          ) : (
-            <>
-              <Ionicons name={item.icon!} size={23} color={value === item.id ? colors.accent : colors.muted} />
-              <Text style={[s.tabText, value === item.id && s.activeTabText]}>
-                {item.label}
-              </Text>
-            </>
-          )}
-        </Pressable>
-      ))}
+        ] as const).map((item) => (
+          <Pressable
+            accessibilityRole={item.id === "chat" ? "button" : "tab"}
+            accessibilityLabel={item.label}
+            accessibilityState={{ selected: value === item.id }}
+            key={item.id}
+            onPress={() => onChange(item.id)}
+            style={({ pressed }) => [s.tab, item.id === "chat" ? s.aiTab : value === item.id && s.activeTab, pressed && s.pressed]}
+          >
+            {item.id === "chat" ? (
+              <View style={s.aiButton}>
+                <Ionicons name="sparkles" size={25} color={colors.white} />
+                <Text style={s.aiButtonText}>AI</Text>
+              </View>
+            ) : (
+              <>
+                <Ionicons name={item.icon!} size={23} color={value === item.id ? colors.accent : colors.muted} />
+                <Text style={[s.tabText, value === item.id && s.activeTabText]}>
+                  {item.label}
+                </Text>
+              </>
+            )}
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 }
@@ -177,7 +180,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
         lifeView === "overview" ? (
           <LifePanel onFinance={() => setLifeView("finance")} onChat={() => setTab("chat")} />
         ) : (
-          <ScrollView contentContainerStyle={s.content}>
+          <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
             <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
             <Text style={s.heading}>财务</Text>
             <Text style={s.muted}>连接服务后，可以在这里和财务助手聊。</Text>
@@ -260,12 +263,18 @@ function Connected({
   const [syncError, setSyncError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
   const refreshRef = useRef<() => void>(() => undefined);
   const alive = useRef(true);
   const refresh = useCallback(() => refreshRef.current(), []);
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
   const selectedModel = catalog?.items.find((item) => item.id === (selected?.model_id ?? catalog.roles.chat));
   const financeConversation = conversations.find((item) => item.id === financeId) ?? null;
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
   useEffect(() => {
     if (tab !== "chat") return;
     const listener = BackHandler.addEventListener("hardwareBackPress", () => { setTab(returnTab); return true; });
@@ -595,7 +604,7 @@ function Connected({
             openMainChat();
           }} />
         ) : financeConversation ? (
-          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
+          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} bottomInset={keyboardVisible ? 0 : tabBarClearance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
         ) : (
           <View style={[s.body, { padding: 22, gap: 18 }]}>
             <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
@@ -700,7 +709,7 @@ function Connected({
               }}
             />
           ) : (
-            <ScrollView contentContainerStyle={s.content}>
+            <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
               <Text style={s.title}>连接设置</Text>
               <Text style={s.muted}>服务连接恢复后，可以编辑人格设定。</Text>
               <Button secondary onPress={onDisconnect}>
@@ -710,7 +719,7 @@ function Connected({
           )}
         </>
       )}
-      {tab !== "chat" ? <BottomTabs value={tab} onChange={selectTab} /> : null}
+      {tab !== "chat" && !keyboardVisible ? <BottomTabs value={tab} onChange={selectTab} /> : null}
       <AiDrawer
         visible={showAiDrawer}
         name={assistant?.name ?? "知行"}

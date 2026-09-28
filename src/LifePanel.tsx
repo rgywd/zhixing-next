@@ -23,7 +23,7 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
   finance?: FinanceSummary;
 }) {
   return (
-    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.page}>
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.page, s.tabContent]}>
       <View style={styles.hero}>
         <Image source={require("../assets/life-header-red.png")} resizeMode="contain" style={styles.heroArt} accessible={false} />
         <Text style={styles.kicker}>LIFE</Text>
@@ -109,7 +109,7 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
 }
 
 const styles = StyleSheet.create({
-  page: { paddingHorizontal: 16, paddingBottom: 20, gap: 14 },
+  page: { paddingHorizontal: 16, gap: 14 },
   hero: { minHeight: 116, justifyContent: "center", gap: 6, paddingHorizontal: 6, paddingTop: 9 },
   heroArt: { position: "absolute", width: 226, height: 130, right: -26, top: -4 },
   kicker: { color: colors.accent, fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },

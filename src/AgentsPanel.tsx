@@ -69,7 +69,7 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
     }
   }
   return (
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
+    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={[s.content, s.tabContent]}>
       <Text style={s.heading}>子智能体</Text>
       <Text style={s.muted}>主知行可以按需委托它们；你也可以直接聊。工具权限由服务端限制。</Text>
       {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
