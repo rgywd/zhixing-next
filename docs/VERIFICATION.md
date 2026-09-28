@@ -101,4 +101,12 @@ Android 系统分享面板已打开但没有向外部 App 发送；从专用模�
 
 SQLite v1→v3 迁移测试保留旧会话，固定财务助手自动创建；HTTP 测试覆盖自建助手增删改查、服务工具边界、会话绑定、忙碌时拒绝删除及财务金额观察值的读写。真实 Deep Agents 图测试覆盖主知行委派固定助手、财务助手直接对话时只获得财务专用工具，并通过工具将明确金额写入 SQLite。`uv run pytest -q` 通过 92 项，`uv run ruff check .` 通过。手机 `typecheck`、`lint`、9 项移动端测试与 Android/iOS JS bundle 通过。测试模型未证明云模型已完成财务助手实聊；截图识别、真实账户读取、自动对账和统一资源库仍未接入。
 
-用户提供的蓝底白字图标已用于 App、Android adaptive icon 和 Web favicon。2026-09-28 在可见 Android 模拟器安装本机独立 APK 并查看首页与生活页：图标显示正确，页面无“退出预览”、开发刷新条或模块错误。`expo-doctor` 21/21 通过。本机独立构建用于界面验收，不是正式发行制品；当前模拟器尚未连接新版后端，真实云模型委派仍待联调。
+用户提供的蓝底白字图标已用于 App、Android adaptive icon 和 Web favicon。2026-09-28 在可见 Android 模拟器安装本机独立 APK 并查看首页与生活页：图标显示正确，页面无“退出预览”、开发刷新条或模块错误。`expo-doctor` 21/21 通过。本机独立构建用于界面验收，不是正式发行制品；服务连接结果见下方。
+
+## 2026-09-28 myVPS 升级与独立 App 连接
+
+myVPS 从 `9d59b663157861fe754d149d39f67a7d92c09105` 切换到 `657d8d74f44cea406d9200462a6f109181c9fec7`，发布包 SHA-256 为 `fc48005adc15069792a097872ecd7d4439341f54bf8cb85b60955720e811bbfa`。升级前确认无 queued/running 运行、无启用计划；停 API/worker 后完整备份数据至 `/var/backups/zhixing-next/20260928T033050Z-connect/`，备份校验通过，旧发布包保留。SQLite 从 v1 升至 v3，原有 5 个会话和 8 次运行保留，并生成固定财务助手。API 与 worker 均 active；公网 `/assistant/healthz` 为 200，未授权 `/assistant/v1/agents` 为 401。
+
+Android 独立 APK 在可见模拟器使用 HTTPS 服务地址和服务访问令牌连接成功；首页读回旧会话，生活页读到财务助手与空的真实财务记录，工具箱读到固定财务助手及其工具。强制结束 App 后重新启动，连接与旧会话仍能读回。令牌只进入 App 安全存储，没有写入仓库、文档或验收输出。认证状态返回 `model_ready=true`、`worker_online=true`、`file_tools_available=true`；这里的 `model_ready` 只表示密钥存在。
+
+手机端发送的真实聊天进入 worker，但云模型返回百炼 `Arrearage`（账户额度/账单状态异常），运行 `56edef36` 失败；使用与服务器相同的本机 `BAILIAN-JUHE` 密钥做最小模型调用也返回同一供应商错误。因此 **2026-09-28 的云聊天与子智能体委派未通过实调**；恢复账单状态后需重试，不能沿用 2026-09-23 的成功记录宣称当前可用。
