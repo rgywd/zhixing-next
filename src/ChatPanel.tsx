@@ -5,6 +5,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TextInput,
   View,
@@ -67,7 +68,6 @@ export function ChatPanel({
   }
   const {
     messages,
-    runs,
     running,
     previous,
     draft,
@@ -215,67 +215,21 @@ export function ChatPanel({
           </View>
         )}
       />
-      {runs.length ? (
-        <View
-          style={{
-            borderTopWidth: 1,
-            borderTopColor: colors.line,
-            paddingHorizontal: 18,
-            paddingVertical: 9,
-            gap: 7,
-          }}
-        >
-          <View style={s.spread}>
-            <Text style={s.muted}>
-              {running
-                ? `正在${running.kind === "task" ? "处理委托" : "回复"} · ${pendingRuns.filter((run) => run.status === "queued").length} 条等待`
-                : "运行记录"}
-            </Text>
-            <Button
-              secondary
-              small
-              onPress={() => setDetail(running?.id ?? runs[runs.length - 1].id)}
-            >
-              查看进度
-            </Button>
-          </View>
+      {pendingRuns.length ? (
+        <View style={chatStyles.runBar}>
+          <Text numberOfLines={1} style={[s.muted, s.grow]}>
+            {running
+              ? `正在${running.kind === "task" ? "处理委托" : "回复"} · ${pendingRuns.filter((run) => run.status === "queued").length} 条等待`
+              : `${pendingRuns.length} 条等待执行`}
+          </Text>
+          <Pressable accessibilityRole="button" accessibilityLabel="查看运行进度" onPress={() => setDetail(running?.id ?? pendingRuns[0].id)}>
+            <Text style={chatStyles.link}>进度</Text>
+          </Pressable>
           {running ? (
-            <View style={s.spread}>
-              <Text numberOfLines={1} style={[s.text, s.grow]}>
-                {running.prompt}
-              </Text>
-              <Button
-                secondary
-                danger
-                small
-                disabled={running.cancel_requested}
-                onPress={() => {
-                  void cancel(running).catch(() => undefined);
-                }}
-              >
-                {running.cancel_requested ? "正在取消" : "取消"}
-              </Button>
-            </View>
+            <Pressable accessibilityRole="button" accessibilityLabel="取消当前运行" accessibilityState={{ disabled: running.cancel_requested }} disabled={running.cancel_requested} onPress={() => { void cancel(running).catch(() => undefined); }}>
+              <Text style={[chatStyles.link, { color: colors.red }]}>{running.cancel_requested ? "取消中" : "取消"}</Text>
+            </Pressable>
           ) : null}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={{ gap: 7 }}
-          >
-            {[...runs]
-              .reverse()
-              .slice(0, 8)
-              .map((run) => (
-                <Button
-                  key={run.id}
-                  secondary
-                  small
-                  onPress={() => setDetail(run.id)}
-                >
-                  {runLabels[run.status]} · {run.prompt.slice(0, 12)}
-                </Button>
-              ))}
-          </ScrollView>
         </View>
       ) : null}
       {conversation.blocked ? (
@@ -294,137 +248,61 @@ export function ChatPanel({
           </Button>
         </View>
       ) : null}
-      <View
-        style={{
-          paddingHorizontal: 18,
-          paddingTop: 10,
-          paddingBottom: 12,
-          gap: 9,
-          borderTopWidth: 1,
-          borderTopColor: colors.line,
-          backgroundColor: colors.white,
-        }}
-      >
-        {!conversation.agent_id && kind === "chat" && intent === "queue" ? (
-          <View style={[s.row, { flexWrap: "wrap" }]}>
-            <Button secondary small disabled={!catalog || modelBusy || !!draft.pending} onPress={() => setShowModels(true)}>
-              {model ? `模型 · ${model.name}` : "选择模型"}
-            </Button>
-            {conversation.model_id ? (
-              <Button secondary small disabled={modelBusy || !!draft.pending} onPress={() => {
-                void updateModel(null, null).catch((e) => setError(humanError(e)));
-              }}>跟随默认</Button>
-            ) : null}
-            {model?.reasoning_levels.length ? (
-              <Button secondary small disabled={modelBusy || !!draft.pending} onPress={() => setShowReasoning(true)}>
-                思考 · {reasoningLabel[depth]}
-              </Button>
-            ) : null}
-          </View>
-        ) : !conversation.agent_id && kind === "task" ? (
-          <Text style={s.muted}>任务使用工具箱中的执行默认模型</Text>
-        ) : null}
-        <View style={s.spread}>
-          <View style={s.row}>
-            {(["chat", "task"] as const).map((value) => (
-              <Pressable
-                key={value}
-                accessibilityRole="button"
-                accessibilityState={{
-                  selected: kind === value,
-                  disabled: !!draft.pending,
-                }}
-                disabled={!!draft.pending}
-                onPress={() => setKind(value)}
-                style={[s.chip, kind === value && s.chipActive]}
-              >
-                <Text style={[s.chipText, kind === value && s.chipActiveText]}>
-                  {value === "chat" ? "聊一聊" : "交给你做"}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-          <View style={s.row}>
-            {(["queue", "steer"] as const).map((value) => (
-              <Pressable
-                key={value}
-                accessibilityRole="button"
-                disabled={!!draft.pending || (value === "steer" && !running)}
-                accessibilityState={{
-                  selected: intent === value,
-                  disabled: !!draft.pending || (value === "steer" && !running),
-                }}
-                onPress={() => {
-                  setIntent(value);
-                  if (value === "steer" && running) setKind(running.kind);
-                  setTarget(value === "steer" ? (running?.id ?? null) : null);
-                }}
-                style={[
-                  s.chip,
-                  intent === value && s.chipActive,
-                  value === "steer" && !running && s.disabled,
-                ]}
-              >
-                <Text
-                  style={[s.chipText, intent === value && s.chipActiveText]}
-                >
-                  {value === "queue" ? "排队" : "引导"}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
-        </View>
-        <View style={s.spread}>
-          <Text style={[s.muted, s.grow]}>
-            {draft.pending
-              ? `待确认请求 · ${draft.pending.intent === "steer" ? `引导 ${draft.pending.target_run_id?.slice(0, 8)}` : "排队"} · 重试沿用原请求`
-              : intent === "steer"
-                ? `引导目标 ${target?.slice(0, 8)} · ${running?.id === target ? "在下一可调整步骤生效" : "目标已结束，请重新选择"}`
-                : "发给当前会话 · 按顺序处理"}
-          </Text>
-          <Button secondary small onPress={() => setShowFiles(true)}>
-            资料
-          </Button>
-        </View>
-        {error ? (
-          <Text accessibilityRole="alert" style={s.error}>
-            {error}
-          </Text>
-        ) : null}
-        <View style={[s.row, { alignItems: "flex-end" }]}>
+      <View style={chatStyles.composerArea}>
+        <View style={chatStyles.composer}>
           <TextInput
             accessibilityLabel="消息或任务要求"
             multiline
-            placeholder="说说你的想法…"
+            placeholder={kind === "task" ? "交给知行完成…" : "输入消息与知行聊天…"}
             placeholderTextColor={colors.muted}
             value={draft.text}
             maxLength={20000}
             editable={draftReady && !draft.pending && !busy}
             onChangeText={(text) => {
-              void updateDraft({ text, pending: null }).catch((e) =>
-                setError(humanError(e)),
-              );
+              void updateDraft({ text, pending: null }).catch((e) => setError(humanError(e)));
             }}
-            style={[
-              s.input,
-              s.grow,
-              { maxHeight: 140, minHeight: 50, lineHeight: 23 },
-            ]}
+            style={chatStyles.composerInput}
           />
-          <Button
-            disabled={!draftReady || busy || modelBusy || !draft.text.trim()}
-            onPress={() => {
-              void send();
-            }}
-          >
-            {busy ? "发送中" : draft.pending ? "重试" : "发送"}
-          </Button>
+          {intent === "steer" ? (
+            <Text style={chatStyles.composerHint}>
+              {running?.id === target ? "引导当前运行 · 在下一可调整步骤生效" : "目标已结束，请切回排队发送"}
+            </Text>
+          ) : null}
+          <View style={chatStyles.toolbar}>
+            {!conversation.agent_id ? (
+              <Pressable accessibilityRole="button" accessibilityLabel={kind === "task" ? "任务使用默认执行模型" : `选择聊天模型，当前${model?.name ?? "未配置"}`} accessibilityState={{ disabled: kind === "task" || !catalog || modelBusy || !!draft.pending }} disabled={kind === "task" || !catalog || modelBusy || !!draft.pending} onPress={() => setShowModels(true)} style={[chatStyles.tool, kind === "task" && s.disabled]}>
+                <Text style={chatStyles.toolText}>模型</Text>
+              </Pressable>
+            ) : null}
+            <Pressable accessibilityRole="button" accessibilityLabel={kind === "chat" ? "当前聊天，切换为任务" : "当前任务，切换为聊天"} accessibilityState={{ disabled: !!draft.pending }} disabled={!!draft.pending} onPress={() => setKind(kind === "chat" ? "task" : "chat")} style={[chatStyles.tool, kind === "task" && chatStyles.toolActive]}>
+              <Text style={[chatStyles.toolText, kind === "task" && chatStyles.toolActiveText]}>{kind === "chat" ? "聊天" : "任务"}</Text>
+            </Pressable>
+            {!conversation.agent_id && kind === "chat" && !!model?.reasoning_levels.length ? (
+              <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${reasoningLabel[depth]}`} accessibilityState={{ disabled: modelBusy || !!draft.pending }} disabled={modelBusy || !!draft.pending} onPress={() => setShowReasoning(true)} style={chatStyles.tool}>
+                <Text style={chatStyles.toolText}>思考</Text>
+              </Pressable>
+            ) : null}
+            {(running || intent === "steer") && (["queue", "steer"] as const).map((value) => (
+              <Pressable key={value} accessibilityRole="button" accessibilityLabel={value === "queue" ? "排队：当前运行结束后处理" : "引导：发送给当前运行"} accessibilityState={{ selected: intent === value, disabled: !!draft.pending || (value === "steer" && !running) }} disabled={!!draft.pending || (value === "steer" && !running)} onPress={() => {
+                setIntent(value);
+                if (value === "steer" && running) setKind(running.kind);
+                setTarget(value === "steer" ? (running?.id ?? null) : null);
+              }} style={[chatStyles.tool, intent === value && chatStyles.toolActive, value === "steer" && !running && s.disabled]}>
+                <Text style={[chatStyles.toolText, intent === value && chatStyles.toolActiveText]}>{value === "queue" ? "排队" : "引导"}</Text>
+              </Pressable>
+            ))}
+            <View style={s.grow} />
+            <Pressable accessibilityRole="button" accessibilityLabel="添加资料" onPress={() => setShowFiles(true)} style={chatStyles.tool}>
+              <Text style={[chatStyles.toolText, { fontSize: 24, lineHeight: 25 }]}>＋</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel={draft.pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !draftReady || busy || modelBusy || !draft.text.trim() }} disabled={!draftReady || busy || modelBusy || !draft.text.trim()} onPress={() => { void send(); }} style={[chatStyles.send, (!draftReady || busy || modelBusy || !draft.text.trim()) && s.disabled]}>
+              <Text style={chatStyles.sendText}>{busy ? "…" : draft.pending ? "重试" : "↑"}</Text>
+            </Pressable>
+          </View>
         </View>
-        {draft.pending && !busy ? (
-          <Button secondary small onPress={abandonPending}>
-            返回编辑草稿
-          </Button>
-        ) : null}
+        {draft.pending ? <Text style={s.muted}>提交尚未确认 · 重试沿用原请求{!busy ? " · 可返回编辑" : ""}</Text> : null}
+        {draft.pending && !busy ? <Button secondary small onPress={abandonPending}>返回编辑草稿</Button> : null}
+        {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
       </View>
       <ModelPicker
         visible={showModels}
@@ -433,6 +311,7 @@ export function ChatPanel({
         models={catalog?.items ?? []}
         selectedId={modelId}
         onSelect={(id) => updateModel(id, null)}
+        onUseDefault={conversation.model_id ? () => updateModel(null, null) : undefined}
         onClose={() => setShowModels(false)}
       />
       <Modal visible={showReasoning} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowReasoning(false)}>
@@ -635,3 +514,58 @@ function eventSummary(event: RunEvent) {
     ? content
     : JSON.stringify(event.data, null, 2);
 }
+
+const chatStyles = StyleSheet.create({
+  runBar: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    backgroundColor: colors.pale,
+  },
+  link: { color: colors.green, fontSize: 12, fontWeight: "600" },
+  composerArea: { paddingHorizontal: 10, paddingTop: 6, paddingBottom: 8, gap: 6 },
+  composer: {
+    backgroundColor: colors.white,
+    borderColor: colors.line,
+    borderWidth: 1,
+    borderRadius: 22,
+    paddingHorizontal: 10,
+    paddingBottom: 9,
+    elevation: 2,
+  },
+  composerInput: {
+    color: colors.ink,
+    fontSize: 16,
+    lineHeight: 24,
+    minHeight: 62,
+    maxHeight: 140,
+    paddingTop: 14,
+    paddingBottom: 7,
+    textAlignVertical: "top",
+  },
+  composerHint: { color: colors.amber, fontSize: 12, paddingBottom: 6 },
+  toolbar: { flexDirection: "row", alignItems: "center", gap: 2 },
+  tool: {
+    minHeight: 42,
+    minWidth: 42,
+    paddingHorizontal: 6,
+    borderRadius: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.pale,
+  },
+  toolText: { color: colors.green, fontSize: 12, fontWeight: "600" },
+  toolActive: { backgroundColor: colors.green },
+  toolActiveText: { color: colors.white },
+  send: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: colors.green,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sendText: { color: colors.white, fontSize: 21, fontWeight: "600" },
+});

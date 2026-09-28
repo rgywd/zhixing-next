@@ -365,7 +365,7 @@ function Connected({
     };
   }, [connection]);
 
-  async function newConversation(explore = false, agentId: string | null = null) {
+  async function newConversation(explore = false, agentId: string | null = null, quick = false) {
     if (busy) return;
     setBusy(true);
     setError("");
@@ -376,8 +376,8 @@ function Connected({
         {
           method: "POST",
           body: {
-            title: explore ? "认识运行环境" : agentId ? `${agents.find((item) => item.id === agentId)?.name ?? "助手"}对话` : title.trim() || "新的对话",
-            project_id: explore || agentId ? null : projectId,
+            title: explore ? "认识运行环境" : agentId ? `${agents.find((item) => item.id === agentId)?.name ?? "助手"}对话` : quick ? "新的对话" : title.trim() || "新的对话",
+            project_id: explore || agentId || quick ? null : projectId,
             agent_id: agentId,
           },
         },
@@ -499,16 +499,18 @@ function Connected({
 
   return (
     <View style={s.body}>
-      <View style={s.header}>
-        <Image source={require("../assets/icon.png")} style={s.brand} />
-        <View style={s.grow}>
-          <Text style={s.eyebrow}>ZHIXING · PERSONAL ASSISTANT</Text>
-          <Text style={s.heading}>{assistant?.name || "知行"}</Text>
+      {tab !== "chat" ? (
+        <View style={s.header}>
+          <Image source={require("../assets/icon.png")} style={s.brand} />
+          <View style={s.grow}>
+            <Text style={s.eyebrow}>ZHIXING · PERSONAL ASSISTANT</Text>
+            <Text style={s.heading}>{assistant?.name || "知行"}</Text>
+          </View>
+          <Pressable accessibilityRole="button" onPress={refresh} style={s.chip}>
+            <Text style={s.chipText}>{statusLabel}</Text>
+          </Pressable>
         </View>
-        <Pressable accessibilityRole="button" onPress={refresh} style={s.chip}>
-          <Text style={s.chipText}>{statusLabel}</Text>
-        </Pressable>
-      </View>
+      ) : null}
       {syncError ? (
         <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
           <Text style={s.noticeText}>{syncError}</Text>
@@ -555,27 +557,20 @@ function Connected({
         )
       ) : tab === "chat" ? (
         <>
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => setShowConversations(true)}
-            style={{
-              paddingHorizontal: 22,
-              paddingVertical: 10,
-              flexDirection: "row",
-              alignItems: "center",
-              gap: 10,
-            }}
-          >
-            <Text numberOfLines={1} style={[s.title, s.grow]}>
-              {selected?.agent_id ? `${agents.find((item) => item.id === selected.agent_id)?.name ?? "子智能体"} · ${selected.title}` : selected?.title ?? "选择一段对话"}
-            </Text>
-            <Text style={s.muted}>切换 / 新建 ›</Text>
-          </Pressable>
-          {!selected?.agent_id && selected ? (
-            <Text style={[s.muted, { marginHorizontal: 22, marginBottom: 8 }]}>
-              {selectedModel ? `${assistant?.name ?? "知行"} / ${selectedModel.name} (${selectedModel.provider})` : "模型待配置"}
-            </Text>
-          ) : null}
+          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 18, paddingVertical: 10, gap: 12 }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="切换对话" onPress={() => setShowConversations(true)} style={{ minWidth: 40, minHeight: 44, justifyContent: "center" }}>
+              <Text style={{ color: colors.ink, fontSize: 26 }}>☰</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="当前对话，点击切换" onPress={() => setShowConversations(true)} style={s.grow}>
+              <Text numberOfLines={1} style={s.title}>{selected?.title ?? "新的对话"}</Text>
+              <Text numberOfLines={1} style={s.muted}>
+                {selectedModel ? `${selectedModel.provider} / ${selectedModel.name}` : "选择模型后开始聊天"}
+              </Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="新建日常对话" accessibilityState={{ disabled: busy }} disabled={busy} onPress={() => { void newConversation(false, null, true); }} style={{ minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" }}>
+              <Text style={{ color: colors.green, fontSize: 32, lineHeight: 36 }}>＋</Text>
+            </Pressable>
+          </View>
           <View style={s.divider} />
           {selected ? (
             <ChatPanel

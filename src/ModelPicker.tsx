@@ -15,7 +15,7 @@ export const reasoningLabel = {
 } as const;
 
 export function ModelPicker({
-  visible, title, connectionUrl, models, selectedId, onSelect, onClose,
+  visible, title, connectionUrl, models, selectedId, onSelect, onUseDefault, onClose,
 }: {
   visible: boolean;
   title: string;
@@ -23,6 +23,7 @@ export function ModelPicker({
   models: ModelInfo[];
   selectedId: string | null;
   onSelect: (id: string) => Promise<void>;
+  onUseDefault?: () => Promise<void>;
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
@@ -50,12 +51,13 @@ export function ModelPicker({
       setError(humanError(e));
     }
   }
-  async function choose(id: string) {
+  async function choose(id?: string) {
     if (busy) return;
     setBusy(true);
     setError("");
     try {
-      await onSelect(id);
+      if (id) await onSelect(id);
+      else await onUseDefault?.();
       onClose();
     } catch (e) {
       setError(humanError(e));
@@ -104,6 +106,7 @@ export function ModelPicker({
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
           <TextInput accessibilityLabel="搜索模型" placeholder="搜索模型或供应商" placeholderTextColor={colors.muted} value={query} onChangeText={setQuery} autoCorrect={false} style={s.input} />
           {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+          {onUseDefault ? <Button secondary disabled={busy} onPress={() => { void choose(); }}>跟随默认聊天模型</Button> : null}
           {!filtered.length ? <Text style={s.muted}>没有匹配的模型。请在服务器配置模型后刷新。</Text> : null}
           {favoriteModels.length ? (
             <View style={{ gap: 8 }}><Text style={s.title}>收藏</Text>{favoriteModels.map((item) => row(item, "favorite"))}</View>
