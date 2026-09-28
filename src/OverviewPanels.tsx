@@ -1,4 +1,4 @@
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Conversation, FinanceSummary, Project, Schedule } from "./api";
 import { Button, colors, s, timeLabel } from "./ui";
@@ -56,15 +56,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   workIntro: { minHeight: 125, justifyContent: "center", gap: 4 },
-  workGlow: {
-    position: "absolute", right: 8, top: -24, width: 170, height: 170,
-    borderRadius: 85, backgroundColor: "#E6EEE7", opacity: 0.7,
-  },
-  workGlowInner: {
-    position: "absolute", right: 20, top: 4, width: 112, height: 112,
-    borderRadius: 56, backgroundColor: "#D5E6D9", opacity: 0.7,
-  },
-  workHeroIcon: { position: "absolute", right: 39, top: 35, opacity: 0.55, transform: [{ rotate: "-14deg" }] },
+  workArtwork: { position: "absolute", left: -22, right: -22, top: -10, height: 145, opacity: 0.88 },
   workTitle: { color: colors.ink, fontSize: 36, lineHeight: 45, fontWeight: "700" },
   workCard: {
     backgroundColor: "#FFFFFF", borderRadius: 23, padding: 17, gap: 11,
@@ -216,9 +208,7 @@ export function WorkPanel({
   return (
     <ScrollView contentContainerStyle={[s.content, styles.page]}>
       <View style={styles.workIntro}>
-        <View style={styles.workGlow} />
-        <View style={styles.workGlowInner} />
-        <Ionicons name="briefcase-outline" size={72} color={colors.green} style={styles.workHeroIcon} />
+        <Image source={require("../assets/work-header.webp")} resizeMode="cover" style={styles.workArtwork} accessible={false} />
         <Text style={styles.kicker}>WORK</Text>
         <Text style={styles.workTitle}>工作</Text>
         <Text style={styles.description}>对话、项目和任务会在这里逐步连起来。</Text>
