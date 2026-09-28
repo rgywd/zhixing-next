@@ -23,7 +23,7 @@ def test_schema_and_persona_survive_reopen(store):
     reopened = Store(store.settings)
     assert reopened.get_assistant()["persona"] == "记得先核实出处"
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 6
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == safe_journal_mode().lower()
 
 
@@ -45,6 +45,8 @@ def test_v2_finance_agent_customization_survives_tool_upgrade(store):
     with sqlite3.connect(store.db_path) as db:
         db.execute("DROP TABLE memories")
         db.execute("ALTER TABLE runs DROP COLUMN memory_processed")
+        db.execute("DROP TABLE search_providers")
+        db.execute("ALTER TABLE runs DROP COLUMN search_provider_id")
         db.execute("DROP TABLE model_roles")
         db.execute("ALTER TABLE runs DROP COLUMN reasoning_effort")
         db.execute("ALTER TABLE runs DROP COLUMN model_id")
@@ -68,11 +70,26 @@ def test_v4_upgrade_keeps_old_conversations_without_reprocessing_them(store):
     with sqlite3.connect(store.db_path) as db:
         db.execute("DROP TABLE memories")
         db.execute("ALTER TABLE runs DROP COLUMN memory_processed")
+        db.execute("DROP TABLE search_providers")
+        db.execute("ALTER TABLE runs DROP COLUMN search_provider_id")
         db.execute("PRAGMA user_version=4")
     upgraded = Store(store.settings)
     assert upgraded.get_run(run["id"])["memory_processed"] == 1
     assert upgraded.next_memory_run() is None
     assert upgraded.get_conversation(conversation)["title"] == "旧对话"
+
+
+def test_v5_memory_database_gains_search_without_losing_memories(store):
+    memory = store.add_memory("用户喜欢简洁回答")
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE search_providers")
+        db.execute("ALTER TABLE runs DROP COLUMN search_provider_id")
+        db.execute("PRAGMA user_version=5")
+    upgraded = Store(store.settings)
+    assert upgraded.list_memories()["items"][0]["id"] == memory["id"]
+    assert upgraded.list_search_providers()["items"] == []
+    with sqlite3.connect(store.db_path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 6
 
 
 def test_duplicate_messages_and_competing_claims_are_atomic(store):

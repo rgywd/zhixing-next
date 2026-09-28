@@ -26,6 +26,7 @@ import {
 import { useChat } from "./useChat";
 import { ModelPicker, reasoningLabel } from "./ModelPicker";
 import { FilesPanel } from "./FilesPanel";
+import { SearchPicker } from "./SearchPicker";
 import {
   Button,
   colors,
@@ -64,8 +65,8 @@ const markdownStyles = {
   fence: { borderColor: colors.line, borderWidth: 1, borderRadius: 10, overflow: "hidden", marginVertical: 6 },
   fence_header: { backgroundColor: colors.pale, borderBottomColor: colors.line },
   fence_code: { backgroundColor: colors.white },
-  blockquote: { backgroundColor: colors.pale, borderLeftColor: colors.green, borderLeftWidth: 3, paddingHorizontal: 10 },
-  link: { color: colors.green, textDecorationLine: "underline" },
+  blockquote: { backgroundColor: colors.pale, borderLeftColor: colors.accent, borderLeftWidth: 3, paddingHorizontal: 10 },
+  link: { color: colors.accent, textDecorationLine: "underline" },
 } satisfies MarkdownStyleMap;
 
 export function ChatPanel({
@@ -73,6 +74,12 @@ export function ChatPanel({
   conversation,
   assistantName,
   catalog,
+  initialKind = "chat",
+  initialTaskModelId = null,
+  initialTaskEffort = null,
+  initialSearchId = null,
+  startWithFiles = false,
+  onFilesOpened,
   onConversationChanged,
   onRefresh,
 }: {
@@ -80,26 +87,22 @@ export function ChatPanel({
   conversation: Conversation;
   assistantName: string;
   catalog: ModelCatalog | null;
+  initialKind?: "chat" | "task";
+  initialTaskModelId?: string | null;
+  initialTaskEffort?: ReasoningEffort | null;
+  initialSearchId?: string | null;
+  startWithFiles?: boolean;
+  onFilesOpened?: () => void;
   onConversationChanged: (conversation: Conversation) => void;
   onRefresh: () => void;
 }) {
   const [showModels, setShowModels] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
-  const modelId = conversation.model_id ?? catalog?.roles.chat ?? null;
-  const model = catalog?.items.find((item) => item.id === modelId);
-  const depth = conversation.reasoning_effort ?? model?.default_reasoning_effort ?? "auto";
-  async function updateModel(model_id: string | null, reasoning_effort: ReasoningEffort | null) {
-    setModelBusy(true);
-    try {
-      const updated = await request<Conversation>(connection, `/conversations/${conversation.id}/model`, {
-        method: "PUT", body: { model_id, reasoning_effort },
-      });
-      onConversationChanged(updated);
-    } finally {
-      setModelBusy(false);
-    }
-  }
+  const [taskModelId, setTaskModelId] = useState(initialTaskModelId);
+  const [taskEffort, setTaskEffort] = useState(initialTaskEffort);
+  const [searchProviderId, setSearchProviderId] = useState(initialSearchId);
+  const [showSearch, setShowSearch] = useState(false);
   const {
     messages,
     running,
@@ -134,7 +137,28 @@ export function ChatPanel({
     speak,
     pendingRuns,
     updateDraft,
-  } = useChat({ connection, conversation, onRefresh });
+  } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles });
+  useEffect(() => { if (startWithFiles) onFilesOpened?.(); }, [startWithFiles, onFilesOpened]);
+  const chatModelId = conversation.model_id ?? catalog?.roles.chat ?? null;
+  const modelId = kind === "task" ? taskModelId ?? catalog?.roles.task ?? null : chatModelId;
+  const model = catalog?.items.find((item) => item.id === modelId);
+  const depth = (kind === "task" ? taskEffort : conversation.reasoning_effort) ?? model?.default_reasoning_effort ?? "auto";
+  async function updateModel(model_id: string | null, reasoning_effort: ReasoningEffort | null) {
+    if (kind === "task") {
+      setTaskModelId(model_id);
+      setTaskEffort(reasoning_effort);
+      return;
+    }
+    setModelBusy(true);
+    try {
+      const updated = await request<Conversation>(connection, `/conversations/${conversation.id}/model`, {
+        method: "PUT", body: { model_id, reasoning_effort },
+      });
+      onConversationChanged(updated);
+    } finally {
+      setModelBusy(false);
+    }
+  }
 
   return (
     <View style={s.body}>
@@ -148,7 +172,7 @@ export function ChatPanel({
         </Pressable>
       ) : null}
       {loading ? (
-        <ActivityIndicator color={colors.green} style={{ padding: 16 }} />
+        <ActivityIndicator color={colors.accent} style={{ padding: 16 }} />
       ) : null}
       <FlatList
         ref={list}
@@ -304,18 +328,19 @@ export function ChatPanel({
           <View style={chatStyles.toolbar}>
             <ScrollView horizontal keyboardShouldPersistTaps="always" showsHorizontalScrollIndicator={false} style={chatStyles.toolbarChoices} contentContainerStyle={chatStyles.toolbarChoicesContent}>
               {!conversation.agent_id ? (
-              <Pressable accessibilityRole="button" accessibilityLabel={kind === "task" ? "任务使用默认执行模型" : `选择聊天模型，当前${model?.name ?? "未配置"}`} accessibilityState={{ disabled: kind === "task" || !catalog || modelBusy || !!draft.pending }} disabled={kind === "task" || !catalog || modelBusy || !!draft.pending} onPress={() => setShowModels(true)} style={[chatStyles.tool, kind === "task" && s.disabled]}>
-                <Text style={chatStyles.toolText}>模型</Text>
+              <Pressable accessibilityRole="button" accessibilityLabel={`选择${kind === "task" ? "任务" : "聊天"}模型，当前${model?.name ?? "未配置"}`} accessibilityState={{ disabled: !catalog || modelBusy || !!draft.pending || intent === "steer" }} disabled={!catalog || modelBusy || !!draft.pending || intent === "steer"} onPress={() => setShowModels(true)} style={[chatStyles.tool, intent === "steer" && s.disabled]}>
+                <Text style={chatStyles.toolText}>模型 · {model?.name ?? "未配置"}</Text>
               </Pressable>
             ) : null}
             <Pressable accessibilityRole="button" accessibilityLabel={kind === "chat" ? "当前聊天，切换为任务" : "当前任务，切换为聊天"} accessibilityState={{ disabled: !!draft.pending }} disabled={!!draft.pending} onPress={() => setKind(kind === "chat" ? "task" : "chat")} style={[chatStyles.tool, kind === "task" && chatStyles.toolActive]}>
               <Text style={[chatStyles.toolText, kind === "task" && chatStyles.toolActiveText]}>{kind === "chat" ? "聊天" : "任务"}</Text>
             </Pressable>
-            {!conversation.agent_id && kind === "chat" && !!model?.reasoning_levels.length ? (
-              <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${reasoningLabel[depth]}`} accessibilityState={{ disabled: modelBusy || !!draft.pending }} disabled={modelBusy || !!draft.pending} onPress={() => setShowReasoning(true)} style={chatStyles.tool}>
-                <Text style={chatStyles.toolText}>思考</Text>
+            {!conversation.agent_id ? (
+              <Pressable accessibilityRole="button" accessibilityLabel={model?.reasoning_levels.length ? `思考深度，当前${reasoningLabel[depth]}` : "当前模型未配置思考深度"} accessibilityState={{ disabled: modelBusy || !!draft.pending || intent === "steer" || !model?.reasoning_levels.length }} disabled={modelBusy || !!draft.pending || intent === "steer" || !model?.reasoning_levels.length} onPress={() => setShowReasoning(true)} style={[chatStyles.tool, (!model?.reasoning_levels.length || intent === "steer") && s.disabled]}>
+                <Text style={chatStyles.toolText}>思考 · {model?.reasoning_levels.length ? reasoningLabel[depth] : "未配置"}</Text>
               </Pressable>
             ) : null}
+            {!conversation.agent_id ? <Pressable accessibilityRole="button" accessibilityLabel={`联网搜索${searchProviderId ? "已开启" : "已关闭"}`} accessibilityState={{ disabled: !!draft.pending || intent === "steer" }} disabled={!!draft.pending || intent === "steer"} onPress={() => setShowSearch(true)} style={[chatStyles.tool, !!searchProviderId && chatStyles.toolActive, intent === "steer" && s.disabled]}><Text style={[chatStyles.toolText, !!searchProviderId && chatStyles.toolActiveText]}>联网{searchProviderId ? " · 开" : ""}</Text></Pressable> : null}
             {(running || intent === "steer") && (["queue", "steer"] as const).map((value) => (
               <Pressable key={value} accessibilityRole="button" accessibilityLabel={value === "queue" ? "排队：当前运行结束后处理" : "引导：发送给当前运行"} accessibilityState={{ selected: intent === value, disabled: !!draft.pending || (value === "steer" && !running) }} disabled={!!draft.pending || (value === "steer" && !running)} onPress={() => {
                 setIntent(value);
@@ -329,7 +354,7 @@ export function ChatPanel({
             <Pressable accessibilityRole="button" accessibilityLabel="添加资料" onPress={() => setShowFiles(true)} style={chatStyles.tool}>
               <Text style={[chatStyles.toolText, { fontSize: 24, lineHeight: 25 }]}>＋</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel={draft.pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !draftReady || busy || modelBusy || !draft.text.trim() }} disabled={!draftReady || busy || modelBusy || !draft.text.trim()} onPress={() => { void send(); }} style={[chatStyles.send, (!draftReady || busy || modelBusy || !draft.text.trim()) && s.disabled]}>
+            <Pressable accessibilityRole="button" accessibilityLabel={draft.pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !draftReady || busy || modelBusy || !draft.text.trim() }} disabled={!draftReady || busy || modelBusy || !draft.text.trim()} onPress={() => { void send({ ...(kind === "task" && taskModelId ? { model_id: taskModelId } : {}), ...(kind === "task" && taskEffort ? { reasoning_effort: taskEffort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }} style={[chatStyles.send, (!draftReady || busy || modelBusy || !draft.text.trim()) && s.disabled]}>
               <Text style={chatStyles.sendText}>{busy ? "…" : draft.pending ? "重试" : "↑"}</Text>
             </Pressable>
           </View>
@@ -340,12 +365,13 @@ export function ChatPanel({
       </View>
       <ModelPicker
         visible={showModels}
-        title="选择聊天模型"
+        title={`选择${kind === "task" ? "任务" : "聊天"}模型`}
         connectionUrl={connection.url}
         models={catalog?.items ?? []}
         selectedId={modelId}
         onSelect={(id) => updateModel(id, null)}
-        onUseDefault={conversation.model_id ? () => updateModel(null, null) : undefined}
+        onUseDefault={(kind === "task" ? taskModelId : conversation.model_id) ? () => updateModel(null, null) : undefined}
+        defaultLabel={kind === "task" ? "跟随默认任务模型" : "跟随默认聊天模型"}
         onClose={() => setShowModels(false)}
       />
       <Modal visible={showReasoning} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowReasoning(false)}>
@@ -355,21 +381,22 @@ export function ChatPanel({
             <Button secondary onPress={() => setShowReasoning(false)}>关闭</Button>
           </View>
           <ScrollView contentContainerStyle={s.content}>
-            <Text style={s.muted}>只影响这段对话之后提交的聊天。不同模型支持的档位可能不同。</Text>
+            <Text style={s.muted}>只影响之后提交的{kind === "task" ? "任务" : "聊天"}。不同模型支持的档位可能不同。</Text>
             {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
             <Button secondary disabled={modelBusy} onPress={() => {
-              void updateModel(conversation.model_id, null).then(() => setShowReasoning(false)).catch((e) => setError(humanError(e)));
+              void updateModel(kind === "task" ? taskModelId : conversation.model_id, null).then(() => setShowReasoning(false)).catch((e) => setError(humanError(e)));
             }}>
               模型默认{model?.default_reasoning_effort ? ` · ${reasoningLabel[model.default_reasoning_effort]}` : " · 自动"}
             </Button>
             {model?.reasoning_levels.map((value) => (
               <Button key={value} secondary={depth !== value} disabled={modelBusy} onPress={() => {
-                void updateModel(conversation.model_id, value).then(() => setShowReasoning(false)).catch((e) => setError(humanError(e)));
+                void updateModel(kind === "task" ? taskModelId : conversation.model_id, value).then(() => setShowReasoning(false)).catch((e) => setError(humanError(e)));
               }}>{reasoningLabel[value]}</Button>
             ))}
           </ScrollView>
         </SafeAreaView>
       </Modal>
+      <SearchPicker visible={showSearch} connection={connection} selectedId={searchProviderId} onSelect={setSearchProviderId} onClose={() => setShowSearch(false)} />
       <Modal
         visible={!!detail}
         animationType="slide"
@@ -509,7 +536,7 @@ function RunDetail({
             ) : null}
           </>
         ) : (
-          <ActivityIndicator color={colors.green} />
+          <ActivityIndicator color={colors.accent} />
         )}
         <Text style={s.label}>执行轨迹</Text>
         {events.length ? (
@@ -555,7 +582,7 @@ const chatStyles = StyleSheet.create({
   assistantContent: { paddingHorizontal: 2 },
   messageActions: { flexDirection: "row", alignItems: "center", gap: 10 },
   messageAction: { minHeight: 36, justifyContent: "center", paddingHorizontal: 4 },
-  actionText: { color: colors.green, fontSize: 12, fontWeight: "500" },
+  actionText: { color: colors.accent, fontSize: 12, fontWeight: "500" },
   runBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -564,7 +591,7 @@ const chatStyles = StyleSheet.create({
     paddingVertical: 10,
     backgroundColor: colors.pale,
   },
-  link: { color: colors.green, fontSize: 12, fontWeight: "600" },
+  link: { color: colors.accent, fontSize: 12, fontWeight: "600" },
   composerArea: { paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8, gap: 6 },
   composer: {
     backgroundColor: colors.white,
@@ -597,14 +624,14 @@ const chatStyles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.pale,
   },
-  toolText: { color: colors.green, fontSize: 12, fontWeight: "600" },
-  toolActive: { backgroundColor: colors.green },
+  toolText: { color: colors.accent, fontSize: 12, fontWeight: "600" },
+  toolActive: { backgroundColor: colors.accent },
   toolActiveText: { color: colors.white },
   send: {
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: colors.green,
+    backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
   },

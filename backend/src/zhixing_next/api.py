@@ -33,6 +33,7 @@ from .schemas import (
     ProjectInput,
     ScheduleInput,
     ScheduleUpdate,
+    SearchProviderInput,
 )
 from .store import Store, StoreError
 
@@ -194,6 +195,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.delete("/memories/{memory_id}")
     def delete_memory(memory_id: str):
         store.delete_memory(memory_id)
+        return {"deleted": True}
+
+    @router.get("/search/providers")
+    def search_providers():
+        return store.list_search_providers()
+
+    @router.post("/search/providers", status_code=201)
+    def add_search_provider(body: SearchProviderInput):
+        return store.create_search_provider(**body.model_dump())
+
+    @router.delete("/search/providers/{provider_id}")
+    def remove_search_provider(provider_id: str):
+        store.delete_search_provider(provider_id)
         return {"deleted": True}
 
     @router.get("/agents")

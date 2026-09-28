@@ -6,7 +6,7 @@ import { Button, colors, s, timeLabel } from "./ui";
 const styles = StyleSheet.create({
   page: { paddingBottom: 32 },
   intro: { gap: 7 },
-  kicker: { color: colors.green, fontSize: 12, fontWeight: "700" },
+  kicker: { color: colors.accent, fontSize: 12, fontWeight: "700" },
   pageTitle: { color: colors.ink, fontSize: 29, fontWeight: "700" },
   description: { color: colors.muted, fontSize: 14, lineHeight: 22 },
   hero: {
@@ -17,7 +17,7 @@ const styles = StyleSheet.create({
   },
   heroTitle: { color: colors.ink, fontSize: 27, lineHeight: 37, fontWeight: "700" },
   section: { color: colors.ink, fontSize: 17, fontWeight: "700" },
-  link: { color: colors.green, fontSize: 14, fontWeight: "600" },
+  link: { color: colors.accent, fontSize: 14, fontWeight: "600" },
   cardTitle: { color: colors.ink, fontSize: 19, fontWeight: "700" },
   split: { flexDirection: "row", gap: 10 },
   half: { flex: 1, minHeight: 116, justifyContent: "space-between" },
@@ -46,7 +46,7 @@ const styles = StyleSheet.create({
   },
   lastItem: { borderBottomWidth: 0, paddingBottom: 0 },
   tag: {
-    color: colors.green,
+    color: colors.accent,
     backgroundColor: colors.pale,
     overflow: "hidden",
     borderRadius: 8,
@@ -59,32 +59,32 @@ const styles = StyleSheet.create({
   workArtwork: { position: "absolute", left: -22, top: -10, width: "112%", height: 145, opacity: 0.88 },
   workTitle: { color: colors.ink, fontSize: 36, lineHeight: 45, fontWeight: "700" },
   workCard: {
-    backgroundColor: "#FFFFFF", borderRadius: 23, padding: 17, gap: 11,
+    backgroundColor: colors.white, borderRadius: 23, padding: 17, gap: 11,
     shadowColor: colors.ink, shadowOpacity: 0.05, shadowOffset: { width: 0, height: 4 },
     shadowRadius: 12, elevation: 2,
   },
   workIcon: {
-    width: 44, height: 44, borderRadius: 16, backgroundColor: "#EAF3ED",
+    width: 44, height: 44, borderRadius: 16, backgroundColor: colors.pale,
     alignItems: "center", justifyContent: "center",
   },
   workRowIcon: { width: 38, height: 38, borderRadius: 14 },
   workHeaderText: { flex: 1, gap: 2 },
   workHeading: { color: colors.ink, fontSize: 18, fontWeight: "700" },
   workSmall: { color: colors.muted, fontSize: 12, lineHeight: 18 },
-  workLink: { color: colors.green, fontSize: 13, fontWeight: "700" },
+  workLink: { color: colors.accent, fontSize: 13, fontWeight: "700" },
   workConversation: {
     flexDirection: "row", alignItems: "center", gap: 10, minHeight: 55,
-    borderBottomWidth: 1, borderBottomColor: "#ECEFEA",
+    borderBottomWidth: 1, borderBottomColor: colors.line,
   },
   workConversationLast: { borderBottomWidth: 0 },
   workConversationText: { flex: 1, gap: 2 },
-  workConversationTitle: { color: "#455A50", fontSize: 13, fontWeight: "500" },
+  workConversationTitle: { color: colors.ink, fontSize: 13, fontWeight: "500" },
   workProjectEmpty: { alignItems: "center", gap: 7, paddingTop: 4 },
   workCreate: {
-    minHeight: 42, width: 176, alignSelf: "center", borderRadius: 22, backgroundColor: colors.green,
+    minHeight: 42, width: 176, alignSelf: "center", borderRadius: 22, backgroundColor: colors.accent,
     flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
   },
-  workCreateText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
+  workCreateText: { color: colors.white, fontSize: 14, fontWeight: "700" },
   workProject: { paddingVertical: 6, color: colors.ink, fontSize: 14 },
   workManage: {
     backgroundColor: colors.pale, borderRadius: 15, minHeight: 38,
@@ -208,14 +208,14 @@ export function WorkPanel({
   return (
     <ScrollView contentContainerStyle={[s.content, styles.page]}>
       <View style={styles.workIntro}>
-        <Image source={require("../assets/work-header.webp")} resizeMode="cover" style={styles.workArtwork} accessible={false} />
+        <Image source={require("../assets/work-header-red.png")} resizeMode="cover" style={styles.workArtwork} accessible={false} />
         <Text style={styles.kicker}>WORK</Text>
         <Text style={styles.workTitle}>工作</Text>
         <Text style={styles.description}>对话、项目和任务会在这里逐步连起来。</Text>
       </View>
       <View style={styles.workCard}>
         <View style={styles.row}>
-          <View style={styles.workIcon}><Ionicons name="chatbubbles-outline" size={24} color={colors.green} /></View>
+          <View style={styles.workIcon}><Ionicons name="chatbubbles-outline" size={24} color={colors.accent} /></View>
           <View style={styles.workHeaderText}>
             <Text style={styles.workHeading}>最近对话</Text>
             <Text style={styles.workSmall}>当前显示最近对话，置顶对话以后加入。</Text>
@@ -234,7 +234,7 @@ export function WorkPanel({
                 style={[styles.workConversation, index === recent.length - 1 && styles.workConversationLast]}
               >
                 <View style={[styles.workIcon, styles.workRowIcon]}>
-                  <Ionicons name={conversation.agent_id === "finance" ? "stats-chart-outline" : "chatbubble-outline"} size={20} color={colors.green} />
+                  <Ionicons name={conversation.agent_id === "finance" ? "stats-chart-outline" : "chatbubble-outline"} size={20} color={colors.accent} />
                 </View>
                 <View style={styles.workConversationText}>
                   <Text numberOfLines={1} style={styles.workConversationTitle}>{conversation.title}</Text>
@@ -250,7 +250,7 @@ export function WorkPanel({
       </View>
       <View style={styles.workCard}>
         <View style={styles.row}>
-          <View style={styles.workIcon}><Ionicons name="folder-outline" size={25} color={colors.green} /></View>
+          <View style={styles.workIcon}><Ionicons name="folder-outline" size={25} color={colors.accent} /></View>
           <View style={styles.workHeaderText}>
             <Text style={styles.workHeading}>项目</Text>
             <Text style={styles.workSmall}>
@@ -264,19 +264,19 @@ export function WorkPanel({
           ))
         ) : (
           <View style={styles.workProjectEmpty}>
-            <Ionicons name="folder-open-outline" size={42} color="#A9CCB5" />
+            <Ionicons name="folder-open-outline" size={42} color={colors.accent} />
             <Text style={styles.workSmall}>还没有项目</Text>
           </View>
         )}
         {projects.length > 4 ? <Text style={s.muted}>还有 {projects.length - 4} 个项目</Text> : null}
         <Pressable accessibilityRole="button" onPress={onCreateProject} style={styles.workCreate}>
-          <Ionicons name="add" size={21} color="#FFFFFF" />
+          <Ionicons name="add" size={21} color={colors.white} />
           <Text style={styles.workCreateText}>创建项目</Text>
         </Pressable>
       </View>
       <Pressable accessibilityRole="button" onPress={onSchedules} style={styles.workCard}>
         <View style={styles.row}>
-          <View style={styles.workIcon}><Ionicons name="time-outline" size={25} color={colors.green} /></View>
+          <View style={styles.workIcon}><Ionicons name="time-outline" size={25} color={colors.accent} /></View>
           <View style={styles.workHeaderText}>
             <Text style={styles.workHeading}>定时计划</Text>
             <Text style={styles.workSmall}>
@@ -285,7 +285,7 @@ export function WorkPanel({
           </View>
           <View style={styles.workManage}>
             <Text style={styles.workLink}>管理</Text>
-            <Ionicons name="chevron-forward" size={16} color={colors.green} />
+            <Ionicons name="chevron-forward" size={16} color={colors.accent} />
           </View>
         </View>
       </Pressable>

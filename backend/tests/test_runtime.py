@@ -134,6 +134,21 @@ async def test_new_conversation_receives_relevant_personal_memory(tmp_path):
     assert "用户的 Mac mini 内存为 16GB" in str(model.seen[0])
 
 
+async def test_web_search_tool_is_bound_only_for_selected_run(tmp_path):
+    settings = make_settings(tmp_path)
+    enabled = make_run("search-on")
+    enabled["search_provider"] = {"id": "provider-1", "name": "测试 Brave", "kind": "brave", "api_key": "test-secret"}
+    first = ScriptedModel(replies=[AIMessage(content="完成")])
+    await run_agent(settings, enabled, persona="", emit=ignore, controls=no_controls,
+        acknowledge=ignore, model_override=first)
+    assert "search_web" in first.bound_names
+    disabled = make_run("search-off")
+    second = ScriptedModel(replies=[AIMessage(content="完成")])
+    await run_agent(settings, disabled, persona="", emit=ignore, controls=no_controls,
+        acknowledge=ignore, model_override=second)
+    assert "search_web" not in second.bound_names
+
+
 async def test_named_subagent_delegation_and_direct_tool_boundary(tmp_path):
     settings = make_settings(tmp_path)
     finance = {

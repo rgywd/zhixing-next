@@ -115,6 +115,16 @@ def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch):
             "id": "task", "content": "work", "kind": "task",
         }).json()["run"]
         assert (task["model_id"], task["reasoning_effort"]) == ("one", None)
+        chosen = client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+            "id": "chosen-task", "content": "think", "kind": "task", "model_id": "two", "reasoning_effort": "high",
+        }).json()["run"]
+        assert (chosen["model_id"], chosen["reasoning_effort"]) == ("two", "high")
+        assert client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+            "id": "invalid-task", "content": "think", "kind": "task", "model_id": "two", "reasoning_effort": "low",
+        }).status_code == 422
+        assert client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+            "id": "chosen-task", "content": "think", "kind": "task", "model_id": "one", "reasoning_effort": "low",
+        }).status_code == 409
         assert client.put(path, json={"model_id": None, "reasoning_effort": None}).json()["model_id"] is None
         second = client.post(f"/v1/conversations/{conversation['id']}/messages", json={
             "id": "second", "content": "again",
@@ -131,6 +141,25 @@ def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch):
         assert client.put(f"/v1/conversations/{finance['id']}/model", json={
             "model_id": "one", "reasoning_effort": None,
         }).status_code == 422
+
+
+def test_search_provider_secret_stays_server_side_and_run_selection_is_snapshot(client):
+    created = client.post("/v1/search/providers", json={"name": "我的 Brave", "kind": "brave", "api_key": "private-test-key"})
+    assert created.status_code == 201
+    provider = created.json()
+    listed = client.get("/v1/search/providers").json()
+    assert listed["items"] == [provider]
+    assert "private-test-key" not in str(listed)
+    conversation = client.post("/v1/conversations", json={"title": "联网测试"}).json()
+    path = f"/v1/conversations/{conversation['id']}/messages"
+    receipt = client.post(path, json={"id": "search-1", "content": "查一下", "search_provider_id": provider["id"]})
+    assert receipt.status_code == 200
+    assert receipt.json()["run"]["search_provider_id"] == provider["id"]
+    assert "private-test-key" not in receipt.text
+    assert client.delete(f"/v1/search/providers/{provider['id']}").status_code == 409
+    assert client.post(path, json={"id": "search-1", "content": "查一下", "search_provider_id": "missing"}).status_code == 409
+    assert client.post(path, json={"id": "search-2", "content": "查一下", "search_provider_id": "missing"}).status_code == 404
+    assert client.post(path, json={"id": "search-3", "content": "查一下", "intent": "steer", "target_run_id": "run-1", "search_provider_id": provider["id"]}).status_code == 422
 
 
 def test_agents_are_persistent_bound_and_conversation_owned(client):

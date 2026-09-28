@@ -1,24 +1,24 @@
 import type { ReactNode } from "react";
 import {
   Pressable,
-  Image,
   StyleSheet,
   Text,
   TextInput,
   View,
   type TextInputProps,
 } from "react-native";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
 
 export const colors = {
-  paper: "#F5F3ED",
-  white: "#FFFEFA",
-  ink: "#263A34",
-  green: "#3B6654",
-  muted: "#78827A",
-  line: "#DDDCD2",
-  pale: "#E7EEE6",
-  red: "#9C483D",
-  amber: "#8A642D",
+  paper: "#FBF7F1",
+  white: "#FFFFFF",
+  ink: "#25252D",
+  accent: "#A6322C",
+  muted: "#77777F",
+  line: "#EBE6E2",
+  pale: "#F8E9E6",
+  red: "#B3261E",
+  amber: "#8A5A28",
 };
 export function Button({
   children,
@@ -79,7 +79,7 @@ export function Empty({
 }) {
   return (
     <View style={s.empty}>
-      <Image source={require("../assets/icon.png")} style={s.brand} />
+      <View style={s.brand}><Ionicons name="leaf-outline" size={24} color={colors.accent} /></View>
       <Text accessibilityRole="header" style={s.emptyTitle}>
         {title}
       </Text>
@@ -124,7 +124,7 @@ export const s = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
-  brand: { width: 42, height: 42, borderRadius: 15 },
+  brand: { width: 48, height: 48, borderRadius: 17, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center" },
   eyebrow: {
     fontSize: 10,
     letterSpacing: 2.5,
@@ -154,19 +154,19 @@ export const s = StyleSheet.create({
     paddingHorizontal: 17,
     paddingVertical: 12,
     borderRadius: 14,
-    backgroundColor: colors.green,
+    backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
   },
   smallButton: { paddingHorizontal: 12, paddingVertical: 8, minHeight: 40 },
   buttonText: { color: colors.white, fontWeight: "600", fontSize: 14 },
   secondary: { backgroundColor: colors.pale },
-  secondaryText: { color: colors.green },
+  secondaryText: { color: colors.accent },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.72 },
   danger: { color: colors.red },
   error: { color: colors.red, fontSize: 13, lineHeight: 20 },
-  notice: { padding: 13, borderRadius: 12, backgroundColor: "#EEE6D5", gap: 6 },
+  notice: { padding: 13, borderRadius: 12, backgroundColor: colors.pale, gap: 6 },
   noticeText: { color: colors.amber, fontSize: 12, lineHeight: 19 },
   card: {
     backgroundColor: colors.white,
@@ -201,20 +201,20 @@ export const s = StyleSheet.create({
     height: 62,
     marginTop: -17,
     borderRadius: 31,
-    backgroundColor: colors.green,
+    backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 4,
     borderColor: colors.white,
     elevation: 5,
   },
-  activeAiButton: { backgroundColor: colors.ink },
+  activeAiButton: { backgroundColor: colors.accent },
   aiButtonText: { color: colors.white, fontSize: 17, fontWeight: "700" },
   activeTab: { backgroundColor: colors.pale },
   tabText: { color: colors.muted, fontSize: 11, fontWeight: "600" },
-  activeTabText: { color: colors.green, fontWeight: "700" },
+  activeTabText: { color: colors.accent, fontWeight: "700" },
   backLink: { minHeight: 44, paddingHorizontal: 22, justifyContent: "center" },
-  backLinkText: { color: colors.green, fontSize: 14, fontWeight: "600" },
+  backLinkText: { color: colors.accent, fontSize: 14, fontWeight: "600" },
   empty: {
     flex: 1,
     padding: 32,
@@ -239,12 +239,12 @@ export const s = StyleSheet.create({
     paddingVertical: 9,
     paddingHorizontal: 13,
     borderRadius: 12,
-    backgroundColor: "#EAE9E1",
+    backgroundColor: colors.pale,
     minHeight: 40,
     alignItems: "center",
     justifyContent: "center",
   },
-  chipActive: { backgroundColor: colors.green },
+  chipActive: { backgroundColor: colors.accent },
   chipText: { color: colors.muted, fontSize: 12 },
   chipActiveText: { color: colors.white },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },

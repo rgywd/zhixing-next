@@ -1,6 +1,7 @@
 """Single-host product state. Network/model work never runs inside these transactions."""
 
 import json
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -70,7 +71,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 5:
+            if version > 6:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -99,7 +100,13 @@ class Store:
                 # Do not silently reinterpret old conversations as new memory input.
                 db.execute("UPDATE runs SET memory_processed=1")
                 db.execute("PRAGMA user_version=5")
+            if version < 6:
+                db.execute("CREATE TABLE search_providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('brave','tavily','serper')),api_key TEXT NOT NULL,created_at TEXT NOT NULL)")
+                db.execute("ALTER TABLE runs ADD COLUMN search_provider_id TEXT")
+                db.execute("PRAGMA user_version=6")
             db.commit()
+        if os.name != "nt":
+            self.db_path.chmod(0o600)
 
     @contextmanager
     def _connection(self, write=False):
@@ -458,6 +465,27 @@ class Store:
         row = db.execute("SELECT model_id FROM model_roles WHERE role=?", (role,)).fetchone()
         return row["model_id"] if row else self.settings.roles.get(role)
 
+    def list_search_providers(self):
+        with self._connection() as db:
+            return {"items": [dict(id=row["id"], name=row["name"], kind=row["kind"]) for row in db.execute("SELECT id,name,kind FROM search_providers ORDER BY created_at,id")], "next_cursor": None}
+
+    def get_search_provider(self, identifier):
+        with self._connection() as db:
+            return dict(self._require(db, "search_providers", identifier))
+
+    def create_search_provider(self, *, name, kind, api_key):
+        identifier, now = str(uuid4()), timestamp()
+        with self._connection(write=True) as db:
+            db.execute("INSERT INTO search_providers(id,name,kind,api_key,created_at) VALUES(?,?,?,?,?)", (identifier, name, kind, api_key.strip(), now))
+        return {"id": identifier, "name": name, "kind": kind}
+
+    def delete_search_provider(self, identifier):
+        with self._connection(write=True) as db:
+            self._require(db, "search_providers", identifier)
+            if db.execute("SELECT 1 FROM runs WHERE search_provider_id=? AND status IN ('queued','running') LIMIT 1", (identifier,)).fetchone():
+                raise StoreError("provider_in_use", "This search provider is used by a pending run")
+            db.execute("DELETE FROM search_providers WHERE id=?", (identifier,))
+
     def workspace_for(self, conversation_id):
         with self._connection() as db:
             return Path(self._require(db, "conversations", conversation_id)["workspace_path"])
@@ -481,15 +509,15 @@ class Store:
             ).fetchall()
             return self._page(rows, limit)
 
-    def _enqueue(self, db, conversation_id, message_id, content, kind, request_json):
+    def _enqueue(self, db, conversation_id, message_id, content, kind, request_json, model_override=None, reasoning_override=None, search_provider_id=None):
         run_id, now = str(uuid4()), timestamp()
         conversation = self._require(db, "conversations", conversation_id)
-        model_id = (
+        model_id = model_override or (
             conversation["model_id"]
             if kind == "chat" and conversation["agent_id"] is None and conversation["model_id"]
             else self._role_model(db, kind)
         )
-        reasoning_effort = (
+        reasoning_effort = reasoning_override if reasoning_override is not None else (
             conversation["reasoning_effort"]
             if kind == "chat" and conversation["agent_id"] is None else None
         )
@@ -498,14 +526,15 @@ class Store:
             (message_id, conversation_id, content, run_id, now, request_json),
         )
         db.execute(
-            "INSERT INTO runs(id,conversation_id,message_id,kind,prompt,created_at,model_id,reasoning_effort) VALUES(?,?,?,?,?,?,?,?)",
-            (run_id, conversation_id, message_id, kind, content, now, model_id, reasoning_effort),
+            "INSERT INTO runs(id,conversation_id,message_id,kind,prompt,created_at,model_id,reasoning_effort,search_provider_id) VALUES(?,?,?,?,?,?,?,?,?)",
+            (run_id, conversation_id, message_id, kind, content, now, model_id, reasoning_effort, search_provider_id),
         )
         db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id))
         return run_id
 
     def submit_message(
-        self, conversation_id, *, id, content, intent="queue", kind="chat", target_run_id=None
+        self, conversation_id, *, id, content, intent="queue", kind="chat", target_run_id=None,
+        model_id=None, reasoning_effort=None, search_provider_id=None,
     ):
         request_json = _json(
             {
@@ -514,6 +543,9 @@ class Store:
                 "intent": intent,
                 "kind": kind,
                 "target_run_id": target_run_id,
+                **({"model_id": model_id} if model_id is not None else {}),
+                **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
+                **({"search_provider_id": search_provider_id} if search_provider_id is not None else {}),
             }
         )
         with self._connection(write=True) as db:
@@ -548,7 +580,20 @@ class Store:
                     "UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id)
                 )
             else:
-                run_id = self._enqueue(db, conversation_id, id, content, kind, request_json)
+                conversation = self._require(db, "conversations", conversation_id)
+                if model_id is not None and (conversation["agent_id"] is not None or model_id not in self.settings.models):
+                    raise StoreError("unknown_model", "Choose a configured model for the main assistant", 422)
+                selected_model = model_id or (conversation["model_id"] if kind == "chat" and conversation["agent_id"] is None and conversation["model_id"] else self._role_model(db, kind))
+                if reasoning_effort is not None and (
+                    conversation["agent_id"] is not None or selected_model not in self.settings.models
+                    or reasoning_effort not in self.settings.models[selected_model].reasoning_levels
+                ):
+                    raise StoreError("unsupported_reasoning", "This model does not support that thinking depth", 422)
+                if search_provider_id is not None:
+                    if conversation["agent_id"] is not None:
+                        raise StoreError("agent_search", "Search controls belong to main assistant chats", 422)
+                    self._require(db, "search_providers", search_provider_id)
+                run_id = self._enqueue(db, conversation_id, id, content, kind, request_json, model_id, reasoning_effort, search_provider_id)
             return {
                 "message": _record(self._require(db, "messages", id)),
                 "run": _record(self._require(db, "runs", run_id)),

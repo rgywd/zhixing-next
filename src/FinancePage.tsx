@@ -30,7 +30,7 @@ export function FinancePage({
           <Text style={s.noticeText}>{syncError} · 点击重试，草稿仍在。</Text>
         </Pressable>
       ) : null}
-      {loading ? <ActivityIndicator color={colors.green} /> : null}
+      {loading ? <ActivityIndicator color={colors.accent} /> : null}
       <FlatList
         ref={list}
         data={messages}

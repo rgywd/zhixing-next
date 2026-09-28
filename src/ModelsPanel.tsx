@@ -60,7 +60,7 @@ export function ModelsPanel({
                 {catalog.items.filter((item) => item.provider === provider).map((item) => (
                   <View key={item.id} style={s.spread}>
                     <Text numberOfLines={1} style={[s.text, s.grow]}>{item.name}</Text>
-                    <Text style={{ color: item.ready ? colors.green : colors.red, fontSize: 12 }}>
+                    <Text style={{ color: item.ready ? colors.accent : colors.red, fontSize: 12 }}>
                       {item.ready ? "密钥已配置" : "密钥未就绪"}
                     </Text>
                   </View>

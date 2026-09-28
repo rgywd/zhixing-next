@@ -80,7 +80,11 @@ export type MessageInput = {
   intent: "queue" | "steer";
   kind: "chat" | "task";
   target_run_id?: string;
+  model_id?: string;
+  reasoning_effort?: ReasoningEffort;
+  search_provider_id?: string;
 };
+export type SearchProvider = { id: string; name: string; kind: "brave" | "tavily" | "serper" };
 export type Draft = { text: string; pending: MessageInput | null };
 export type Schedule = {
   id: string;

@@ -65,6 +65,7 @@ class Worker:
             assistant = self.store.get_assistant()
             run["agent"] = self.store.get_agent(run["agent_id"]) if run.get("agent_id") else None
             run["agents"] = self.store.list_agents()["items"] if not run.get("agent_id") else []
+            run["search_provider"] = self.store.get_search_provider(run["search_provider_id"]) if run.get("search_provider_id") else None
             result = await self.runner(
                 self.settings, run,
                 persona=f"Assistant name: {assistant['name']}\n{assistant['persona']}", emit=emit,

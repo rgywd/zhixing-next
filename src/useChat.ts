@@ -26,10 +26,14 @@ export function useChat({
   connection,
   conversation,
   onRefresh,
+  initialKind = "chat",
+  startWithFiles = false,
 }: {
   connection: Connection;
   conversation: Conversation;
   onRefresh: () => void;
+  initialKind?: "chat" | "task";
+  startWithFiles?: boolean;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const pendingStatusRef = useRef<number | null>(null);
@@ -53,14 +57,14 @@ export function useChat({
   const draftRef = useRef(draft);
   const [draftReady, setDraftReady] = useState(false);
   const [intent, setIntent] = useState<"queue" | "steer">("queue");
-  const [kind, setKind] = useState<"chat" | "task">("chat");
+  const [kind, setKind] = useState<"chat" | "task">(initialKind);
   const [target, setTarget] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [syncError, setSyncError] = useState("");
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<string | null>(null);
-  const [showFiles, setShowFiles] = useState(false);
+  const [showFiles, setShowFiles] = useState(startWithFiles);
   const [speaking, setSpeaking] = useState<string | null>(null);
   const alive = useRef(true);
   const list = useRef<FlatList<Message>>(null);
@@ -206,7 +210,7 @@ export function useChat({
     }
   }
 
-  async function send() {
+  async function send(options: Pick<MessageInput, "model_id" | "reasoning_effort" | "search_provider_id"> = {}) {
     if (busy || !draftReady || !draft.text.trim()) return;
     let payload: MessageInput;
     try {
@@ -218,6 +222,7 @@ export function useChat({
         running?.id ?? null,
         Crypto.randomUUID,
       );
+      if (!draft.pending && intent === "queue") payload = { ...payload, ...options };
     } catch (e) {
       setError(humanError(e));
       return;

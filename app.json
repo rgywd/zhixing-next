@@ -4,7 +4,7 @@
     "slug": "zhixing-next",
     "version": "0.1.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/icon-red.png",
     "userInterfaceStyle": "light",
     "ios": {
       "bundleIdentifier": "dev.zhixing.next",
@@ -13,13 +13,13 @@
     "android": {
       "package": "dev.zhixing.next",
       "adaptiveIcon": {
-        "backgroundColor": "#0798F8",
-        "foregroundImage": "./assets/android-icon-foreground.png"
+        "backgroundColor": "#A6322C",
+        "foregroundImage": "./assets/icon-red.png"
       },
       "predictiveBackGestureEnabled": false
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/icon-red.png"
     },
     "plugins": [
       "expo-secure-store",

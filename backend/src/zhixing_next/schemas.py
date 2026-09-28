@@ -2,7 +2,15 @@
 
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 Identifier = Annotated[
     str, StringConstraints(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
@@ -61,6 +69,9 @@ class MessageInput(Input):
     intent: Literal["queue", "steer"] = "queue"
     kind: Literal["chat", "task"] = "chat"
     target_run_id: Identifier | None = None
+    model_id: Identifier | None = None
+    reasoning_effort: Literal["auto", "none", "low", "medium", "high", "xhigh"] | None = None
+    search_provider_id: Identifier | None = None
 
     @model_validator(mode="after")
     def check_target(self) -> "MessageInput":
@@ -68,7 +79,22 @@ class MessageInput(Input):
             raise ValueError("Steer requires target_run_id")
         if self.intent == "queue" and self.target_run_id is not None:
             raise ValueError("Queue cannot target an existing run")
+        if self.intent == "steer" and (self.model_id or self.reasoning_effort or self.search_provider_id):
+            raise ValueError("Steer cannot change model or search tools")
         return self
+
+
+class SearchProviderInput(Input):
+    name: Title
+    kind: Literal["brave", "tavily", "serper"]
+    api_key: str = Field(min_length=1, max_length=1000, repr=False)
+
+    @field_validator("api_key")
+    @classmethod
+    def nonblank_key(cls, value: str) -> str:
+        if not value.strip() or not value.isascii() or "\n" in value or "\r" in value:
+            raise ValueError("API key must be nonblank and one line")
+        return value.strip()
 
 
 class ScheduleInput(Input):
