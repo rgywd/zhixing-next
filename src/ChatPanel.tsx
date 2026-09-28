@@ -14,11 +14,14 @@ import {
   request,
   type Connection,
   type Conversation,
+  type ModelCatalog,
+  type ReasoningEffort,
   type Page,
   type Run,
   type RunEvent,
 } from "./api";
 import { useChat } from "./useChat";
+import { ModelPicker, reasoningLabel } from "./ModelPicker";
 import { FilesPanel } from "./FilesPanel";
 import {
   Button,
@@ -34,13 +37,34 @@ export function ChatPanel({
   connection,
   conversation,
   assistantName,
+  catalog,
+  onConversationChanged,
   onRefresh,
 }: {
   connection: Connection;
   conversation: Conversation;
   assistantName: string;
+  catalog: ModelCatalog | null;
+  onConversationChanged: (conversation: Conversation) => void;
   onRefresh: () => void;
 }) {
+  const [showModels, setShowModels] = useState(false);
+  const [showReasoning, setShowReasoning] = useState(false);
+  const [modelBusy, setModelBusy] = useState(false);
+  const modelId = conversation.model_id ?? catalog?.roles.chat ?? null;
+  const model = catalog?.items.find((item) => item.id === modelId);
+  const depth = conversation.reasoning_effort ?? model?.default_reasoning_effort ?? "auto";
+  async function updateModel(model_id: string | null, reasoning_effort: ReasoningEffort | null) {
+    setModelBusy(true);
+    try {
+      const updated = await request<Conversation>(connection, `/conversations/${conversation.id}/model`, {
+        method: "PUT", body: { model_id, reasoning_effort },
+      });
+      onConversationChanged(updated);
+    } finally {
+      setModelBusy(false);
+    }
+  }
   const {
     messages,
     runs,
@@ -281,6 +305,25 @@ export function ChatPanel({
           backgroundColor: colors.white,
         }}
       >
+        {!conversation.agent_id && kind === "chat" && intent === "queue" ? (
+          <View style={[s.row, { flexWrap: "wrap" }]}>
+            <Button secondary small disabled={!catalog || modelBusy || !!draft.pending} onPress={() => setShowModels(true)}>
+              {model ? `模型 · ${model.name}` : "选择模型"}
+            </Button>
+            {conversation.model_id ? (
+              <Button secondary small disabled={modelBusy || !!draft.pending} onPress={() => {
+                void updateModel(null, null).catch((e) => setError(humanError(e)));
+              }}>跟随默认</Button>
+            ) : null}
+            {model?.reasoning_levels.length ? (
+              <Button secondary small disabled={modelBusy || !!draft.pending} onPress={() => setShowReasoning(true)}>
+                思考 · {reasoningLabel[depth]}
+              </Button>
+            ) : null}
+          </View>
+        ) : !conversation.agent_id && kind === "task" ? (
+          <Text style={s.muted}>任务使用工具箱中的执行默认模型</Text>
+        ) : null}
         <View style={s.spread}>
           <View style={s.row}>
             {(["chat", "task"] as const).map((value) => (
@@ -369,7 +412,7 @@ export function ChatPanel({
             ]}
           />
           <Button
-            disabled={!draftReady || busy || !draft.text.trim()}
+            disabled={!draftReady || busy || modelBusy || !draft.text.trim()}
             onPress={() => {
               void send();
             }}
@@ -383,6 +426,37 @@ export function ChatPanel({
           </Button>
         ) : null}
       </View>
+      <ModelPicker
+        visible={showModels}
+        title="选择聊天模型"
+        connectionUrl={connection.url}
+        models={catalog?.items ?? []}
+        selectedId={modelId}
+        onSelect={(id) => updateModel(id, null)}
+        onClose={() => setShowModels(false)}
+      />
+      <Modal visible={showReasoning} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowReasoning(false)}>
+        <SafeAreaView style={s.root}>
+          <View style={s.header}>
+            <Text style={[s.heading, s.grow]}>思考深度</Text>
+            <Button secondary onPress={() => setShowReasoning(false)}>关闭</Button>
+          </View>
+          <ScrollView contentContainerStyle={s.content}>
+            <Text style={s.muted}>只影响这段对话之后提交的聊天。不同模型支持的档位可能不同。</Text>
+            {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+            <Button secondary disabled={modelBusy} onPress={() => {
+              void updateModel(conversation.model_id, null).then(() => setShowReasoning(false)).catch((e) => setError(humanError(e)));
+            }}>
+              模型默认{model?.default_reasoning_effort ? ` · ${reasoningLabel[model.default_reasoning_effort]}` : " · 自动"}
+            </Button>
+            {model?.reasoning_levels.map((value) => (
+              <Button key={value} secondary={depth !== value} disabled={modelBusy} onPress={() => {
+                void updateModel(conversation.model_id, value).then(() => setShowReasoning(false)).catch((e) => setError(humanError(e)));
+              }}>{reasoningLabel[value]}</Button>
+            ))}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
       <Modal
         visible={!!detail}
         animationType="slide"
@@ -488,6 +562,11 @@ function RunDetail({
             <Text style={s.muted}>
               {runLabels[run.status]} · {run.id.slice(0, 8)}
             </Text>
+            {run.model_id ? (
+              <Text style={s.muted}>
+                模型 {run.model_id}{run.reasoning_effort ? ` · 思考 ${reasoningLabel[run.reasoning_effort]}` : ""}
+              </Text>
+            ) : null}
             {run.error ? (
               <View style={s.notice}>
                 <Text selectable style={s.error}>

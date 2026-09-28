@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import hmac
+import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -25,7 +26,9 @@ from .schemas import (
     AgentUpdate,
     AssistantInput,
     ConversationInput,
+    ConversationModelInput,
     MessageInput,
+    ModelRoleInput,
     ProjectInput,
     ScheduleInput,
     ScheduleUpdate,
@@ -121,7 +124,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def status():
         from .tools import capability_status
 
-        ready = all(model_ready(settings, role) for role in ("chat", "task"))
+        roles = store.model_roles()
+        ready = all(model_ready(settings, role, roles.get(role)) for role in ("chat", "task"))
         capability = capability_status(settings)
         return {
             "model_ready": ready,
@@ -138,6 +142,33 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.put("/assistant")
     def update_assistant(body: AssistantInput):
         return store.set_assistant(**body.model_dump())
+
+    @router.get("/models")
+    def models():
+        return {
+            "items": [
+                {
+                    "id": identifier,
+                    "name": config.display_name or config.model,
+                    "model": config.model,
+                    "provider": config.provider or {
+                        "chat_completions": "OpenAI 兼容",
+                        "responses": "OpenAI Responses",
+                        "gemini": "Gemini",
+                    }[config.protocol],
+                    "protocol": config.protocol,
+                    "ready": bool(os.environ.get(config.api_key_env, "").strip()),
+                    "reasoning_levels": config.reasoning_levels,
+                    "default_reasoning_effort": config.reasoning_effort,
+                }
+                for identifier, config in settings.models.items()
+            ],
+            "roles": store.model_roles(),
+        }
+
+    @router.put("/models/roles/{role}")
+    def update_model_role(role: Literal["chat", "task", "memory"], body: ModelRoleInput):
+        return store.set_model_role(role, body.model_id)
 
     @router.get("/agents")
     def agents():
@@ -189,6 +220,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.get("/conversations/{conversation_id}")
     def conversation(conversation_id: str):
         return store.get_conversation(conversation_id)
+
+    @router.put("/conversations/{conversation_id}/model")
+    def update_conversation_model(conversation_id: str, body: ConversationModelInput):
+        return store.set_conversation_model(conversation_id, **body.model_dump())
 
     @router.get("/conversations/{conversation_id}/files")
     def workspace_files(conversation_id: str):

@@ -233,11 +233,13 @@ async def run_agent(
     acknowledge: Acknowledge,
     model_override: BaseChatModel | None = None,
 ) -> str:
-    model = model_override if model_override is not None else create_model(settings, run["kind"])
+    model = model_override if model_override is not None else create_model(
+        settings, run["kind"], run.get("model_id"), run.get("reasoning_effort")
+    )
     if model_override is not None:
         identity = "test-model"
     else:
-        name, model_config = configured_model(settings, run["kind"])
+        name, model_config = configured_model(settings, run["kind"], run.get("model_id"))
         identity = (
             f"{name}:{model_config.protocol}:{model_config.model}:{model_config.base_url or ''}"
         )

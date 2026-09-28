@@ -65,6 +65,56 @@ def test_persona_project_and_conversation_flow(client):
     )
 
 
+def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch):
+    monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "placeholder-for-unit-test-only")
+    settings.models = {
+        "one": ModelConfig(
+            protocol="chat_completions", model="chat-one", provider="百炼",
+            api_key_env="ZHIXING_TEST_MODEL_KEY", reasoning_levels=["auto", "none", "low"],
+        ),
+        "two": ModelConfig(
+            protocol="responses", model="chat-two", provider="第二供应商",
+            api_key_env="ZHIXING_TEST_MODEL_KEY", reasoning_levels=["auto", "high"],
+        ),
+    }
+    settings.roles = {"chat": "one", "task": "one"}
+    with TestClient(create_app(settings), headers={"Authorization": f"Bearer {settings.api_token}"}) as client:
+        catalog = client.get("/v1/models").json()
+        assert catalog["roles"]["chat"] == "one"
+        assert catalog["items"][0]["provider"] == "百炼"
+        assert catalog["items"][0]["ready"] is True
+        assert "api_key_env" not in str(catalog)
+        assert "base_url" not in str(catalog)
+        conversation = client.post("/v1/conversations", json={"title": "模型切换"}).json()
+        path = f"/v1/conversations/{conversation['id']}/model"
+        assert client.put(path, json={"model_id": "two", "reasoning_effort": "low"}).status_code == 422
+        assert client.put(path, json={"model_id": "two", "reasoning_effort": "high"}).json()["model_id"] == "two"
+        first = client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+            "id": "first", "content": "hello",
+        }).json()["run"]
+        assert (first["model_id"], first["reasoning_effort"]) == ("two", "high")
+        task = client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+            "id": "task", "content": "work", "kind": "task",
+        }).json()["run"]
+        assert (task["model_id"], task["reasoning_effort"]) == ("one", None)
+        assert client.put(path, json={"model_id": None, "reasoning_effort": None}).json()["model_id"] is None
+        second = client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+            "id": "second", "content": "again",
+        }).json()["run"]
+        assert (second["model_id"], second["reasoning_effort"]) == ("one", None)
+        assert client.get(f"/v1/runs/{first['id']}").json()["model_id"] == "two"
+        assert client.put("/v1/models/roles/chat", json={"model_id": "two"}).json()["chat"] == "two"
+        third = client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+            "id": "third", "content": "later",
+        }).json()["run"]
+        assert third["model_id"] == "two"
+        assert client.put("/v1/models/roles/chat", json={"model_id": "missing"}).status_code == 422
+        finance = client.post("/v1/conversations", json={"title": "财务", "agent_id": "finance"}).json()
+        assert client.put(f"/v1/conversations/{finance['id']}/model", json={
+            "model_id": "one", "reasoning_effort": None,
+        }).status_code == 422
+
+
 def test_agents_are_persistent_bound_and_conversation_owned(client):
     finance = client.get("/v1/agents").json()["items"][0]
     assert finance["id"] == "finance" and "record_finance_observation" in finance["tools"]

@@ -9,15 +9,21 @@ task = "bailian_task"
 [models.bailian_chat]
 protocol = "chat_completions"
 model = "qwen3.8-flash"
+provider = "阿里云百炼"
+display_name = "Qwen3.8 Flash · 聊天"
 api_key_env = "ZHIXING_BAILIAN_API_KEY"
 base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 reasoning_effort = "none"
+reasoning_levels = ["auto", "none", "low", "medium", "xhigh"]
 timeout = 60
 
 [models.bailian_task]
 protocol = "chat_completions"
 model = "qwen3.8-flash"
+provider = "阿里云百炼"
+display_name = "Qwen3.8 Flash · 执行"
 api_key_env = "ZHIXING_BAILIAN_API_KEY"
 base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 reasoning_effort = "medium"
+reasoning_levels = ["auto", "none", "low", "medium", "xhigh"]
 timeout = 120

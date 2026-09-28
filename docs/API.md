@@ -18,7 +18,9 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 
 ## HTTP 接口
 
-- `GET /v1/status`: `{model_ready: bool, worker_online: bool, execution_available: bool}`，可增加说明字段。
+- `GET /v1/status`: `{model_ready: bool, worker_online: bool, execution_available: bool}`，可增加说明字段；`model_ready` 按当前聊天/执行默认模型及服务端密钥判断，不代表供应商已通过调用。
+- `GET /v1/models`：返回 `{items,roles}`。每个模型只公开 `id,name,model,provider,protocol,ready,reasoning_levels,default_reasoning_effort`；不返回密钥、环境变量名或 Base URL。`roles` 为聊天、执行、记忆整理的当前默认模型 ID。
+- `PUT /v1/models/roles/{role} {model_id}`：`role` 为 `chat|task|memory`，保存角色默认模型。模型须已在服务端配置；记忆整理角色目前尚未运行。
 - `GET /v1/assistant`, `PUT /v1/assistant`: `{name, persona}`，人格是用户编辑的持久文本。
 - `GET /v1/agents`, `POST /v1/agents`, `GET/PUT/DELETE /v1/agents/{id}`：子智能体配置
   `{id,kind: service|custom,service: string|null,name,description,instructions,tools: string[],visible,created_at,updated_at}`。
@@ -29,13 +31,14 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 - `GET /v1/conversations`, `POST /v1/conversations {title,project_id?: string|null,agent_id?: string|null}`:
   会话 `{id,title,project_id,agent_id,blocked: bool,created_at,updated_at}`；`agent_id=null` 为主知行。
 - `GET /v1/conversations/{id}`：单个会话及当前 blocked 状态。
+- `PUT /v1/conversations/{id}/model {model_id:string|null,reasoning_effort:auto|none|low|medium|high|xhigh|null}`：仅主知行会话可设置聊天模型和思考档位；null 表示继承默认。档位必须在模型声明的 `reasoning_levels` 内。设置只影响之后入队的聊天，已提交的运行保留入队时的模型快照；执行任务使用执行角色默认模型。
 - `GET /v1/conversations/{id}/messages?cursor=&limit=`: 按序号升序，消息
   `{id,conversation_id,role: user|assistant,content,intent: queue|steer,run_id,status: accepted|applied|rejected,created_at,seq}`。
 - `POST /v1/conversations/{id}/messages {id,content,intent: queue|steer,kind: chat|task,target_run_id?: string}`:
   回执 `{message,run}`；queue 创建 queued 运行；steer 必须绑定实际 running 运行并原子检查，不创建新运行。
 - `POST /v1/conversations/{id}/resume`: 清除失败/取消后的队列阻塞，允许尚未开始的排队消息继续。
 - `GET /v1/runs?conversation_id=&cursor=&limit=`: 运行列表；`GET /v1/runs/{id}`: 单个运行。
-  运行 `{id,conversation_id,message_id,kind: chat|task,status: queued|running|completed|failed|cancelled|interrupted,
+  运行 `{id,conversation_id,message_id,kind: chat|task,model_id,reasoning_effort,status: queued|running|completed|failed|cancelled|interrupted,
   prompt,cancel_requested: bool,result: string|null,error: string|null,created_at,started_at,finished_at}`。
 - `POST /v1/runs/{id}/cancel`: queued 立即撤回，不改变会话阻塞状态；running 持久记录取消请求，
   实际停止后暂停其后续队列。取消不删除后续队列。
@@ -69,7 +72,8 @@ worker.py 负责调度与生命周期，runtime.py/models.py/tools.py 负责实�
 Settings: data_dir: Path, workspace_root: Path, api_token: str, models: dict[str,ModelConfig],
 roles: dict[str,str], grants: list[PathGrant], poll_interval: float=0.25。
 ModelConfig: protocol: chat_completions|responses|gemini, model: str, api_key_env: str,
-base_url: str|None, temperature: float|None, timeout: float=60。
+provider/display_name: str|None, reasoning_levels: list, base_url: str|None,
+temperature: float|None, timeout: float=60。服务端配置定义可选模型和供应商；角色默认值与主会话选择保存在 SQLite。
 PathGrant: path: Path, writable: bool=False。服务端 TOML 配置引用环境变量，不将密钥写入 TOML。
 
 Store(settings) 的 worker 接口（同步短事务，每次调用独立连接）：
@@ -84,5 +88,5 @@ Store(settings) 的 worker 接口（同步短事务，每次调用独立连接�
 运行时接口 `async run_agent(settings, run, *, persona, emit, controls, acknowledge) -> str`：
 emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可通过 asyncio task cancellation 打断，
 模型与工具步边界检查 controls；steer 使用稳定消息 ID 注入真实模型上下文，checkpoint 落盘后才 acknowledge。
-模型配置由 run.kind 对应 role 选择；LangGraph thread 以 conversation_id 标识，checkpoint 使用 data_dir 下独立 SQLite。worker 在运行开始时读取子智能体配置快照；主知行只委派已配置命名助手，直接子智能体会话只获得自己的工具。
+模型 ID 和思考档位在消息入队时写入运行记录，worker 按快照调用；LangGraph thread 以 conversation_id 标识，checkpoint 使用 data_dir 下独立 SQLite。worker 在运行开始时读取子智能体配置快照；主知行只委派已配置命名助手，直接子智能体会话只获得自己的工具。
 初版崩溃中的运行标记 interrupted；用户清除阻塞后可发送新要求，不宣称任意工具能自动安全续跑。

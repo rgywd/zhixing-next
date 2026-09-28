@@ -14,10 +14,13 @@ class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     protocol: Literal["chat_completions", "responses", "gemini"]
     model: str = Field(min_length=1, max_length=200)
+    provider: str | None = Field(default=None, min_length=1, max_length=100)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
     api_key_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
     base_url: str | None = None
     temperature: float | None = None
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_levels: list[Literal["auto", "none", "low", "medium", "high", "xhigh"]] = Field(default_factory=list, max_length=6)
     timeout: float = Field(default=60, gt=0, le=300)
 
     @field_validator("base_url")
@@ -40,6 +43,10 @@ class ModelConfig(BaseModel):
     def validate_reasoning_protocol(self):
         if self.reasoning_effort is not None and self.protocol == "gemini":
             raise ValueError("reasoning_effort is only supported by OpenAI-compatible protocols")
+        if len(self.reasoning_levels) != len(set(self.reasoning_levels)):
+            raise ValueError("reasoning_levels must be unique")
+        if self.protocol == "gemini" and set(self.reasoning_levels) & {"none", "xhigh"}:
+            raise ValueError("Gemini thinking levels cannot promise off or xhigh")
         return self
 
 

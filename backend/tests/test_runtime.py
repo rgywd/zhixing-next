@@ -449,3 +449,28 @@ def test_protocol_selection_without_network(tmp_path, monkeypatch, protocol):
     monkeypatch.delenv("ZHIXING_TEST_MODEL_KEY")
     with pytest.raises(ModelConfigurationError):
         create_model(settings, "chat")
+
+
+def test_selected_model_and_thinking_depth_reach_protocol_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "placeholder-for-unit-test-only")
+    settings = make_settings(tmp_path)
+    settings.models = {
+        "one": ModelConfig(
+            protocol="chat_completions", model="chat-one", api_key_env="ZHIXING_TEST_MODEL_KEY",
+            reasoning_effort="none", reasoning_levels=["auto", "none", "high"],
+        ),
+        "two": ModelConfig(
+            protocol="responses", model="chat-two", api_key_env="ZHIXING_TEST_MODEL_KEY",
+            reasoning_levels=["auto", "high"],
+        ),
+        "gemini": ModelConfig(
+            protocol="gemini", model="gemini-3-test", api_key_env="ZHIXING_TEST_MODEL_KEY",
+            reasoning_levels=["auto", "low", "high"],
+        ),
+    }
+    settings.roles = {"chat": "one"}
+    assert create_model(settings, "chat", "two", "high").reasoning_effort == "high"
+    assert create_model(settings, "chat", "one", "auto").reasoning_effort is None
+    assert create_model(settings, "chat", "gemini", "low").reasoning_effort == "low"
+    with pytest.raises(ModelConfigurationError, match="thinking depth"):
+        create_model(settings, "chat", "gemini", "none")

@@ -24,12 +24,15 @@ import {
   type Conversation,
   type FinanceSummary,
   type MessageInput,
+  type ModelCatalog,
   type Page,
   type Project,
   type Schedule,
   type ServiceStatus,
 } from "./api";
 import { ChatPanel } from "./ChatPanel";
+import { FinancePage } from "./FinancePage";
+import { ModelsPanel } from "./ModelsPanel";
 import { HomePanel, LifePanel, ToolboxPanel, WorkPanel } from "./OverviewPanels";
 import { SchedulesPanel } from "./SchedulesPanel";
 import { ConnectionForm, SettingsPanel } from "./SettingsPanel";
@@ -149,6 +152,7 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
 
 function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection) => void; error: string }) {
   const [tab, setTab] = useState<Tab>("home");
+  const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
   return (
     <View style={s.body}>
       <View style={s.header}>
@@ -166,14 +170,23 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           onOpenConversation={() => setTab("chat")} onLife={() => setTab("life")}
           onWork={() => setTab("work")} />
       ) : tab === "life" ? (
-        <LifePanel onFinance={() => setTab("chat")} finance={{ balances: [], recent: [] }} />
+        lifeView === "overview" ? (
+          <LifePanel onFinance={() => setLifeView("finance")} finance={{ balances: [], recent: [] }} />
+        ) : (
+          <ScrollView contentContainerStyle={s.content}>
+            <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
+            <Text style={s.heading}>财务</Text>
+            <Text style={s.muted}>连接服务后，可以在这里和财务助手聊。</Text>
+            <Button onPress={() => setTab("chat")}>连接知行</Button>
+          </ScrollView>
+        )
       ) : tab === "work" ? (
         <WorkPanel conversations={[]} projects={[]} schedules={[]}
           onOpenConversation={() => setTab("chat")}
           onChooseConversation={() => setTab("chat")}
           onSchedules={() => setTab("chat")} />
       ) : tab === "toolbox" ? (
-        <ToolboxPanel onSettings={() => setTab("chat")} onAgents={() => setTab("chat")} />
+        <ToolboxPanel onSettings={() => setTab("chat")} onAgents={() => setTab("chat")} onModels={() => setTab("chat")} />
       ) : (
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
           <Text style={s.heading}>连接知行</Text>
@@ -199,8 +212,9 @@ function Connected({
   connectionError: string;
 }) {
   const [tab, setTab] = useState<Tab>("home");
+  const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
   const [workView, setWorkView] = useState<"overview" | "schedules">("overview");
-  const [toolView, setToolView] = useState<"overview" | "settings" | "agents">("overview");
+  const [toolView, setToolView] = useState<"overview" | "settings" | "agents" | "models">("overview");
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [status, setStatus] = useState<ServiceStatus | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -208,6 +222,8 @@ function Connected({
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [finance, setFinance] = useState<FinanceSummary>({ balances: [], recent: [] });
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [financeId, setFinanceId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedRef = useRef(selectedId);
   const [conversationCursor, setConversationCursor] = useState<string | null>(
@@ -226,8 +242,11 @@ function Connected({
   const alive = useRef(true);
   const refresh = useCallback(() => refreshRef.current(), []);
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
+  const selectedModel = catalog?.items.find((item) => item.id === (selected?.model_id ?? catalog.roles.chat));
+  const financeConversation = conversations.find((item) => item.id === financeId) ?? null;
   function openMainChat() {
-    const main = [...conversations].reverse().find((item) => !item.agent_id);
+    const main = conversations.find((item) => item.id === selectedId && !item.agent_id)
+      ?? [...conversations].reverse().find((item) => !item.agent_id);
     setSelectedId(main?.id ?? null);
     selectedRef.current = main?.id ?? null;
     setTab("chat");
@@ -235,10 +254,18 @@ function Connected({
   function selectTab(next: typeof tab) {
     if (next === "chat") openMainChat();
     else setTab(next);
+    if (next === "life") setLifeView("overview");
     if (next === "work") setWorkView("overview");
     if (next === "toolbox") setToolView("overview");
   }
   function openConversation(id: string) {
+    if (conversations.find((item) => item.id === id)?.agent_id === "finance") {
+      setFinanceId(id);
+      setLifeView("finance");
+      setShowConversations(false);
+      setTab("life");
+      return;
+    }
     setSelectedId(id);
     selectedRef.current = id;
     setShowConversations(false);
@@ -259,7 +286,7 @@ function Connected({
       if (!active || polling || AppState.currentState === "background") return;
       polling = true;
       try {
-        const [health, person, chats, folders, plans, agentPage, financePage, current] =
+        const [health, person, chats, folders, plans, agentPage, financePage, modelPage, current] =
           await Promise.all([
             request<ServiceStatus>(connection, "/status", {
               signal: controller.signal,
@@ -280,6 +307,7 @@ function Connected({
             }),
             request<Page<Agent>>(connection, "/agents", { signal: controller.signal }),
             request<FinanceSummary>(connection, "/finance/observations", { signal: controller.signal }),
+            request<ModelCatalog>(connection, "/models", { signal: controller.signal }).catch(() => null),
             selectedRef.current
               ? request<Conversation>(
                   connection,
@@ -298,6 +326,7 @@ function Connected({
         setSchedules((old) => mergeById(old, plans.items));
         setAgents(agentPage.items);
         setFinance(financePage);
+        if (modelPage) setCatalog(modelPage);
         if (initial) {
           setConversationCursor(chats.previous_cursor ?? null);
           setScheduleCursor(plans.next_cursor);
@@ -379,11 +408,16 @@ function Connected({
       }
       if (!alive.current) return;
       setConversations((old) => mergeById(old, [conversation]));
-      setSelectedId(conversation.id);
-      selectedRef.current = conversation.id;
+      if (agentId === "finance") {
+        setFinanceId(conversation.id);
+        setLifeView("finance");
+      } else {
+        setSelectedId(conversation.id);
+        selectedRef.current = conversation.id;
+      }
       setTitle("");
       setShowConversations(false);
-      setTab("chat");
+      setTab(agentId === "finance" ? "life" : "chat");
       refresh();
     } catch (e) {
       if (alive.current) setError(humanError(e));
@@ -395,6 +429,12 @@ function Connected({
     const existing = [...conversations].reverse().find((item) => item.agent_id === agentId);
     if (existing) openConversation(existing.id);
     else void newConversation(false, agentId);
+  }
+  function openFinance() {
+    setLifeView("finance");
+    const existing = [...conversations].reverse().find((item) => item.agent_id === "finance");
+    if (existing) setFinanceId(existing.id);
+    else void newConversation(false, "finance");
   }
   async function newProject() {
     if (!projectName.trim() || busy) return;
@@ -476,17 +516,12 @@ function Connected({
             重新连接
           </Button>
         </View>
-      ) : status &&
-        (!status.model_ready ||
-          !status.worker_online ||
-          !status.execution_available) ? (
+      ) : status && (!status.model_ready || !status.worker_online) ? (
         <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
           <Text style={s.noticeText}>
             {!status.model_ready
               ? "服务已连接，模型尚未配置。请在服务器上设置模型后开始使用。"
-              : !status.worker_online
-                ? "执行服务暂时离线。已接收任务会保留，等待 worker 恢复。"
-                : "命令执行尚未开放，聊天与文件任务可用。"}
+              : "执行服务暂时离线。已接收任务会保留，等待 worker 恢复。"}
           </Text>
         </View>
       ) : null}
@@ -507,7 +542,17 @@ function Connected({
           onWork={() => selectTab("work")}
         />
       ) : tab === "life" ? (
-        <LifePanel onFinance={() => openAgent("finance")} finance={finance} />
+        lifeView === "overview" ? (
+          <LifePanel onFinance={openFinance} finance={finance} />
+        ) : financeConversation ? (
+          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
+        ) : (
+          <View style={[s.body, { padding: 22, gap: 18 }]}>
+            <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
+            <Text style={s.heading}>财务</Text>
+            {busy ? <ActivityIndicator color={colors.green} /> : <Button onPress={openFinance}>连接财务助手</Button>}
+          </View>
+        )
       ) : tab === "chat" ? (
         <>
           <Pressable
@@ -526,6 +571,11 @@ function Connected({
             </Text>
             <Text style={s.muted}>切换 / 新建 ›</Text>
           </Pressable>
+          {!selected?.agent_id && selected ? (
+            <Text style={[s.muted, { marginHorizontal: 22, marginBottom: 8 }]}>
+              {selectedModel ? `${assistant?.name ?? "知行"} / ${selectedModel.name} (${selectedModel.provider})` : "模型待配置"}
+            </Text>
+          ) : null}
           <View style={s.divider} />
           {selected ? (
             <ChatPanel
@@ -533,6 +583,8 @@ function Connected({
               connection={connection}
               conversation={selected}
               assistantName={agents.find((item) => item.id === selected.agent_id)?.name ?? assistant?.name ?? "知行"}
+              catalog={catalog}
+              onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))}
               onRefresh={refresh}
             />
           ) : loading ? (
@@ -585,7 +637,7 @@ function Connected({
           </>
         )
       ) : toolView === "overview" ? (
-        <ToolboxPanel onSettings={() => setToolView("settings")} onAgents={() => setToolView("agents")} />
+        <ToolboxPanel onSettings={() => setToolView("settings")} onAgents={() => setToolView("agents")} onModels={() => setToolView("models")} />
       ) : (
         <>
           <Pressable accessibilityRole="button" onPress={() => setToolView("overview")} style={s.backLink}>
@@ -593,6 +645,8 @@ function Connected({
           </Pressable>
           {toolView === "agents" ? (
             <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />
+          ) : toolView === "models" ? (
+            <ModelsPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
           ) : assistant ? (
             <SettingsPanel
               connection={connection}

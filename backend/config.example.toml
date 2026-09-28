@@ -12,7 +12,9 @@ task = "primary"
 [models.primary]
 protocol = "gemini"
 model = "YOUR_GEMINI_MODEL_ID"
+provider = "Gemini"
 api_key_env = "ZHIXING_GEMINI_API_KEY"
+# Gemini 3 models may declare: reasoning_levels = ["auto", "low", "medium", "high"]
 
 # [models.execution]
 # protocol = "responses"

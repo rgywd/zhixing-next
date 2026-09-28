@@ -23,12 +23,29 @@ export type ServiceStatus = {
   worker_online: boolean;
   execution_available: boolean;
 };
+export type ReasoningEffort = "auto" | "none" | "low" | "medium" | "high" | "xhigh";
+export type ModelInfo = {
+  id: string;
+  name: string;
+  model: string;
+  provider: string;
+  protocol: "chat_completions" | "responses" | "gemini";
+  ready: boolean;
+  reasoning_levels: ReasoningEffort[];
+  default_reasoning_effort: Exclude<ReasoningEffort, "auto"> | null;
+};
+export type ModelCatalog = {
+  items: ModelInfo[];
+  roles: Partial<Record<"chat" | "task" | "memory", string | null>>;
+};
 export type Project = { id: string; name: string; workspace_path: string };
 export type Conversation = {
   id: string;
   title: string;
   project_id: string | null;
   agent_id: string | null;
+  model_id: string | null;
+  reasoning_effort: ReasoningEffort | null;
   blocked: boolean;
   updated_at: string;
 };
@@ -36,6 +53,8 @@ export type Run = {
   id: string;
   conversation_id: string;
   kind: "chat" | "task";
+  model_id: string | null;
+  reasoning_effort: ReasoningEffort | null;
   status:
     "queued" | "running" | "completed" | "failed" | "cancelled" | "interrupted";
   prompt: string;

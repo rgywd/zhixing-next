@@ -37,6 +37,16 @@ def test_reasoning_effort_is_validated_for_openai_compatible_models():
             protocol="gemini", model="gemini-test", api_key_env="GEMINI_KEY",
             reasoning_effort="none",
         )
+    with pytest.raises(ValueError, match="thinking levels"):
+        ModelConfig(
+            protocol="gemini", model="gemini-test", api_key_env="GEMINI_KEY",
+            reasoning_levels=["none"],
+        )
+    with pytest.raises(ValueError, match="unique"):
+        ModelConfig(
+            protocol="responses", model="test", api_key_env="TEST_KEY",
+            reasoning_levels=["low", "low"],
+        )
 
 
 def test_no_config_is_safe_and_unknown_config_fails(tmp_path, monkeypatch):

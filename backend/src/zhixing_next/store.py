@@ -54,7 +54,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 3:
+            if version > 4:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -70,6 +70,13 @@ class Store:
                 db.execute("CREATE TABLE finance_observations(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('balance','income','expense')),platform TEXT NOT NULL,amount TEXT NOT NULL,note TEXT NOT NULL,conversation_id TEXT NOT NULL REFERENCES conversations(id),created_at TEXT NOT NULL)")
                 db.execute("UPDATE agents SET tools_json='[\"list_finance_observations\",\"record_finance_observation\",\"remove_finance_observation\"]' WHERE id='finance'")
                 db.execute("PRAGMA user_version=3")
+            if version < 4:
+                db.execute("ALTER TABLE conversations ADD COLUMN model_id TEXT")
+                db.execute("ALTER TABLE conversations ADD COLUMN reasoning_effort TEXT")
+                db.execute("ALTER TABLE runs ADD COLUMN model_id TEXT")
+                db.execute("ALTER TABLE runs ADD COLUMN reasoning_effort TEXT")
+                db.execute("CREATE TABLE model_roles(role TEXT PRIMARY KEY,model_id TEXT NOT NULL)")
+                db.execute("PRAGMA user_version=4")
             db.commit()
 
     @contextmanager
@@ -232,6 +239,50 @@ class Store:
         with self._connection() as db:
             return _record(self._require(db, "conversations", conversation_id))
 
+    def model_roles(self):
+        with self._connection() as db:
+            configured = {row["role"]: row["model_id"] for row in db.execute(
+                "SELECT role,model_id FROM model_roles"
+            )}
+            return {
+                role: configured.get(role, self.settings.roles.get(role))
+                for role in ("chat", "task", "memory")
+            }
+
+    def set_model_role(self, role, model_id):
+        if model_id not in self.settings.models:
+            raise StoreError("unknown_model", "Choose a configured model", 422)
+        with self._connection(write=True) as db:
+            db.execute(
+                "INSERT INTO model_roles(role,model_id) VALUES(?,?) "
+                "ON CONFLICT(role) DO UPDATE SET model_id=excluded.model_id",
+                (role, model_id),
+            )
+        return self.model_roles()
+
+    def set_conversation_model(self, conversation_id, model_id, reasoning_effort):
+        if model_id is not None and model_id not in self.settings.models:
+            raise StoreError("unknown_model", "Choose a configured model", 422)
+        with self._connection(write=True) as db:
+            conversation = self._require(db, "conversations", conversation_id)
+            if conversation["agent_id"] is not None:
+                raise StoreError("agent_model", "Model controls belong to main assistant chats", 422)
+            selected = model_id or self._role_model(db, "chat")
+            if reasoning_effort is not None and (
+                selected not in self.settings.models
+                or reasoning_effort not in self.settings.models[selected].reasoning_levels
+            ):
+                raise StoreError("unsupported_reasoning", "This model does not support that thinking depth", 422)
+            db.execute(
+                "UPDATE conversations SET model_id=?,reasoning_effort=? WHERE id=?",
+                (model_id, reasoning_effort, conversation_id),
+            )
+            return _record(self._require(db, "conversations", conversation_id))
+
+    def _role_model(self, db, role):
+        row = db.execute("SELECT model_id FROM model_roles WHERE role=?", (role,)).fetchone()
+        return row["model_id"] if row else self.settings.roles.get(role)
+
     def workspace_for(self, conversation_id):
         with self._connection() as db:
             return Path(self._require(db, "conversations", conversation_id)["workspace_path"])
@@ -255,16 +306,25 @@ class Store:
             ).fetchall()
             return self._page(rows, limit)
 
-    @staticmethod
-    def _enqueue(db, conversation_id, message_id, content, kind, request_json):
+    def _enqueue(self, db, conversation_id, message_id, content, kind, request_json):
         run_id, now = str(uuid4()), timestamp()
+        conversation = self._require(db, "conversations", conversation_id)
+        model_id = (
+            conversation["model_id"]
+            if kind == "chat" and conversation["agent_id"] is None and conversation["model_id"]
+            else self._role_model(db, kind)
+        )
+        reasoning_effort = (
+            conversation["reasoning_effort"]
+            if kind == "chat" and conversation["agent_id"] is None else None
+        )
         db.execute(
             "INSERT INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at,request_json) VALUES(?,?,'user',?,'queue',?,'accepted',?,?)",
             (message_id, conversation_id, content, run_id, now, request_json),
         )
         db.execute(
-            "INSERT INTO runs(id,conversation_id,message_id,kind,prompt,created_at) VALUES(?,?,?,?,?,?)",
-            (run_id, conversation_id, message_id, kind, content, now),
+            "INSERT INTO runs(id,conversation_id,message_id,kind,prompt,created_at,model_id,reasoning_effort) VALUES(?,?,?,?,?,?,?,?)",
+            (run_id, conversation_id, message_id, kind, content, now, model_id, reasoning_effort),
         )
         db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id))
         return run_id

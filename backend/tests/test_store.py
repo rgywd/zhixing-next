@@ -23,7 +23,7 @@ def test_schema_and_persona_survive_reopen(store):
     reopened = Store(store.settings)
     assert reopened.get_assistant()["persona"] == "记得先核实出处"
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 4
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == safe_journal_mode().lower()
 
 
@@ -43,6 +43,11 @@ def test_existing_v1_database_gains_agents_without_losing_conversations(tmp_path
 
 def test_v2_finance_agent_customization_survives_tool_upgrade(store):
     with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE model_roles")
+        db.execute("ALTER TABLE runs DROP COLUMN reasoning_effort")
+        db.execute("ALTER TABLE runs DROP COLUMN model_id")
+        db.execute("ALTER TABLE conversations DROP COLUMN reasoning_effort")
+        db.execute("ALTER TABLE conversations DROP COLUMN model_id")
         db.execute("DROP TABLE finance_observations")
         db.execute("UPDATE agents SET instructions='用户自定要求',tools_json='[]' WHERE id='finance'")
         db.execute("PRAGMA user_version=2")

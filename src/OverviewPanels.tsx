@@ -224,7 +224,7 @@ export function WorkPanel({
   );
 }
 
-export function ToolboxPanel({ onSettings, onAgents }: { onSettings: () => void; onAgents: () => void }) {
+export function ToolboxPanel({ onSettings, onAgents, onModels }: { onSettings: () => void; onAgents: () => void; onModels: () => void }) {
   return (
     <ScrollView contentContainerStyle={[s.content, styles.page]}>
       <View style={styles.intro}>
@@ -251,6 +251,7 @@ export function ToolboxPanel({ onSettings, onAgents }: { onSettings: () => void;
           管理固定的服务助手和你创建的助手；每个助手只使用已绑定的工具。
         </Text>
         <Button secondary onPress={onAgents}>管理子智能体</Button>
+        <Button secondary onPress={onModels}>供应商与模型</Button>
         <Button secondary onPress={onSettings}>人格与连接设置</Button>
       </View>
     </ScrollView>

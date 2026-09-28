@@ -30,6 +30,15 @@ class ConversationInput(Input):
     agent_id: Identifier | None = None
 
 
+class ConversationModelInput(Input):
+    model_id: Identifier | None
+    reasoning_effort: Literal["auto", "none", "low", "medium", "high", "xhigh"] | None
+
+
+class ModelRoleInput(Input):
+    model_id: Identifier
+
+
 class AgentInput(Input):
     name: Title
     description: str = Field(min_length=1, max_length=1000)
