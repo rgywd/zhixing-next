@@ -78,7 +78,7 @@ const styles = StyleSheet.create({
   },
   workConversationLast: { borderBottomWidth: 0 },
   workConversationText: { flex: 1, gap: 2 },
-  workConversationTitle: { color: colors.ink, fontSize: 14, fontWeight: "600" },
+  workConversationTitle: { color: "#455A50", fontSize: 13, fontWeight: "500" },
   workProjectEmpty: { alignItems: "center", gap: 7, paddingTop: 4 },
   workCreate: {
     minHeight: 42, width: 176, alignSelf: "center", borderRadius: 22, backgroundColor: colors.green,
