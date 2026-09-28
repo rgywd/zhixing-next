@@ -5,7 +5,7 @@
 ## 交付范围
 
 Python FastAPI + SQLite，API 与 worker 独立进程；React Native 客户端连接真实后端。
-本轮实现会话、人格、项目、消息 Queue/Steer、取消、进度查询、持久计划及 Deep Agents 模型/文件工具。
+本轮实现会话、人格、项目、子智能体、消息 Queue/Steer、取消、进度查询、持久计划及 Deep Agents 模型/文件工具。
 完整记忆整理、外部 harness、推送通知与生产部署留作后续。模型未配置时明确失败，不返回模拟助手回复。
 
 ## 公共约定
@@ -20,9 +20,14 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 
 - `GET /v1/status`: `{model_ready: bool, worker_online: bool, execution_available: bool}`，可增加说明字段。
 - `GET /v1/assistant`, `PUT /v1/assistant`: `{name, persona}`，人格是用户编辑的持久文本。
+- `GET /v1/agents`, `POST /v1/agents`, `GET/PUT/DELETE /v1/agents/{id}`：子智能体配置
+  `{id,kind: service|custom,service: string|null,name,description,instructions,tools: string[],visible,created_at,updated_at}`。
+  创建/修改输入 `{name,description,instructions,tools,visible}`；固定服务助手不可删除，且工具由服务固定。删除自建助手前需完成其排队或运行中的任务；旧会话保留并转为主知行会话。
+  自建助手可选工具仅为 `inspect_environment`、`list_directory`、`read_text_file`、`read_document`、`write_text_file`、`fetch_public_page`；服务器的目录授权仍生效。
+- `GET /v1/finance/observations`：`{balances: FinanceObservation[],recent: FinanceObservation[]}`。固定财务助手专用工具可记录/列出/删除用户明确提供的 CNY 金额观察值；`balance` 为各平台最后一次观察，`income`/`expense` 取最近 20 条。记录包含 `id,kind,platform,amount,note,conversation_id,created_at`。这不是实时账户查询或自动对账接口。
 - `GET /v1/projects`, `POST /v1/projects {name}`: 项目 `{id,name,workspace_path,created_at}`；路径由服务器创建。
-- `GET /v1/conversations`, `POST /v1/conversations {title,project_id?: string|null}`:
-  会话 `{id,title,project_id,blocked: bool,created_at,updated_at}`。
+- `GET /v1/conversations`, `POST /v1/conversations {title,project_id?: string|null,agent_id?: string|null}`:
+  会话 `{id,title,project_id,agent_id,blocked: bool,created_at,updated_at}`；`agent_id=null` 为主知行。
 - `GET /v1/conversations/{id}`：单个会话及当前 blocked 状态。
 - `GET /v1/conversations/{id}/messages?cursor=&limit=`: 按序号升序，消息
   `{id,conversation_id,role: user|assistant,content,intent: queue|steer,run_id,status: accepted|applied|rejected,created_at,seq}`。
@@ -79,5 +84,5 @@ Store(settings) 的 worker 接口（同步短事务，每次调用独立连接�
 运行时接口 `async run_agent(settings, run, *, persona, emit, controls, acknowledge) -> str`：
 emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可通过 asyncio task cancellation 打断，
 模型与工具步边界检查 controls；steer 使用稳定消息 ID 注入真实模型上下文，checkpoint 落盘后才 acknowledge。
-模型配置由 run.kind 对应 role 选择；LangGraph thread 以 conversation_id 标识，checkpoint 使用 data_dir 下独立 SQLite。
+模型配置由 run.kind 对应 role 选择；LangGraph thread 以 conversation_id 标识，checkpoint 使用 data_dir 下独立 SQLite。worker 在运行开始时读取子智能体配置快照；主知行只委派已配置命名助手，直接子智能体会话只获得自己的工具。
 初版崩溃中的运行标记 interrupted；用户清除阻塞后可发送新要求，不宣称任意工具能自动安全续跑。

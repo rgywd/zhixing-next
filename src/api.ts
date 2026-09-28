@@ -5,6 +5,19 @@ export type Page<T> = {
   previous_cursor?: string | null;
 };
 export type Assistant = { name: string; persona: string };
+export type AgentTool = "inspect_environment" | "list_directory" | "read_text_file" | "read_document" | "write_text_file" | "fetch_public_page" | "record_finance_observation" | "list_finance_observations" | "remove_finance_observation";
+export type FinanceObservation = { id: string; kind: "balance" | "income" | "expense"; platform: string; amount: string; note: string; created_at: string };
+export type FinanceSummary = { balances: FinanceObservation[]; recent: FinanceObservation[] };
+export type Agent = {
+  id: string;
+  kind: "service" | "custom";
+  service: string | null;
+  name: string;
+  description: string;
+  instructions: string;
+  tools: AgentTool[];
+  visible: boolean;
+};
 export type ServiceStatus = {
   model_ready: boolean;
   worker_online: boolean;
@@ -15,6 +28,7 @@ export type Conversation = {
   id: string;
   title: string;
   project_id: string | null;
+  agent_id: string | null;
   blocked: boolean;
   updated_at: string;
 };

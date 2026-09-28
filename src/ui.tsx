@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import {
   Pressable,
+  Image,
   StyleSheet,
   Text,
   TextInput,
@@ -78,9 +79,7 @@ export function Empty({
 }) {
   return (
     <View style={s.empty}>
-      <View style={s.brand}>
-        <Text style={s.brandText}>知</Text>
-      </View>
+      <Image source={require("../assets/icon.png")} style={s.brand} />
       <Text accessibilityRole="header" style={s.emptyTitle}>
         {title}
       </Text>
@@ -125,15 +124,7 @@ export const s = StyleSheet.create({
     alignItems: "center",
     gap: 12,
   },
-  brand: {
-    width: 42,
-    height: 42,
-    borderRadius: 15,
-    backgroundColor: colors.green,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  brandText: { color: colors.white, fontSize: 23, fontWeight: "500" },
+  brand: { width: 42, height: 42, borderRadius: 15 },
   eyebrow: {
     fontSize: 10,
     letterSpacing: 2.5,
@@ -190,20 +181,37 @@ export const s = StyleSheet.create({
     flexDirection: "row",
     borderTopWidth: 1,
     borderTopColor: colors.line,
-    paddingHorizontal: 14,
-    paddingTop: 7,
-    gap: 6,
+    backgroundColor: colors.white,
+    paddingHorizontal: 8,
+    paddingTop: 8,
+    gap: 3,
   },
   tab: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 50,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 12,
   },
+  aiTab: { backgroundColor: "transparent" },
+  aiButton: {
+    width: 54,
+    height: 54,
+    marginTop: -16,
+    borderRadius: 27,
+    backgroundColor: colors.green,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 3,
+    borderColor: colors.white,
+  },
+  activeAiButton: { backgroundColor: colors.ink },
+  aiButtonText: { color: colors.white, fontSize: 17, fontWeight: "700" },
   activeTab: { backgroundColor: colors.pale },
-  tabText: { color: colors.muted, fontSize: 14, fontWeight: "500" },
+  tabText: { color: colors.muted, fontSize: 12, fontWeight: "600" },
   activeTabText: { color: colors.green, fontWeight: "700" },
+  backLink: { minHeight: 44, paddingHorizontal: 22, justifyContent: "center" },
+  backLinkText: { color: colors.green, fontSize: 14, fontWeight: "600" },
   empty: {
     flex: 1,
     padding: 32,

@@ -27,6 +27,19 @@ class ProjectInput(Input):
 class ConversationInput(Input):
     title: Title
     project_id: Identifier | None = None
+    agent_id: Identifier | None = None
+
+
+class AgentInput(Input):
+    name: Title
+    description: str = Field(min_length=1, max_length=1000)
+    instructions: str = Field(default="", max_length=20_000)
+    tools: list[Literal["inspect_environment", "list_directory", "read_text_file", "read_document", "write_text_file", "fetch_public_page", "record_finance_observation", "list_finance_observations", "remove_finance_observation"]] = Field(default_factory=list, max_length=9)
+    visible: bool = True
+
+
+class AgentUpdate(AgentInput):
+    pass
 
 
 class MessageInput(Input):

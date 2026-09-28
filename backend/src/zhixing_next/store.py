@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,9 +34,11 @@ def _record(row):
     result = dict(row)
     result.pop("request_json", None)
     result.pop("workspace_path", None)
-    for key in ("blocked", "cancel_requested", "enabled"):
+    for key in ("blocked", "cancel_requested", "enabled", "visible"):
         if key in result:
             result[key] = bool(result[key])
+    if "tools_json" in result:
+        result["tools"] = json.loads(result.pop("tools_json"))
     return result
 
 
@@ -51,13 +54,22 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 1:
+            if version > 3:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
                 for statement in _SCHEMA:
                     db.execute(statement)
-                db.execute("PRAGMA user_version=1")
+            if version < 2:
+                db.execute("CREATE TABLE agents(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('service','custom')),service TEXT UNIQUE,name TEXT NOT NULL,description TEXT NOT NULL,instructions TEXT NOT NULL,tools_json TEXT NOT NULL,visible INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)")
+                db.execute("ALTER TABLE conversations ADD COLUMN agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL")
+                now = timestamp()
+                db.execute("INSERT INTO agents(id,kind,service,name,description,instructions,tools_json,visible,created_at,updated_at) VALUES('finance','service','finance','财务助手','整理账户、收支与扣费问题。','只记录用户明确提供的金额，不猜测扣款链路。记录是观察值，不自动对账或计算总资产；截图识别尚未接入。','[]',1,?,?)", (now, now))
+                db.execute("PRAGMA user_version=2")
+            if version < 3:
+                db.execute("CREATE TABLE finance_observations(id TEXT PRIMARY KEY,kind TEXT NOT NULL CHECK(kind IN ('balance','income','expense')),platform TEXT NOT NULL,amount TEXT NOT NULL,note TEXT NOT NULL,conversation_id TEXT NOT NULL REFERENCES conversations(id),created_at TEXT NOT NULL)")
+                db.execute("UPDATE agents SET tools_json='[\"list_finance_observations\",\"record_finance_observation\",\"remove_finance_observation\"]' WHERE id='finance'")
+                db.execute("PRAGMA user_version=3")
             db.commit()
 
     @contextmanager
@@ -112,6 +124,67 @@ class Store:
             db.execute("UPDATE assistant SET name=?,persona=? WHERE id=1", (name, persona))
         return {"name": name, "persona": persona}
 
+    def list_agents(self):
+        with self._connection() as db:
+            return {"items": [_record(row) for row in db.execute("SELECT * FROM agents ORDER BY CASE kind WHEN 'service' THEN 0 ELSE 1 END,created_at,id").fetchall()], "next_cursor": None}
+
+    def get_agent(self, agent_id):
+        with self._connection() as db:
+            return _record(self._require(db, "agents", agent_id))
+
+    def create_agent(self, *, name, description, instructions, tools, visible):
+        if set(tools) - {"inspect_environment", "list_directory", "read_text_file", "read_document", "write_text_file", "fetch_public_page"}:
+            raise StoreError("tool_not_allowed", "This tool belongs to a fixed service agent", 422)
+        identifier, now = str(uuid4()), timestamp()
+        with self._connection(write=True) as db:
+            db.execute("INSERT INTO agents(id,kind,service,name,description,instructions,tools_json,visible,created_at,updated_at) VALUES(?,'custom',NULL,?,?,?,?,?,?,?)", (identifier, name, description, instructions, _json(sorted(set(tools))), visible, now, now))
+            return _record(self._require(db, "agents", identifier))
+
+    def update_agent(self, agent_id, *, name, description, instructions, tools, visible):
+        with self._connection(write=True) as db:
+            agent = self._require(db, "agents", agent_id)
+            if agent["kind"] == "service" and sorted(set(tools)) != json.loads(agent["tools_json"]):
+                raise StoreError("tool_not_allowed", "Service agent tools are fixed by the service", 422)
+            db.execute("UPDATE agents SET name=?,description=?,instructions=?,tools_json=?,visible=?,updated_at=? WHERE id=?", (name, description, instructions, _json(sorted(set(tools))), visible, timestamp(), agent_id))
+            return _record(self._require(db, "agents", agent_id))
+
+    def delete_agent(self, agent_id):
+        with self._connection(write=True) as db:
+            agent = self._require(db, "agents", agent_id)
+            if agent["kind"] == "service":
+                raise StoreError("fixed_agent", "Service agents cannot be deleted")
+            active = db.execute("SELECT 1 FROM runs r JOIN conversations c ON c.id=r.conversation_id WHERE c.agent_id=? AND r.status IN ('queued','running') LIMIT 1", (agent_id,)).fetchone()
+            if active:
+                raise StoreError("agent_busy", "Finish or cancel this agent's queued work first")
+            db.execute("DELETE FROM agents WHERE id=?", (agent_id,))
+
+    def record_finance_observation(self, *, kind, platform, amount, note, conversation_id):
+        if kind not in {"balance", "income", "expense"} or not 1 <= len(platform.strip()) <= 100 or len(note) > 1000:
+            raise StoreError("invalid_finance_record", "Invalid finance observation", 422)
+        try:
+            value = Decimal(amount)
+        except (InvalidOperation, ValueError):
+            raise StoreError("invalid_finance_record", "Amount must be a decimal number", 422) from None
+        if not value.is_finite() or value < 0 or value >= Decimal("1000000000000") or value.as_tuple().exponent < -2:
+            raise StoreError("invalid_finance_record", "Amount must be nonnegative with at most two decimal places", 422)
+        identifier = str(uuid4())
+        with self._connection(write=True) as db:
+            self._require(db, "conversations", conversation_id)
+            db.execute("INSERT INTO finance_observations VALUES(?,?,?,?,?,?,?)", (identifier, kind, platform.strip(), f"{value:.2f}", note.strip(), conversation_id, timestamp()))
+            return dict(db.execute("SELECT * FROM finance_observations WHERE id=?", (identifier,)).fetchone())
+
+    def list_finance_observations(self):
+        with self._connection() as db:
+            balances = db.execute("SELECT * FROM finance_observations WHERE kind='balance' AND rowid IN (SELECT MAX(rowid) FROM finance_observations WHERE kind='balance' GROUP BY platform) ORDER BY platform").fetchall()
+            recent = db.execute("SELECT * FROM finance_observations WHERE kind!='balance' ORDER BY rowid DESC LIMIT 20").fetchall()
+            return {"balances": [dict(row) for row in balances], "recent": [dict(row) for row in recent]}
+
+    def remove_finance_observation(self, observation_id):
+        with self._connection(write=True) as db:
+            changed = db.execute("DELETE FROM finance_observations WHERE id=?", (observation_id,)).rowcount
+            if not changed:
+                raise StoreError("not_found", "Finance observation not found", 404)
+
     def create_project(self, name):
         identifier = str(uuid4())
         path = self.settings.workspace_root / "projects" / identifier
@@ -135,10 +208,12 @@ class Store:
                 result.pop("seq", None)
             return page
 
-    def create_conversation(self, title, project_id=None):
+    def create_conversation(self, title, project_id=None, agent_id=None):
         identifier = str(uuid4())
         with self._connection() as db:
             project = self._require(db, "projects", project_id) if project_id else None
+            if agent_id:
+                self._require(db, "agents", agent_id)
         workspace = (
             Path(project["workspace_path"])
             if project
@@ -148,8 +223,8 @@ class Store:
         now = timestamp()
         with self._connection(write=True) as db:
             db.execute(
-                "INSERT INTO conversations(id,title,project_id,workspace_path,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-                (identifier, title, project_id, str(workspace.resolve()), now, now),
+                "INSERT INTO conversations(id,title,project_id,workspace_path,created_at,updated_at,agent_id) VALUES(?,?,?,?,?,?,?)",
+                (identifier, title, project_id, str(workspace.resolve()), now, now, agent_id),
             )
             return _record(self._require(db, "conversations", identifier))
 
@@ -294,7 +369,7 @@ class Store:
     def claim_next(self, kind):
         with self._connection(write=True) as db:
             row = db.execute(
-                """SELECT r.*,c.workspace_path FROM runs r JOIN conversations c ON c.id=r.conversation_id
+                """SELECT r.*,c.workspace_path,c.agent_id FROM runs r JOIN conversations c ON c.id=r.conversation_id
                 WHERE r.kind=? AND r.status='queued' AND c.blocked=0
                   AND NOT EXISTS(SELECT 1 FROM runs active WHERE active.conversation_id=r.conversation_id AND active.status='running')
                   AND NOT EXISTS(SELECT 1 FROM runs earlier WHERE earlier.conversation_id=r.conversation_id AND earlier.status='queued' AND earlier.seq<r.seq)
@@ -309,6 +384,7 @@ class Store:
             self._event(db, row["id"], "started", {})
             result = _record(self._require(db, "runs", row["id"]))
             result["workspace_path"] = row["workspace_path"]
+            result["agent_id"] = row["agent_id"]
             return result
 
     def get_controls(self, run_id):

@@ -177,7 +177,8 @@ Deep Agents / LangGraph 仍负责模型与工具循环，第一版不接入 Code
 - [StateBackend](https://docs.langchain.com/oss/python/deepagents/backends) 是会话状态中的虚拟文件系统；
   它本身不提供 Linux Shell。代码执行通过 [sandbox backend](https://docs.langchain.com/oss/python/deepagents/sandboxes) 接入。
 - 优先评估现有 sandbox 集成。宿主机上的 `LocalShellBackend` 不提供隔离，不作为服务端任意代码执行的默认方案。
-- 是否开启任务规划、内置子智能体和长期记忆按产品需求确定，不因为框架提供就全部启用。
+- 产品子智能体配置保存在 SQLite；会话以 `agent_id` 绑定直接交谈对象，主知行只可委派配置中的命名助手。Deep Agents 默认的 `general-purpose` 被覆盖并在运行时拒绝调用；每个助手只接收其配置允许的物理工具，额外目录仍受服务端授权约束。
+- 是否开启任务规划和长期记忆按产品需求确定，不因为框架提供就全部启用。
 
 运行状态、客户端事件和 LangGraph 内部状态各有归属，需要定义一致性和恢复策略；选定框架不等于这些产品语义自动完成。
 

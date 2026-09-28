@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   AppState,
   KeyboardAvoidingView,
+  Image,
   Modal,
   Platform,
   Pressable,
@@ -18,8 +19,10 @@ import {
   normalizeServerUrl,
   request,
   type Assistant,
+  type Agent,
   type Connection,
   type Conversation,
+  type FinanceSummary,
   type MessageInput,
   type Page,
   type Project,
@@ -27,8 +30,10 @@ import {
   type ServiceStatus,
 } from "./api";
 import { ChatPanel } from "./ChatPanel";
+import { HomePanel, LifePanel, ToolboxPanel, WorkPanel } from "./OverviewPanels";
 import { SchedulesPanel } from "./SchedulesPanel";
-import { SettingsPanel, Welcome } from "./SettingsPanel";
+import { ConnectionForm, SettingsPanel } from "./SettingsPanel";
+import { AgentsPanel } from "./AgentsPanel";
 import {
   draftKey,
   clearDraft,
@@ -37,6 +42,8 @@ import {
   saveDraft,
 } from "./storage";
 import { Button, colors, Empty, Field, humanError, s, timeLabel } from "./ui";
+
+type Tab = "home" | "life" | "chat" | "work" | "toolbox";
 
 export default function AssistantApp() {
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -97,11 +104,86 @@ export default function AssistantApp() {
               connectionError={error}
             />
           ) : (
-            <Welcome onConnect={connect} error={error} />
+            <DisconnectedShell onConnect={connect} error={error} />
           )}
         </KeyboardAvoidingView>
       </SafeAreaView>
     </SafeAreaProvider>
+  );
+}
+
+function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => void }) {
+  return (
+    <View style={s.tabs}>
+      {(
+        [
+          { id: "home", label: "首页" },
+          { id: "life", label: "生活" },
+          { id: "chat", label: "AI" },
+          { id: "work", label: "工作" },
+          { id: "toolbox", label: "工具箱" },
+        ] as const
+      ).map((item) => (
+        <Pressable
+          accessibilityRole="tab"
+          accessibilityLabel={item.label}
+          accessibilityState={{ selected: value === item.id }}
+          key={item.id}
+          onPress={() => onChange(item.id)}
+          style={[s.tab, item.id === "chat" ? s.aiTab : value === item.id && s.activeTab]}
+        >
+          {item.id === "chat" ? (
+            <View style={[s.aiButton, value === "chat" && s.activeAiButton]}>
+              <Text style={s.aiButtonText}>AI</Text>
+            </View>
+          ) : (
+            <Text style={[s.tabText, value === item.id && s.activeTabText]}>
+              {item.label}
+            </Text>
+          )}
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection) => void; error: string }) {
+  const [tab, setTab] = useState<Tab>("home");
+  return (
+    <View style={s.body}>
+      <View style={s.header}>
+        <Image source={require("../assets/icon.png")} style={s.brand} />
+        <View style={s.grow}>
+          <Text style={s.eyebrow}>ZHIXING · PERSONAL ASSISTANT</Text>
+          <Text style={s.heading}>知行</Text>
+        </View>
+        <Pressable accessibilityRole="button" onPress={() => setTab("chat")} style={s.chip}>
+          <Text style={s.chipText}>未连接</Text>
+        </Pressable>
+      </View>
+      {tab === "home" ? (
+        <HomePanel conversations={[]} onChat={() => setTab("chat")}
+          onOpenConversation={() => setTab("chat")} onLife={() => setTab("life")}
+          onWork={() => setTab("work")} />
+      ) : tab === "life" ? (
+        <LifePanel onFinance={() => setTab("chat")} finance={{ balances: [], recent: [] }} />
+      ) : tab === "work" ? (
+        <WorkPanel conversations={[]} projects={[]} schedules={[]}
+          onOpenConversation={() => setTab("chat")}
+          onChooseConversation={() => setTab("chat")}
+          onSchedules={() => setTab("chat")} />
+      ) : tab === "toolbox" ? (
+        <ToolboxPanel onSettings={() => setTab("chat")} onAgents={() => setTab("chat")} />
+      ) : (
+        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
+          <Text style={s.heading}>连接知行</Text>
+          <Text style={s.muted}>连接后可以聊天、运行任务，并看到自己的真实资料。</Text>
+          {error ? <Text style={s.error}>{error}</Text> : null}
+          <ConnectionForm onConnect={onConnect} />
+        </ScrollView>
+      )}
+      <BottomTabs value={tab} onChange={setTab} />
+    </View>
   );
 }
 
@@ -116,12 +198,16 @@ function Connected({
   onDisconnect: () => void;
   connectionError: string;
 }) {
-  const [tab, setTab] = useState<"chat" | "schedules" | "settings">("chat");
+  const [tab, setTab] = useState<Tab>("home");
+  const [workView, setWorkView] = useState<"overview" | "schedules">("overview");
+  const [toolView, setToolView] = useState<"overview" | "settings" | "agents">("overview");
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [status, setStatus] = useState<ServiceStatus | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
+  const [finance, setFinance] = useState<FinanceSummary>({ balances: [], recent: [] });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedRef = useRef(selectedId);
   const [conversationCursor, setConversationCursor] = useState<string | null>(
@@ -140,6 +226,25 @@ function Connected({
   const alive = useRef(true);
   const refresh = useCallback(() => refreshRef.current(), []);
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
+  function openMainChat() {
+    const main = [...conversations].reverse().find((item) => !item.agent_id);
+    setSelectedId(main?.id ?? null);
+    selectedRef.current = main?.id ?? null;
+    setTab("chat");
+  }
+  function selectTab(next: typeof tab) {
+    if (next === "chat") openMainChat();
+    else setTab(next);
+    if (next === "work") setWorkView("overview");
+    if (next === "toolbox") setToolView("overview");
+  }
+  function openConversation(id: string) {
+    setSelectedId(id);
+    selectedRef.current = id;
+    setShowConversations(false);
+    setTab("chat");
+    refresh();
+  }
   useEffect(() => {
     selectedRef.current = selectedId;
   }, [selectedId]);
@@ -154,7 +259,7 @@ function Connected({
       if (!active || polling || AppState.currentState === "background") return;
       polling = true;
       try {
-        const [health, person, chats, folders, plans, current] =
+        const [health, person, chats, folders, plans, agentPage, financePage, current] =
           await Promise.all([
             request<ServiceStatus>(connection, "/status", {
               signal: controller.signal,
@@ -173,6 +278,8 @@ function Connected({
             request<Page<Schedule>>(connection, "/schedules?limit=100", {
               signal: controller.signal,
             }),
+            request<Page<Agent>>(connection, "/agents", { signal: controller.signal }),
+            request<FinanceSummary>(connection, "/finance/observations", { signal: controller.signal }),
             selectedRef.current
               ? request<Conversation>(
                   connection,
@@ -189,13 +296,15 @@ function Connected({
           mergeById(old, [...chats.items, ...(current ? [current] : [])]),
         );
         setSchedules((old) => mergeById(old, plans.items));
+        setAgents(agentPage.items);
+        setFinance(financePage);
         if (initial) {
           setConversationCursor(chats.previous_cursor ?? null);
           setScheduleCursor(plans.next_cursor);
           initial = false;
         }
         setSelectedId(
-          (old) => old ?? chats.items[chats.items.length - 1]?.id ?? null,
+          (old) => old ?? [...chats.items].reverse().find((item) => !item.agent_id)?.id ?? null,
         );
         setSyncError("");
       } catch (e) {
@@ -227,7 +336,7 @@ function Connected({
     };
   }, [connection]);
 
-  async function newConversation(explore = false) {
+  async function newConversation(explore = false, agentId: string | null = null) {
     if (busy) return;
     setBusy(true);
     setError("");
@@ -238,8 +347,9 @@ function Connected({
         {
           method: "POST",
           body: {
-            title: explore ? "认识运行环境" : title.trim() || "新的对话",
-            project_id: explore ? null : projectId,
+            title: explore ? "认识运行环境" : agentId ? `${agents.find((item) => item.id === agentId)?.name ?? "助手"}对话` : title.trim() || "新的对话",
+            project_id: explore || agentId ? null : projectId,
+            agent_id: agentId,
           },
         },
       );
@@ -280,6 +390,11 @@ function Connected({
     } finally {
       if (alive.current) setBusy(false);
     }
+  }
+  function openAgent(agentId: string) {
+    const existing = [...conversations].reverse().find((item) => item.agent_id === agentId);
+    if (existing) openConversation(existing.id);
+    else void newConversation(false, agentId);
   }
   async function newProject() {
     if (!projectName.trim() || busy) return;
@@ -345,9 +460,7 @@ function Connected({
   return (
     <View style={s.body}>
       <View style={s.header}>
-        <View style={s.brand}>
-          <Text style={s.brandText}>知</Text>
-        </View>
+        <Image source={require("../assets/icon.png")} style={s.brand} />
         <View style={s.grow}>
           <Text style={s.eyebrow}>ZHIXING · PERSONAL ASSISTANT</Text>
           <Text style={s.heading}>{assistant?.name || "知行"}</Text>
@@ -385,7 +498,17 @@ function Connected({
           {error || connectionError}
         </Text>
       ) : null}
-      {tab === "chat" ? (
+      {tab === "home" ? (
+        <HomePanel
+          conversations={conversations}
+          onChat={openMainChat}
+          onOpenConversation={openConversation}
+          onLife={() => selectTab("life")}
+          onWork={() => selectTab("work")}
+        />
+      ) : tab === "life" ? (
+        <LifePanel onFinance={() => openAgent("finance")} finance={finance} />
+      ) : tab === "chat" ? (
         <>
           <Pressable
             accessibilityRole="button"
@@ -399,7 +522,7 @@ function Connected({
             }}
           >
             <Text numberOfLines={1} style={[s.title, s.grow]}>
-              {selected?.title ?? "选择一段对话"}
+              {selected?.agent_id ? `${agents.find((item) => item.id === selected.agent_id)?.name ?? "子智能体"} · ${selected.title}` : selected?.title ?? "选择一段对话"}
             </Text>
             <Text style={s.muted}>切换 / 新建 ›</Text>
           </Pressable>
@@ -409,7 +532,7 @@ function Connected({
               key={selected.id}
               connection={connection}
               conversation={selected}
-              assistantName={assistant?.name || "知行"}
+              assistantName={agents.find((item) => item.id === selected.agent_id)?.name ?? assistant?.name ?? "知行"}
               onRefresh={refresh}
             />
           ) : loading ? (
@@ -427,65 +550,72 @@ function Connected({
             </View>
           )}
         </>
-      ) : tab === "schedules" ? (
-        <SchedulesPanel
-          connection={connection}
-          schedules={schedules}
-          conversation={selected}
-          conversationName={(id) =>
-            conversations.find((item) => item.id === id)?.title ??
-            `会话 ${id.slice(0, 8)}`
-          }
-          onRefresh={refresh}
-          onChanged={(schedule) =>
-            setSchedules((old) => mergeById(old, [schedule]))
-          }
-          hasMore={!!scheduleCursor}
-          loadMore={() => {
-            void loadMore("schedules");
-          }}
-        />
-      ) : assistant ? (
-        <SettingsPanel
-          connection={connection}
-          assistant={assistant}
-          onAssistant={setAssistant}
-          onConnect={onConnect}
-          onDisconnect={onDisconnect}
-          onExplore={() => {
-            void newConversation(true);
-          }}
-        />
+      ) : tab === "work" ? (
+        workView === "overview" ? (
+          <WorkPanel
+            conversations={conversations}
+            projects={projects}
+            schedules={schedules}
+            onOpenConversation={openConversation}
+            onChooseConversation={() => setShowConversations(true)}
+            onSchedules={() => setWorkView("schedules")}
+          />
+        ) : (
+          <>
+            <Pressable accessibilityRole="button" onPress={() => setWorkView("overview")} style={s.backLink}>
+              <Text style={s.backLinkText}>‹ 返回工作</Text>
+            </Pressable>
+            <SchedulesPanel
+              connection={connection}
+              schedules={schedules}
+              conversation={selected}
+              conversationName={(id) =>
+                conversations.find((item) => item.id === id)?.title ??
+                `会话 ${id.slice(0, 8)}`
+              }
+              onRefresh={refresh}
+              onChanged={(schedule) =>
+                setSchedules((old) => mergeById(old, [schedule]))
+              }
+              hasMore={!!scheduleCursor}
+              loadMore={() => {
+                void loadMore("schedules");
+              }}
+            />
+          </>
+        )
+      ) : toolView === "overview" ? (
+        <ToolboxPanel onSettings={() => setToolView("settings")} onAgents={() => setToolView("agents")} />
       ) : (
-        <ScrollView contentContainerStyle={s.content}>
-          <Text style={s.title}>连接设置</Text>
-          <Text style={s.muted}>服务连接恢复后，可以编辑人格设定。</Text>
-          <Button secondary onPress={onDisconnect}>
-            移除当前连接，重新设置
-          </Button>
-        </ScrollView>
-      )}
-      <View style={s.tabs}>
-        {(
-          [
-            { id: "chat", label: "对话" },
-            { id: "schedules", label: "计划" },
-            { id: "settings", label: "我们" },
-          ] as const
-        ).map((item) => (
-          <Pressable
-            accessibilityRole="tab"
-            accessibilityState={{ selected: tab === item.id }}
-            key={item.id}
-            onPress={() => setTab(item.id)}
-            style={[s.tab, tab === item.id && s.activeTab]}
-          >
-            <Text style={[s.tabText, tab === item.id && s.activeTabText]}>
-              {item.label}
-            </Text>
+        <>
+          <Pressable accessibilityRole="button" onPress={() => setToolView("overview")} style={s.backLink}>
+            <Text style={s.backLinkText}>‹ 返回工具箱</Text>
           </Pressable>
-        ))}
-      </View>
+          {toolView === "agents" ? (
+            <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />
+          ) : assistant ? (
+            <SettingsPanel
+              connection={connection}
+              assistant={assistant}
+              onAssistant={setAssistant}
+              onConnect={onConnect}
+              onDisconnect={onDisconnect}
+              onExplore={() => {
+                void newConversation(true);
+              }}
+            />
+          ) : (
+            <ScrollView contentContainerStyle={s.content}>
+              <Text style={s.title}>连接设置</Text>
+              <Text style={s.muted}>服务连接恢复后，可以编辑人格设定。</Text>
+              <Button secondary onPress={onDisconnect}>
+                移除当前连接，重新设置
+              </Button>
+            </ScrollView>
+          )}
+        </>
+      )}
+      <BottomTabs value={tab} onChange={selectTab} />
       <Modal
         visible={showConversations}
         animationType="slide"
@@ -581,11 +711,7 @@ function Connected({
                   key={conversation.id}
                   accessibilityRole="button"
                   onPress={() => {
-                    setSelectedId(conversation.id);
-                    selectedRef.current = conversation.id;
-                    setShowConversations(false);
-                    setTab("chat");
-                    refresh();
+                    openConversation(conversation.id);
                   }}
                   style={[
                     s.card,

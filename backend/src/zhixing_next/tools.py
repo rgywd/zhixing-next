@@ -11,7 +11,7 @@ import uuid
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any, Iterator, Literal
 
 from langchain_core.tools import tool
 
@@ -415,3 +415,35 @@ def create_file_tools(settings: Settings, workspace: Path) -> list[Any]:
         return access.read_document(path, start=start, count=count)
 
     return [inspect_environment, list_directory, read_text_file, write_text_file, read_document]
+
+
+def create_finance_tools(settings: Settings, conversation_id: str) -> list[Any]:
+    from .store import Store
+
+    store = Store(settings)
+
+    @tool
+    async def record_finance_observation(
+        kind: Literal["balance", "income", "expense"],
+        platform: str,
+        amount: str,
+        note: str = "",
+    ) -> dict[str, Any]:
+        """Save one explicit user-provided CNY amount. Never infer an account balance from purchases or double-count a transfer. Use a decimal string such as '12.50'."""
+        return store.record_finance_observation(
+            kind=kind, platform=platform, amount=amount, note=note,
+            conversation_id=conversation_id,
+        )
+
+    @tool
+    async def list_finance_observations() -> dict[str, Any]:
+        """List latest user-provided balances per platform and recent income or expense observations. These are not verified live account balances."""
+        return store.list_finance_observations()
+
+    @tool
+    async def remove_finance_observation(observation_id: str) -> dict[str, bool]:
+        """Remove a mistaken finance observation only when the user explicitly corrects or deletes it; obtain its ID from list_finance_observations."""
+        store.remove_finance_observation(observation_id)
+        return {"deleted": True}
+
+    return [record_finance_observation, list_finance_observations, remove_finance_observation]

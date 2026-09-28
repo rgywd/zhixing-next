@@ -21,6 +21,8 @@ from . import files
 from .config import Settings, load_settings
 from .models import model_ready
 from .schemas import (
+    AgentInput,
+    AgentUpdate,
     AssistantInput,
     ConversationInput,
     MessageInput,
@@ -136,6 +138,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.put("/assistant")
     def update_assistant(body: AssistantInput):
         return store.set_assistant(**body.model_dump())
+
+    @router.get("/agents")
+    def agents():
+        return store.list_agents()
+
+    @router.post("/agents", status_code=201)
+    def create_agent(body: AgentInput):
+        return store.create_agent(**body.model_dump())
+
+    @router.get("/agents/{agent_id}")
+    def agent(agent_id: str):
+        return store.get_agent(agent_id)
+
+    @router.put("/agents/{agent_id}")
+    def update_agent(agent_id: str, body: AgentUpdate):
+        return store.update_agent(agent_id, **body.model_dump())
+
+    @router.delete("/agents/{agent_id}")
+    def delete_agent(agent_id: str):
+        store.delete_agent(agent_id)
+        return {"deleted": True}
+
+    @router.get("/finance/observations")
+    def finance_observations():
+        return store.list_finance_observations()
 
     @router.get("/projects")
     def projects(cursor: Cursor = 0, limit: Limit = 50):

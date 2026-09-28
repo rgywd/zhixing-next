@@ -14,6 +14,7 @@ from pydantic import Field
 from zhixing_next.config import ModelConfig, Settings
 from zhixing_next.models import ModelConfigurationError, create_model
 from zhixing_next.runtime import RunControls, RuntimeState, _prepare_checkpointer, run_agent
+from zhixing_next.store import Store
 
 
 class ScriptedModel(BaseChatModel):
@@ -119,6 +120,60 @@ async def test_real_graph_file_tool_and_persistent_conversation(tmp_path):
         "m1",
         "m2",
     ]
+
+
+async def test_named_subagent_delegation_and_direct_tool_boundary(tmp_path):
+    settings = make_settings(tmp_path)
+    finance = {
+        "id": "finance", "name": "财务助手", "description": "讨论财务问题",
+        "instructions": "不要猜金额", "tools": ["record_finance_observation", "list_finance_observations", "remove_finance_observation"],
+    }
+    delegated = make_run()
+    delegated["agents"] = [finance]
+    model = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "task", "args": {"description": "梳理用户提供的收支", "subagent_type": "finance"},
+            "id": "delegate-1", "type": "tool_call",
+        }]),
+        AIMessage(content="需要用户提供金额。"),
+        AIMessage(content="财务助手说需要用户提供金额。"),
+    ])
+    events = []
+
+    async def emit(kind, data):
+        events.append((kind, data))
+
+    assert await run_agent(settings, delegated, persona="", emit=emit,
+        controls=no_controls, acknowledge=ignore, model_override=model) == "财务助手说需要用户提供金额。"
+    assert ("tool", {"tool": "task", "tool_call_id": "delegate-1", "status": "completed"}) in events
+    direct = make_run("m2", "继续讨论")
+    direct["conversation_id"] = Store(settings).create_conversation("财务", agent_id="finance")["id"]
+    direct["agent"] = finance
+    direct_model = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "record_finance_observation",
+            "args": {"kind": "balance", "platform": "支付宝", "amount": "20.50", "note": "用户口述"},
+            "id": "finance-record", "type": "tool_call",
+        }]),
+        AIMessage(content="已记录用户口述余额。"),
+    ])
+    await run_agent(settings, direct, persona="", emit=ignore,
+        controls=no_controls, acknowledge=ignore, model_override=direct_model)
+    assert "task" not in direct_model.bound_names
+    assert "write_text_file" not in direct_model.bound_names
+    assert Store(settings).list_finance_observations()["balances"][0]["amount"] == "20.50"
+    refused = make_run("m3", "不要委派未知助手")
+    refused["conversation_id"] = "refused-agent"
+    refused["agents"] = [finance]
+    malicious = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "task", "args": {"description": "尝试", "subagent_type": "general-purpose"},
+            "id": "delegate-denied", "type": "tool_call",
+        }]),
+        AIMessage(content="无法调用未知助手。"),
+    ])
+    assert await run_agent(settings, refused, persona="", emit=ignore,
+        controls=no_controls, acknowledge=ignore, model_override=malicious) == "无法调用未知助手。"
 
 
 async def test_native_model_metadata_survives_checkpoint_and_is_removed_on_switch(

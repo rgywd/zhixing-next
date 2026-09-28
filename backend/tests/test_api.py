@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from zhixing_next.api import create_app
 from zhixing_next.config import ModelConfig, PathGrant, Settings
+from zhixing_next.store import StoreError
 
 
 @pytest.fixture
@@ -62,6 +63,61 @@ def test_persona_project_and_conversation_flow(client):
         ).status_code
         == 404
     )
+
+
+def test_agents_are_persistent_bound_and_conversation_owned(client):
+    finance = client.get("/v1/agents").json()["items"][0]
+    assert finance["id"] == "finance" and "record_finance_observation" in finance["tools"]
+    assert client.put("/v1/agents/finance", json={
+        "name": "小财", "description": "梳理收支", "instructions": "先问清平台",
+        "tools": finance["tools"], "visible": False,
+    }).json()["visible"] is False
+    assert client.put("/v1/agents/finance", json={
+        "name": "小财", "description": "梳理收支", "instructions": "",
+        "tools": ["read_text_file"], "visible": True,
+    }).status_code == 422
+    assert client.post("/v1/agents", json={
+        "name": "越界助手", "description": "不应持有财务工具",
+        "tools": ["record_finance_observation"],
+    }).status_code == 422
+    created = client.post("/v1/agents", json={
+        "name": "资料助手", "description": "读取资料", "instructions": "核对出处",
+        "tools": ["read_document"], "visible": True,
+    }).json()
+    conversation = client.post("/v1/conversations", json={
+        "title": "资料", "agent_id": created["id"],
+    }).json()
+    assert conversation["agent_id"] == created["id"]
+    client.post(f"/v1/conversations/{conversation['id']}/messages", json={
+        "id": "agent-run", "content": "读资料", "kind": "task",
+    })
+    assert client.delete(f"/v1/agents/{created['id']}").status_code == 409
+    run = client.app.state.store.claim_next("task")
+    assert run["agent_id"] == created["id"]
+    client.app.state.store.finish_run(run["id"], "completed", result="完成")
+    assert client.delete(f"/v1/agents/{created['id']}").json() == {"deleted": True}
+    assert client.get(f"/v1/conversations/{conversation['id']}").json()["agent_id"] is None
+    assert client.delete("/v1/agents/finance").status_code == 409
+    assert client.post("/v1/conversations", json={"title": "错误", "agent_id": "missing"}).status_code == 404
+    assert client.get("/v1/agents").json()["items"][0]["name"] == "小财"
+
+
+def test_finance_observations_show_latest_balances_without_inferred_totals(client):
+    store = client.app.state.store
+    conversation = store.create_conversation("财务", agent_id="finance")["id"]
+    first = store.record_finance_observation(kind="balance", platform="支付宝", amount="102.5", note="用户口述", conversation_id=conversation)
+    store.record_finance_observation(kind="balance", platform="支付宝", amount="90.00", note="新截图口述", conversation_id=conversation)
+    store.record_finance_observation(kind="expense", platform="淘宝", amount="12.50", note="购物", conversation_id=conversation)
+    for bad_amount in ("NaN", "12.345", "-1"):
+        with pytest.raises(StoreError, match="Amount"):
+            store.record_finance_observation(kind="expense", platform="淘宝", amount=bad_amount, note="", conversation_id=conversation)
+    summary = client.get("/v1/finance/observations").json()
+    assert [(item["platform"], item["amount"]) for item in summary["balances"]] == [("支付宝", "90.00")]
+    assert summary["recent"][0]["amount"] == "12.50"
+    assert "total" not in summary
+    assert client.get("/v1/finance/observations", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.delete("/v1/agents/finance").status_code == 409
+    store.remove_finance_observation(first["id"])
 
 
 def test_send_retry_control_cancel_and_progress(client):

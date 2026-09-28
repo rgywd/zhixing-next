@@ -6,7 +6,7 @@ import pytest
 
 from zhixing_next.config import Settings
 from zhixing_next.sqlite_policy import safe_journal_mode
-from zhixing_next.store import Store, StoreError
+from zhixing_next.store import _SCHEMA, Store, StoreError
 
 
 @pytest.fixture
@@ -23,8 +23,34 @@ def test_schema_and_persona_survive_reopen(store):
     reopened = Store(store.settings)
     assert reopened.get_assistant()["persona"] == "记得先核实出处"
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 1
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == safe_journal_mode().lower()
+
+
+def test_existing_v1_database_gains_agents_without_losing_conversations(tmp_path):
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "work")
+    settings.data_dir.mkdir()
+    with sqlite3.connect(settings.data_dir / "app.sqlite") as db:
+        for statement in _SCHEMA:
+            db.execute(statement)
+        db.execute("INSERT INTO conversations(id,title,workspace_path,created_at,updated_at) VALUES('old','旧对话','/tmp/old','2026-09-01','2026-09-01')")
+        db.execute("PRAGMA user_version=1")
+    upgraded = Store(settings)
+    assert upgraded.get_conversation("old")["agent_id"] is None
+    assert upgraded.get_agent("finance")["kind"] == "service"
+    assert Store(settings).get_agent("finance")["id"] == "finance"
+
+
+def test_v2_finance_agent_customization_survives_tool_upgrade(store):
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE finance_observations")
+        db.execute("UPDATE agents SET instructions='用户自定要求',tools_json='[]' WHERE id='finance'")
+        db.execute("PRAGMA user_version=2")
+    upgraded = Store(store.settings)
+    finance = upgraded.get_agent("finance")
+    assert finance["instructions"] == "用户自定要求"
+    assert "record_finance_observation" in finance["tools"]
+    assert upgraded.list_finance_observations() == {"balances": [], "recent": []}
 
 
 def test_duplicate_messages_and_competing_claims_are_atomic(store):

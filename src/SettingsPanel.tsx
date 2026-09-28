@@ -8,7 +8,7 @@ import {
   type ServiceStatus,
 } from "./api";
 import { saveConnection } from "./storage";
-import { Button, Empty, Field, humanError, s } from "./ui";
+import { Button, Field, humanError, s } from "./ui";
 
 export function ConnectionForm({
   initial,
@@ -81,29 +81,6 @@ export function ConnectionForm({
         {busy ? "正在验证连接…" : "保存并连接"}
       </Button>
     </View>
-  );
-}
-export function Welcome({
-  onConnect,
-  error,
-}: {
-  onConnect: (connection: Connection) => void;
-  error: string;
-}) {
-  return (
-    <ScrollView
-      keyboardShouldPersistTaps="handled"
-      contentContainerStyle={[s.content, { paddingTop: 20 }]}
-    >
-      <Empty title="你好，我是知行。">
-        陪你想清楚，也帮你做成事。{"\n"}先连接属于你的个人助手。
-      </Empty>
-      {error ? <Text style={s.error}>{error}</Text> : null}
-      <ConnectionForm onConnect={onConnect} />
-      <Text style={[s.muted, { textAlign: "center" }]}>
-        手机负责与你相伴，任务在你的服务器上继续。
-      </Text>
-    </ScrollView>
   );
 }
 export function SettingsPanel({
@@ -206,7 +183,6 @@ export function SettingsPanel({
           断开并移除令牌
         </Button>
       </View>
-      <Text style={[s.muted, { textAlign: 'center' }]}>界面样板房 · 页面布局待我们一起确定</Text>
     </ScrollView>
   );
 }
