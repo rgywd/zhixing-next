@@ -1,4 +1,5 @@
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Conversation, FinanceSummary, Project, Schedule } from "./api";
 import { Button, colors, s, timeLabel } from "./ui";
 
@@ -53,6 +54,49 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     fontSize: 11,
     fontWeight: "600",
+  },
+  workIntro: { minHeight: 125, justifyContent: "center", gap: 4 },
+  workGlow: {
+    position: "absolute", right: 8, top: -24, width: 170, height: 170,
+    borderRadius: 85, backgroundColor: "#E6EEE7", opacity: 0.7,
+  },
+  workGlowInner: {
+    position: "absolute", right: 20, top: 4, width: 112, height: 112,
+    borderRadius: 56, backgroundColor: "#D5E6D9", opacity: 0.7,
+  },
+  workHeroIcon: { position: "absolute", right: 39, top: 35, opacity: 0.55, transform: [{ rotate: "-14deg" }] },
+  workTitle: { color: colors.ink, fontSize: 36, lineHeight: 45, fontWeight: "700" },
+  workCard: {
+    backgroundColor: "#FFFFFF", borderRadius: 23, padding: 17, gap: 11,
+    shadowColor: colors.ink, shadowOpacity: 0.05, shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 12, elevation: 2,
+  },
+  workIcon: {
+    width: 44, height: 44, borderRadius: 16, backgroundColor: "#EAF3ED",
+    alignItems: "center", justifyContent: "center",
+  },
+  workRowIcon: { width: 38, height: 38, borderRadius: 14 },
+  workHeaderText: { flex: 1, gap: 2 },
+  workHeading: { color: colors.ink, fontSize: 18, fontWeight: "700" },
+  workSmall: { color: colors.muted, fontSize: 12, lineHeight: 18 },
+  workLink: { color: colors.green, fontSize: 13, fontWeight: "700" },
+  workConversation: {
+    flexDirection: "row", alignItems: "center", gap: 10, minHeight: 55,
+    borderBottomWidth: 1, borderBottomColor: "#ECEFEA",
+  },
+  workConversationLast: { borderBottomWidth: 0 },
+  workConversationText: { flex: 1, gap: 2 },
+  workConversationTitle: { color: colors.ink, fontSize: 14, fontWeight: "600" },
+  workProjectEmpty: { alignItems: "center", gap: 7, paddingTop: 4 },
+  workCreate: {
+    minHeight: 42, width: 176, alignSelf: "center", borderRadius: 22, backgroundColor: colors.green,
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7,
+  },
+  workCreateText: { color: "#FFFFFF", fontSize: 14, fontWeight: "700" },
+  workProject: { paddingVertical: 6, color: colors.ink, fontSize: 14 },
+  workManage: {
+    backgroundColor: colors.pale, borderRadius: 15, minHeight: 38,
+    paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 2,
   },
 });
 
@@ -155,6 +199,7 @@ export function WorkPanel({
   schedules,
   onOpenConversation,
   onChooseConversation,
+  onCreateProject,
   onSchedules,
 }: {
   conversations: Conversation[];
@@ -162,6 +207,7 @@ export function WorkPanel({
   schedules: Schedule[];
   onOpenConversation: (id: string) => void;
   onChooseConversation: () => void;
+  onCreateProject: () => void;
   onSchedules: () => void;
 }) {
   const recent = [...conversations]
@@ -169,56 +215,89 @@ export function WorkPanel({
     .slice(0, 3);
   return (
     <ScrollView contentContainerStyle={[s.content, styles.page]}>
-      <View style={styles.intro}>
+      <View style={styles.workIntro}>
+        <View style={styles.workGlow} />
+        <View style={styles.workGlowInner} />
+        <Ionicons name="briefcase-outline" size={72} color={colors.green} style={styles.workHeroIcon} />
         <Text style={styles.kicker}>WORK</Text>
-        <Text style={styles.pageTitle}>工作</Text>
+        <Text style={styles.workTitle}>工作</Text>
         <Text style={styles.description}>对话、项目和任务会在这里逐步连起来。</Text>
       </View>
-      <View style={s.card}>
+      <View style={styles.workCard}>
         <View style={styles.row}>
-          <Text style={styles.section}>最近对话</Text>
+          <View style={styles.workIcon}><Ionicons name="chatbubbles-outline" size={24} color={colors.green} /></View>
+          <View style={styles.workHeaderText}>
+            <Text style={styles.workHeading}>最近对话</Text>
+            <Text style={styles.workSmall}>当前显示最近对话，置顶对话以后加入。</Text>
+          </View>
           <Pressable accessibilityRole="button" onPress={onChooseConversation}>
-            <Text style={styles.link}>全部 ›</Text>
+            <Text style={styles.workLink}>全部 ›</Text>
           </Pressable>
         </View>
         {recent.length ? (
-          <View style={styles.list}>
+          <View>
             {recent.map((conversation, index) => (
               <Pressable
                 key={conversation.id}
                 accessibilityRole="button"
                 onPress={() => onOpenConversation(conversation.id)}
-                style={[styles.listItem, index === recent.length - 1 && styles.lastItem]}
+                style={[styles.workConversation, index === recent.length - 1 && styles.workConversationLast]}
               >
-                <Text numberOfLines={1} style={s.label}>{conversation.title}</Text>
-                <Text style={s.muted}>{timeLabel(conversation.updated_at)}</Text>
+                <View style={[styles.workIcon, styles.workRowIcon]}>
+                  <Ionicons name={conversation.agent_id === "finance" ? "stats-chart-outline" : "chatbubble-outline"} size={20} color={colors.green} />
+                </View>
+                <View style={styles.workConversationText}>
+                  <Text numberOfLines={1} style={styles.workConversationTitle}>{conversation.title}</Text>
+                  <Text style={styles.workSmall}>{timeLabel(conversation.updated_at)}</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.muted} />
               </Pressable>
             ))}
           </View>
         ) : (
           <Text style={styles.description}>还没有对话。普通聊天也可以从 AI 页开始。</Text>
         )}
-        <Text style={s.muted}>置顶对话会在这里加入，当前先显示最近对话。</Text>
       </View>
-      <View style={s.card}>
-        <Text style={styles.section}>项目</Text>
+      <View style={styles.workCard}>
+        <View style={styles.row}>
+          <View style={styles.workIcon}><Ionicons name="folder-outline" size={25} color={colors.green} /></View>
+          <View style={styles.workHeaderText}>
+            <Text style={styles.workHeading}>项目</Text>
+            <Text style={styles.workSmall}>
+              {projects.length ? `已有 ${projects.length} 个持久工作目录` : "把相关对话、文件和任务放在一起。"}
+            </Text>
+          </View>
+        </View>
         {projects.length ? (
           projects.slice(0, 4).map((project) => (
-            <Text key={project.id} style={s.text}>· {project.name}</Text>
+            <Text key={project.id} style={styles.workProject}>· {project.name}</Text>
           ))
         ) : (
-          <Text style={styles.description}>还没有项目。需要持久工作目录时，再从对话里创建。</Text>
+          <View style={styles.workProjectEmpty}>
+            <Ionicons name="folder-open-outline" size={42} color="#A9CCB5" />
+            <Text style={styles.workSmall}>还没有项目</Text>
+          </View>
         )}
         {projects.length > 4 ? <Text style={s.muted}>还有 {projects.length - 4} 个项目</Text> : null}
+        <Pressable accessibilityRole="button" onPress={onCreateProject} style={styles.workCreate}>
+          <Ionicons name="add" size={21} color="#FFFFFF" />
+          <Text style={styles.workCreateText}>创建项目</Text>
+        </Pressable>
       </View>
-      <Pressable accessibilityRole="button" onPress={onSchedules} style={s.card}>
+      <Pressable accessibilityRole="button" onPress={onSchedules} style={styles.workCard}>
         <View style={styles.row}>
-          <Text style={styles.section}>定时计划</Text>
-          <Text style={styles.link}>管理 ›</Text>
+          <View style={styles.workIcon}><Ionicons name="time-outline" size={25} color={colors.green} /></View>
+          <View style={styles.workHeaderText}>
+            <Text style={styles.workHeading}>定时计划</Text>
+            <Text style={styles.workSmall}>
+              {schedules.length ? `已有 ${schedules.length} 项计划` : "还没有计划"}
+            </Text>
+          </View>
+          <View style={styles.workManage}>
+            <Text style={styles.workLink}>管理</Text>
+            <Ionicons name="chevron-forward" size={16} color={colors.green} />
+          </View>
         </View>
-        <Text style={styles.description}>
-          {schedules.length ? `已有 ${schedules.length} 项计划` : "还没有计划，可以从这里安排一件事。"}
-        </Text>
       </Pressable>
     </ScrollView>
   );

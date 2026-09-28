@@ -13,6 +13,7 @@ import {
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import * as Crypto from "expo-crypto";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
 import {
   mergeById,
   normalizeServerUrl,
@@ -119,11 +120,11 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
     <View style={s.tabs}>
       {(
         [
-          { id: "home", label: "首页" },
-          { id: "life", label: "生活" },
-          { id: "chat", label: "AI" },
-          { id: "work", label: "工作" },
-          { id: "toolbox", label: "工具箱" },
+          { id: "home", label: "首页", icon: "home-outline" },
+          { id: "life", label: "生活", icon: "leaf-outline" },
+          { id: "chat", label: "AI", icon: null },
+          { id: "work", label: "工作", icon: "briefcase-outline" },
+          { id: "toolbox", label: "工具箱", icon: "grid-outline" },
         ] as const
       ).map((item) => (
         <Pressable
@@ -139,9 +140,12 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
               <Text style={s.aiButtonText}>AI</Text>
             </View>
           ) : (
-            <Text style={[s.tabText, value === item.id && s.activeTabText]}>
-              {item.label}
-            </Text>
+            <>
+              <Ionicons name={item.icon!} size={23} color={value === item.id ? colors.green : colors.muted} />
+              <Text style={[s.tabText, value === item.id && s.activeTabText]}>
+                {item.label}
+              </Text>
+            </>
           )}
         </Pressable>
       ))}
@@ -173,6 +177,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
         <WorkPanel conversations={[]} projects={[]} schedules={[]}
           onOpenConversation={() => setTab("chat")}
           onChooseConversation={() => setTab("chat")}
+          onCreateProject={() => setTab("chat")}
           onSchedules={() => setTab("chat")} />
       ) : tab === "toolbox" ? (
         <ToolboxPanel onSettings={() => setTab("chat")} onAgents={() => setTab("chat")} onModels={() => setTab("chat")} />
@@ -220,6 +225,7 @@ function Connected({
   );
   const [scheduleCursor, setScheduleCursor] = useState<string | null>(null);
   const [showConversations, setShowConversations] = useState(false);
+  const [showProjectCreator, setShowProjectCreator] = useState(false);
   const [title, setTitle] = useState("");
   const [projectName, setProjectName] = useState("");
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -425,7 +431,7 @@ function Connected({
     if (existing) setFinanceId(existing.id);
     else void newConversation(false, "finance");
   }
-  async function newProject() {
+  async function newProject(fromWork = false) {
     if (!projectName.trim() || busy) return;
     setBusy(true);
     setError("");
@@ -436,7 +442,8 @@ function Connected({
       });
       if (alive.current) {
         setProjects((old) => mergeById(old, [project]));
-        setProjectId(project.id);
+        if (fromWork) setShowProjectCreator(false);
+        else setProjectId(project.id);
         setProjectName("");
       }
     } catch (e) {
@@ -572,6 +579,7 @@ function Connected({
             schedules={schedules}
             onOpenConversation={openConversation}
             onChooseConversation={() => setShowConversations(true)}
+            onCreateProject={() => { setError(""); setShowProjectCreator(true); }}
             onSchedules={() => setWorkView("schedules")}
           />
         ) : (
@@ -632,6 +640,27 @@ function Connected({
         </>
       )}
       <BottomTabs value={tab} onChange={selectTab} />
+      <Modal
+        visible={showProjectCreator}
+        animationType="slide"
+        presentationStyle="pageSheet"
+        onRequestClose={() => setShowProjectCreator(false)}
+      >
+        <SafeAreaView style={s.root}>
+          <View style={s.header}>
+            <Text style={[s.heading, s.grow]}>创建项目</Text>
+            <Button secondary onPress={() => setShowProjectCreator(false)}>关闭</Button>
+          </View>
+          <View style={s.content}>
+            <Text style={s.muted}>为相关对话、文件和任务留一个持久工作目录。</Text>
+            <Field label="项目名称" placeholder="例如：我的项目" value={projectName} onChangeText={setProjectName} maxLength={100} />
+            <Button disabled={busy || !projectName.trim()} onPress={() => { void newProject(true); }}>
+              {busy ? "正在创建…" : "创建项目"}
+            </Button>
+            {error ? <Text style={s.error}>{error}</Text> : null}
+          </View>
+        </SafeAreaView>
+      </Modal>
       <Modal
         visible={showConversations}
         animationType="slide"
