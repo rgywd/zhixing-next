@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Markdown, { type ASTNode, type MarkdownStyleMap } from "@ronradtke/react-native-markdown-display";
 import {
   ActivityIndicator,
   FlatList,
@@ -9,6 +10,7 @@ import {
   Text,
   TextInput,
   View,
+  type TextProps,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -33,6 +35,38 @@ import {
   s,
   timeLabel,
 } from "./ui";
+
+function SelectableText(props: TextProps) {
+  return <Text selectable {...props} />;
+}
+
+const markdownRules = {
+  image: (node: ASTNode) => (
+    <Text key={node.key} style={{ color: colors.muted }}>
+      {node.attributes.alt || "[图片]"}
+    </Text>
+  ),
+};
+
+const openWebLink = (url: string) => /^https?:\/\//i.test(url);
+
+const markdownStyles = {
+  body: { color: colors.ink, fontSize: 15, lineHeight: 24 },
+  text: { color: colors.ink, fontSize: 15, lineHeight: 24 },
+  paragraph: { marginTop: 0, marginBottom: 8 },
+  heading1: { color: colors.ink, fontSize: 20, fontWeight: "600", marginBottom: 8 },
+  heading2: { color: colors.ink, fontSize: 18, fontWeight: "600", marginBottom: 7 },
+  heading3: { color: colors.ink, fontSize: 16, fontWeight: "600", marginBottom: 6 },
+  bullet_list: { marginVertical: 5 },
+  ordered_list: { marginVertical: 5 },
+  code_inline: { backgroundColor: colors.pale, color: colors.ink, fontSize: 13, padding: 0, paddingHorizontal: 4, borderWidth: 0, borderRadius: 4 },
+  code_block: { backgroundColor: colors.pale, color: colors.ink, fontSize: 13, padding: 10, borderRadius: 10 },
+  fence: { borderColor: colors.line, borderWidth: 1, borderRadius: 10, overflow: "hidden", marginVertical: 6 },
+  fence_header: { backgroundColor: colors.pale, borderBottomColor: colors.line },
+  fence_code: { backgroundColor: colors.white },
+  blockquote: { backgroundColor: colors.pale, borderLeftColor: colors.green, borderLeftWidth: 3, paddingHorizontal: 10 },
+  link: { color: colors.green, textDecorationLine: "underline" },
+} satisfies MarkdownStyleMap;
 
 export function ChatPanel({
   connection,
@@ -121,9 +155,9 @@ export function ChatPanel({
         data={messages}
         keyExtractor={(message) => message.id}
         contentContainerStyle={{
-          paddingHorizontal: 20,
-          paddingVertical: 12,
-          gap: 18,
+          paddingHorizontal: 18,
+          paddingVertical: 16,
+          gap: 24,
           flexGrow: 1,
         }}
         keyboardShouldPersistTaps="handled"
@@ -163,52 +197,50 @@ export function ChatPanel({
           <View
             style={{
               alignSelf: item.role === "user" ? "flex-end" : "stretch",
-              maxWidth: item.role === "user" ? "91%" : "100%",
-              gap: 7,
+              maxWidth: item.role === "user" ? "88%" : "100%",
+              gap: 5,
             }}
           >
-            <Text style={s.muted}>
+            <Text style={[s.muted, item.role === "user" && chatStyles.userMeta]}>
               {item.role === "assistant" ? assistantName : "你"} ·{" "}
               {timeLabel(item.created_at)}
               {item.intent === "steer"
                 ? ` · 引导${item.status === "applied" ? "已应用" : item.status === "rejected" ? "未应用" : "待应用"}`
                 : ""}
             </Text>
-            <View
-              style={{
-                padding: 15,
-                borderRadius: 17,
-                borderTopRightRadius: item.role === "user" ? 4 : 17,
-                borderTopLeftRadius: item.role === "assistant" ? 4 : 17,
-                backgroundColor:
-                  item.role === "user" ? colors.pale : colors.white,
-              }}
-            >
-              <Text selectable style={s.text}>
+            <View style={item.role === "user" ? chatStyles.userBubble : chatStyles.assistantContent}>
+              <Markdown
+                style={markdownStyles}
+                textcomponent={SelectableText}
+                rules={markdownRules}
+                onLinkPress={openWebLink}
+              >
                 {item.content}
-              </Text>
+              </Markdown>
             </View>
             {item.role === "assistant" || item.run_id ? (
-              <View style={s.row}>
+              <View style={chatStyles.messageActions}>
                 {item.role === "assistant" ? (
-                  <Button
-                    secondary
-                    small
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={speaking === item.id ? "停止朗读" : "朗读消息"}
+                    style={chatStyles.messageAction}
                     onPress={() => {
                       void speak(item).catch((e) => setError(humanError(e)));
                     }}
                   >
-                    {speaking === item.id ? "停止朗读" : "朗读"}
-                  </Button>
+                    <Text style={chatStyles.actionText}>{speaking === item.id ? "停止朗读" : "朗读"}</Text>
+                  </Pressable>
                 ) : null}
                 {item.run_id ? (
-                  <Button
-                    secondary
-                    small
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="查看任务记录"
+                    style={chatStyles.messageAction}
                     onPress={() => setDetail(item.run_id)}
                   >
-                    任务记录
-                  </Button>
+                    <Text style={chatStyles.actionText}>任务记录</Text>
+                  </Pressable>
                 ) : null}
               </View>
             ) : null}
@@ -257,6 +289,7 @@ export function ChatPanel({
             placeholderTextColor={colors.muted}
             value={draft.text}
             maxLength={20000}
+            scrollEnabled
             editable={draftReady && !draft.pending && !busy}
             onChangeText={(text) => {
               void updateDraft({ text, pending: null }).catch((e) => setError(humanError(e)));
@@ -269,7 +302,8 @@ export function ChatPanel({
             </Text>
           ) : null}
           <View style={chatStyles.toolbar}>
-            {!conversation.agent_id ? (
+            <ScrollView horizontal keyboardShouldPersistTaps="always" showsHorizontalScrollIndicator={false} style={chatStyles.toolbarChoices} contentContainerStyle={chatStyles.toolbarChoicesContent}>
+              {!conversation.agent_id ? (
               <Pressable accessibilityRole="button" accessibilityLabel={kind === "task" ? "任务使用默认执行模型" : `选择聊天模型，当前${model?.name ?? "未配置"}`} accessibilityState={{ disabled: kind === "task" || !catalog || modelBusy || !!draft.pending }} disabled={kind === "task" || !catalog || modelBusy || !!draft.pending} onPress={() => setShowModels(true)} style={[chatStyles.tool, kind === "task" && s.disabled]}>
                 <Text style={chatStyles.toolText}>模型</Text>
               </Pressable>
@@ -291,7 +325,7 @@ export function ChatPanel({
                 <Text style={[chatStyles.toolText, intent === value && chatStyles.toolActiveText]}>{value === "queue" ? "排队" : "引导"}</Text>
               </Pressable>
             ))}
-            <View style={s.grow} />
+            </ScrollView>
             <Pressable accessibilityRole="button" accessibilityLabel="添加资料" onPress={() => setShowFiles(true)} style={chatStyles.tool}>
               <Text style={[chatStyles.toolText, { fontSize: 24, lineHeight: 25 }]}>＋</Text>
             </Pressable>
@@ -516,6 +550,12 @@ function eventSummary(event: RunEvent) {
 }
 
 const chatStyles = StyleSheet.create({
+  userMeta: { textAlign: "right" },
+  userBubble: { backgroundColor: colors.pale, borderRadius: 17, borderTopRightRadius: 5, paddingHorizontal: 13, paddingVertical: 10 },
+  assistantContent: { paddingHorizontal: 2 },
+  messageActions: { flexDirection: "row", alignItems: "center", gap: 10 },
+  messageAction: { minHeight: 36, justifyContent: "center", paddingHorizontal: 4 },
+  actionText: { color: colors.green, fontSize: 12, fontWeight: "500" },
   runBar: {
     flexDirection: "row",
     alignItems: "center",
@@ -525,33 +565,34 @@ const chatStyles = StyleSheet.create({
     backgroundColor: colors.pale,
   },
   link: { color: colors.green, fontSize: 12, fontWeight: "600" },
-  composerArea: { paddingHorizontal: 10, paddingTop: 6, paddingBottom: 8, gap: 6 },
+  composerArea: { paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8, gap: 6 },
   composer: {
     backgroundColor: colors.white,
     borderColor: colors.line,
     borderWidth: 1,
-    borderRadius: 22,
+    borderRadius: 21,
     paddingHorizontal: 10,
-    paddingBottom: 9,
-    elevation: 2,
+    paddingBottom: 6,
   },
   composerInput: {
     color: colors.ink,
     fontSize: 16,
     lineHeight: 24,
-    minHeight: 62,
-    maxHeight: 140,
-    paddingTop: 14,
-    paddingBottom: 7,
+    minHeight: 48,
+    maxHeight: 128,
+    paddingTop: 11,
+    paddingBottom: 5,
     textAlignVertical: "top",
   },
   composerHint: { color: colors.amber, fontSize: 12, paddingBottom: 6 },
-  toolbar: { flexDirection: "row", alignItems: "center", gap: 2 },
+  toolbar: { flexDirection: "row", alignItems: "center", gap: 4 },
+  toolbarChoices: { flex: 1 },
+  toolbarChoicesContent: { alignItems: "center", gap: 3 },
   tool: {
-    minHeight: 42,
-    minWidth: 42,
-    paddingHorizontal: 6,
-    borderRadius: 11,
+    minHeight: 40,
+    minWidth: 40,
+    paddingHorizontal: 8,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: colors.pale,
@@ -560,9 +601,9 @@ const chatStyles = StyleSheet.create({
   toolActive: { backgroundColor: colors.green },
   toolActiveText: { color: colors.white },
   send: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: colors.green,
     alignItems: "center",
     justifyContent: "center",
