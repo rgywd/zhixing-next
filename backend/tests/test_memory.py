@@ -7,7 +7,12 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage
 
 from zhixing_next.config import Settings
-from zhixing_next.memory import organize_run, relevant_memories
+from zhixing_next.memory import (
+    create_memory_lookup_tool,
+    forget_memory_request,
+    organize_run,
+    relevant_memories,
+)
 from zhixing_next.store import Store, StoreError
 
 
@@ -46,12 +51,16 @@ async def test_remember_correct_forget_and_cross_conversation_retrieval(tmp_path
         {"op": "replace", "id": saved[0]["id"], "content": "用户的 Mac mini 内存为 24GB"}
     ))
     assert store.list_memories()["items"][0]["content"].endswith("24GB")
+    assert store.memory_reset_revision(first) == 1
+    assert store.memory_reset_revision(second) == 1
 
     forgotten = complete(store, second, "message-3", "忘掉我 Mac mini 的内存配置")
     assert await organize_run(settings, store, forgotten, model_override=model(
         {"op": "forget", "id": saved[0]["id"]}
     ))
     assert store.list_memories()["items"] == []
+    assert store.memory_reset_revision(first) == 2
+    assert store.memory_reset_revision(second) == 2
     assert relevant_memories(store, "Mac mini 的内存？") == []
 
 
@@ -67,6 +76,29 @@ async def test_only_explicit_forget_and_no_credential_memory(tmp_path):
     assert [item["id"] for item in store.list_memories()["items"]] == [saved["id"]]
     with pytest.raises(StoreError, match="credential"):
         store.add_memory("我的密码是 abc")
+
+
+def test_forget_command_is_not_a_question_or_file_deletion(tmp_path):
+    assert forget_memory_request("请忘记我的旧地址")
+    assert forget_memory_request("把我的旧地址忘掉")
+    assert not forget_memory_request("你是不是忘记我住哪了？")
+    assert not forget_memory_request("删除 old.md 文件")
+
+
+def test_agent_can_browse_memories_without_guessing_keywords(tmp_path):
+    _, store = setup(tmp_path)
+    conversation = store.create_conversation("记忆检索")["id"]
+    for index in range(26):
+        store.add_memory(f"用户的长期事实 {index}")
+    tool = create_memory_lookup_tool(store, conversation)
+    first = json.loads(tool.invoke({"offset": 0}))
+    second = json.loads(tool.invoke({"offset": 25}))
+    assert len(first["facts"]) == 25 and first["next_offset"] == 25
+    assert second == {"facts": ["用户的长期事实 0"], "next_offset": None}
+    assert store.memory_reset_revision(conversation) == 0
+    oldest = store.list_memories()["items"][0]
+    store.update_memory(oldest["id"], "用户的长期事实 0 已更正")
+    assert store.memory_reset_revision(conversation) == 1
 
 
 def test_failed_memory_pass_is_visible_and_retriable(tmp_path):

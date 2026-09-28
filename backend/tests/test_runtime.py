@@ -7,7 +7,7 @@ import aiosqlite
 import pytest
 from deepagents import create_deep_agent
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import Field
 
@@ -132,6 +132,73 @@ async def test_new_conversation_receives_relevant_personal_memory(tmp_path):
                            controls=no_controls, acknowledge=ignore,
                            model_override=model) == "你的 Mac mini 是 16GB。"
     assert "用户的 Mac mini 内存为 16GB" in str(model.seen[0])
+
+
+async def test_agent_can_browse_paraphrased_memory_question(tmp_path):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    conversation = store.create_conversation("城市")["id"]
+    city = None
+    for note in ("用户居住在上海", "用户养一只橘猫", "用户在做知行项目", "用户喜欢跑步", "用户喜欢热茶"):
+        saved = store.add_memory(note)
+        if "上海" in note:
+            city = saved["id"]
+    model = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "browse_personal_memories", "args": {"offset": 0},
+            "id": "memory-lookup", "type": "tool_call",
+        }]),
+        AIMessage(content="你住在上海。"),
+    ])
+    run = make_run("city-question", "我现在在哪座城市生活？")
+    run["conversation_id"] = conversation
+    assert await run_agent(
+        settings, run, persona="",
+        emit=ignore, controls=no_controls, acknowledge=ignore, model_override=model,
+    ) == "你住在上海。"
+    assert any("用户居住在上海" in str(message.content)
+               for message in model.seen[-1] if isinstance(message, ToolMessage))
+    store.delete_memory(city)
+    assert store.memory_reset_revision(conversation) == 1
+
+
+async def test_forget_clears_old_model_context_but_keeps_visible_chat(tmp_path):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    source = store.create_conversation("猫")["id"]
+    unrelated = store.create_conversation("游戏攻略")["id"]
+
+    def current(message_id, prompt, conversation_id=source):
+        run = make_run(message_id, prompt)
+        run["conversation_id"] = conversation_id
+        return run
+
+    saved = store.add_memory("用户的猫叫蓝莓灯塔")
+    first = ScriptedModel(replies=[AIMessage(content="你的猫叫蓝莓灯塔。")])
+    await run_agent(settings, current("first", "我家猫叫什么？"), persona="",
+                    emit=ignore, controls=no_controls, acknowledge=ignore, model_override=first)
+    other = ScriptedModel(replies=[AIMessage(content="先看地图。")])
+    await run_agent(settings, current("other", "讲个游戏攻略", unrelated), persona="",
+                    emit=ignore, controls=no_controls, acknowledge=ignore, model_override=other)
+
+    forgetting = ScriptedModel(replies=[AIMessage(content="我会处理这条遗忘要求。")])
+    await run_agent(settings, current("forget", "请忘记我家猫的名字"), persona="",
+                    emit=ignore, controls=no_controls, acknowledge=ignore, model_override=forgetting)
+    assert "蓝莓灯塔" not in str(forgetting.seen[0])
+    assert "browse_personal_memories" not in forgetting.bound_names
+
+    store.delete_memory(saved["id"])
+    assert store.memory_reset_revision(source) == 1
+    assert store.memory_reset_revision(unrelated) == 0
+    later = ScriptedModel(replies=[AIMessage(content="我不知道。")])
+    await run_agent(settings, current("later", "我家猫叫什么？"), persona="",
+                    emit=ignore, controls=no_controls, acknowledge=ignore, model_override=later)
+    assert "蓝莓灯塔" not in str(later.seen[0])
+    other_later = ScriptedModel(replies=[AIMessage(content="继续攻略。")])
+    await run_agent(settings, current("other-later", "继续", unrelated), persona="",
+                    emit=ignore, controls=no_controls, acknowledge=ignore, model_override=other_later)
+    assert any(isinstance(message, HumanMessage) and message.content == "讲个游戏攻略"
+               for message in other_later.seen[0])
 
 
 async def test_web_search_tool_is_bound_only_for_selected_run(tmp_path):

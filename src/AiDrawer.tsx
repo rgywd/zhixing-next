@@ -16,7 +16,6 @@ export function AiDrawer({
   onOpen,
   onMore,
   onNew,
-  onMemory,
   onSettings,
 }: {
   visible: boolean;
@@ -29,7 +28,6 @@ export function AiDrawer({
   onOpen: (id: string) => void;
   onMore: () => void;
   onNew: () => void;
-  onMemory: () => void;
   onSettings: () => void;
 }) {
   const [searchOpen, setSearchOpen] = useState(false);
@@ -73,7 +71,6 @@ export function AiDrawer({
               <View style={styles.shortcuts}>
                 {([
                   { label: "搜索", icon: "search-outline", onPress: () => setSearchOpen(true) },
-                  { label: "记忆", icon: "leaf-outline", onPress: onMemory },
                   { label: "设置", icon: "settings-outline", onPress: onSettings },
                 ] as const).map((item) => (
                   <Pressable key={item.label} accessibilityRole="button" accessibilityLabel={item.label} onPress={item.onPress} style={styles.shortcut}>

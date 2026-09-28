@@ -35,7 +35,6 @@ import {
 import { ChatPanel } from "./ChatPanel";
 import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
-import { MemoryPanel } from "./MemoryPanel";
 import { FinancePage } from "./FinancePage";
 import { ModelsPanel } from "./ModelsPanel";
 import { HomePanel, LifePanel, ToolboxPanel, WorkPanel } from "./OverviewPanels";
@@ -242,7 +241,6 @@ function Connected({
   const [scheduleCursor, setScheduleCursor] = useState<string | null>(null);
   const [showConversations, setShowConversations] = useState(false);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
-  const [showMemory, setShowMemory] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
   const [welcomeDraft, setWelcomeDraft] = useState("");
   const [welcomeKind, setWelcomeKind] = useState<"chat" | "task">("chat");
@@ -714,10 +712,8 @@ function Connected({
         onOpen={openConversation}
         onMore={() => { void loadMore("conversations"); }}
         onNew={() => { setShowWelcome(true); setShowAiDrawer(false); setTab("chat"); }}
-        onMemory={() => { setShowAiDrawer(false); setShowMemory(true); }}
         onSettings={() => { setShowAiDrawer(false); setToolView("settings"); setTab("toolbox"); }}
       />
-      {showMemory ? <MemoryPanel connection={connection} onClose={() => setShowMemory(false)} /> : null}
       <Modal
         visible={showProjectCreator}
         animationType="slide"

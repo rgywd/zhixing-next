@@ -23,7 +23,7 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 - `PUT /v1/models/roles/{role} {model_id}`：`role` 为 `chat|task|memory`，保存角色默认模型。模型须已在服务端配置；未配置专用记忆模型时，整理使用当前聊天默认模型。
 - `GET /v1/memories?cursor=&limit=`：返回个人语义记忆 `{items,next_cursor}`；每项含 `id,content,source_message_id,created_at,updated_at,seq`。只读当前记忆，不返回原始聊天或内部去重键。
 - `POST /v1/memories {content}`、`PATCH /v1/memories/{id} {content}`、`DELETE /v1/memories/{id}`：后端直接写入、纠正或忘记；内容最多 500 字，凭据类内容拒绝写入。删除记忆不删除原会话或文件。
-- `GET /v1/memories/status`：返回 `{pending,failed}` 整理运行数；`POST /v1/memories/retry` 将失败的整理重新排队，返回 `{retried}`。手机侧栏可查看和忘记记忆，整理状态仍由后台处理。
+- `GET /v1/memories/status`：返回 `{pending,failed}` 整理运行数；`POST /v1/memories/retry` 将失败的整理重新排队，返回 `{retried}`。手机端暂不展示记忆列表，整理状态仍由后台处理。
 - `GET /v1/search/providers`：列出已配置搜索服务 `{items:[{id,name,kind}],next_cursor:null}`，不返回密钥。`POST /v1/search/providers {name,kind:brave|tavily|serper,api_key}` 在服务端保存密钥并返回 `{id,name,kind}`；`DELETE /v1/search/providers/{id}` 删除服务，若排队或运行中的消息正在引用则返回 409。
 - `GET /v1/assistant`, `PUT /v1/assistant`: `{name, persona}`，人格是用户编辑的持久文本。
 - `GET /v1/agents`, `POST /v1/agents`, `GET/PUT/DELETE /v1/agents/{id}`：子智能体配置

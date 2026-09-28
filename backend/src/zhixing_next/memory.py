@@ -8,13 +8,17 @@ from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.tools import tool
 
 from .config import Settings
 from .models import create_model
 from .store import Store
 
-_FORGET = re.compile(r"忘记|忘掉|遗忘|删掉.*记忆|删除.*记忆|不要再记|别再记|forget|delete.*memory", re.I)
-_EXPLICIT = re.compile(r"记住|记下来|记得这个|忘记|忘掉|遗忘|记错|纠正|更正|不是.*而是|remember|forget", re.I)
+_FORGET_COMMAND = re.compile(
+    r"^\s*(?:(?:请|帮我|麻烦你?|你可以|你能不能)\s*)?(?:把.{1,80}?)?"
+    r"(?:忘记|忘掉|遗忘|删掉.{0,80}记忆|删除.{0,80}记忆|清除.{0,80}记忆|不要再记|别再记|forget|delete.*memory)", re.I | re.M,
+)
+_EXPLICIT = re.compile(r"记住|记下来|记得这个|忘记|忘掉|遗忘|删除.*记忆|记错|纠正|更正|不是.*而是|remember|forget", re.I)
 _PERSONAL = re.compile(r"我|我的|咱们|之前|记得|记忆|remember|about me", re.I)
 _LATIN = re.compile(r"[a-z0-9]+")
 _HAN = re.compile(r"[\u4e00-\u9fff]+")
@@ -23,6 +27,26 @@ _STOP = {"用户", "我的", "我们", "这个", "那个", "现在", "什么", "
 
 def explicit_memory_request(prompt: str) -> bool:
     return bool(_EXPLICIT.search(prompt))
+
+
+def forget_memory_request(prompt: str) -> bool:
+    return bool(_FORGET_COMMAND.search(prompt))
+
+
+def create_memory_lookup_tool(store: Store, conversation_id: str):
+    @tool
+    def browse_personal_memories(offset: int = 0) -> str:
+        """Read saved personal facts when a user asks what you remember or a fact is missing from context."""
+        if offset < 0:
+            return '{"error":"invalid_offset"}'
+        facts = store.memory_candidates(25, offset)
+        store.record_memory_exposure(conversation_id, [item["id"] for item in facts])
+        return json.dumps({
+            "facts": [item["content"] for item in facts],
+            "next_offset": offset + 25 if len(facts) == 25 else None,
+        }, ensure_ascii=False)
+
+    return browse_personal_memories
 
 
 def _terms(value: str) -> set[str]:
@@ -73,7 +97,7 @@ def _actions(response: Any, existing: dict[str, str], user_prompt: str) -> list[
         content = item.get("content")
         if operation in {"replace", "forget"} and identifier not in existing:
             continue
-        if operation == "forget" and not _FORGET.search(user_prompt):
+        if operation == "forget" and not forget_memory_request(user_prompt):
             continue
         if operation in {"add", "replace"} and not isinstance(content, str):
             continue

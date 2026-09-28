@@ -7,7 +7,7 @@ import { Button, colors, humanError, s } from "./ui";
 const roles = [
   { id: "chat", label: "聊天", hint: "主知行新对话的默认模型" },
   { id: "task", label: "执行", hint: "任务与委托的默认模型" },
-  { id: "memory", label: "记忆整理", hint: "整理能力接入后才会使用" },
+  { id: "memory", label: "记忆整理", hint: "用于后台整理长期记忆" },
 ] as const;
 
 export function ModelsPanel({

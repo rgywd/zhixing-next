@@ -71,7 +71,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 6:
+            if version > 7:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -104,6 +104,10 @@ class Store:
                 db.execute("CREATE TABLE search_providers(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('brave','tavily','serper')),api_key TEXT NOT NULL,created_at TEXT NOT NULL)")
                 db.execute("ALTER TABLE runs ADD COLUMN search_provider_id TEXT")
                 db.execute("PRAGMA user_version=6")
+            if version < 7:
+                db.execute("ALTER TABLE conversations ADD COLUMN memory_reset_revision INTEGER NOT NULL DEFAULT 0")
+                db.execute("CREATE TABLE memory_exposures(memory_id TEXT NOT NULL,conversation_id TEXT NOT NULL REFERENCES conversations(id),PRIMARY KEY(memory_id,conversation_id))")
+                db.execute("PRAGMA user_version=7")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)
@@ -163,12 +167,12 @@ class Store:
             ).fetchall()
             return self._page(rows, limit)
 
-    def memory_candidates(self, limit=200):
+    def memory_candidates(self, limit=200, offset=0):
         # ponytail: bounded scan; add an index when real memory volume exceeds this window.
         with self._connection() as db:
             return [dict(row) for row in db.execute(
-                "SELECT id,content,updated_at FROM memories ORDER BY updated_at DESC LIMIT ?",
-                (limit,),
+                "SELECT id,content,updated_at FROM memories ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+                (limit, offset),
             ).fetchall()]
 
     def memory_status(self):
@@ -179,6 +183,65 @@ class Store:
             ).fetchall()
             counts = {row["memory_processed"]: row["count"] for row in rows}
             return {"pending": counts.get(0, 0), "failed": counts.get(-1, 0)}
+
+    def memory_reset_revision(self, conversation_id):
+        with self._connection() as db:
+            row = db.execute(
+                "SELECT memory_reset_revision FROM conversations WHERE id=?", (conversation_id,)
+            ).fetchone()
+            return row[0] if row else 0
+
+    def record_memory_exposure(self, conversation_id, memory_ids):
+        if not memory_ids:
+            return
+        with self._connection(write=True) as db:
+            if not db.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone():
+                return
+            for memory_id in memory_ids:
+                if db.execute("SELECT 1 FROM memories WHERE id=?", (memory_id,)).fetchone():
+                    db.execute(
+                        "INSERT OR IGNORE INTO memory_exposures VALUES(?,?)",
+                        (memory_id, conversation_id),
+                    )
+                else:
+                    # A forget raced with this read; clear its stale checkpoint next turn.
+                    db.execute(
+                        "UPDATE conversations SET memory_reset_revision=memory_reset_revision+1 WHERE id=?",
+                        (conversation_id,),
+                    )
+
+    @staticmethod
+    def _memory_context_targets(db, memory_id, conversation_id=None):
+        targets = {row[0] for row in db.execute(
+            "SELECT conversation_id FROM memory_exposures WHERE memory_id=? "
+            "UNION SELECT m.conversation_id FROM memories f "
+            "JOIN messages m ON m.id=f.source_message_id WHERE f.id=?",
+            (memory_id, memory_id),
+        )}
+        if conversation_id:
+            targets.add(conversation_id)
+        return targets
+
+    @staticmethod
+    def _reset_memory_contexts(db, memory_id, targets):
+        db.executemany(
+            "UPDATE conversations SET memory_reset_revision=memory_reset_revision+1 WHERE id=?",
+            ((identifier,) for identifier in targets),
+        )
+        db.execute("DELETE FROM memory_exposures WHERE memory_id=?", (memory_id,))
+
+    @classmethod
+    def _forget_memory(cls, db, memory_id, expected_updated_at=None, conversation_id=None):
+        targets = cls._memory_context_targets(db, memory_id, conversation_id)
+        query = "DELETE FROM memories WHERE id=?"
+        parameters = [memory_id]
+        if expected_updated_at is not None:
+            query += " AND updated_at=?"
+            parameters.append(expected_updated_at)
+        removed = db.execute(query, parameters).rowcount
+        if removed:
+            cls._reset_memory_contexts(db, memory_id, targets)
+        return bool(removed)
 
     def add_memory(self, content, source_message_id=None):
         content = _memory_content(content)
@@ -200,6 +263,7 @@ class Store:
         content = _memory_content(content)
         with self._connection(write=True) as db:
             self._require(db, "memories", memory_id)
+            targets = self._memory_context_targets(db, memory_id)
             try:
                 db.execute(
                     "UPDATE memories SET content=?,content_key=?,updated_at=? WHERE id=?",
@@ -207,12 +271,13 @@ class Store:
                 )
             except sqlite3.IntegrityError as exc:
                 raise StoreError("memory_conflict", "Memory already exists") from exc
+            self._reset_memory_contexts(db, memory_id, targets)
             return _record(self._require(db, "memories", memory_id))
 
     def delete_memory(self, memory_id):
         with self._connection(write=True) as db:
             self._require(db, "memories", memory_id)
-            db.execute("DELETE FROM memories WHERE id=?", (memory_id,))
+            self._forget_memory(db, memory_id)
             # Old in-flight runs must not recreate a fact the user just forgot.
             db.execute("UPDATE runs SET memory_processed=1 WHERE memory_processed=0")
 
@@ -262,20 +327,23 @@ class Store:
                 elif operation == "replace":
                     existing = db.execute("SELECT id FROM memories WHERE id=?", (action["id"],)).fetchone()
                     if existing:
+                        targets = self._memory_context_targets(
+                            db, action["id"], run["conversation_id"]
+                        )
                         try:
-                            db.execute(
+                            changed = db.execute(
                                 "UPDATE memories SET content=?,content_key=?,updated_at=? "
                                 "WHERE id=? AND updated_at=?",
                                 (content, content.casefold(), timestamp(), action["id"], action["expected_updated_at"]),
-                            )
+                            ).rowcount
+                            if changed:
+                                self._reset_memory_contexts(db, action["id"], targets)
                         except sqlite3.IntegrityError:
                             pass
                 elif operation == "forget":
-                    removed = db.execute(
-                        "DELETE FROM memories WHERE id=? AND updated_at=?",
-                        (action["id"], action["expected_updated_at"]),
-                    ).rowcount
-                    if removed:
+                    if self._forget_memory(
+                        db, action["id"], action["expected_updated_at"], run["conversation_id"]
+                    ):
                         db.execute(
                             "UPDATE runs SET memory_processed=1 WHERE seq<? AND memory_processed=0",
                             (run["seq"],),
