@@ -199,6 +199,15 @@ class Journal:
                 "next_cursor": None,
             }
 
+    def file_authorization(self, operation):
+        if not operation["plan"]["requires_approval"]:
+            return {"required": False}
+        with self.store._connection() as db:
+            row = db.execute(
+                "SELECT id,state,decided_at FROM approvals WHERE id=?", (operation["id"],)
+            ).fetchone()
+        return {"required": True, **dict(row)} if row else {"required": True, "state": "pending"}
+
     def reconcile_service(self, operation):
         args, run_id = operation["args"], operation["run_id"]
         with self.store._connection() as db:
@@ -318,6 +327,14 @@ class OperationRunner:
 
     def apply_file(self, operation):
         plan, identifier = operation["plan"], operation["id"]
+        metadata = {
+            "authorization": self.journal.file_authorization(operation),
+            "backup_available": plan["backup"],
+        }
+        if plan["backup"]:
+            metadata["backup_restore"] = (
+                "备份仅供服务端人工核查与恢复；当前 App 没有版本历史或一键恢复入口。"
+            )
         lock_root = self.settings.data_dir / "operation-locks"
         lock_root.mkdir(exist_ok=True, mode=0o700)
         with FileLock(lock_root / (digest(plan["path"].encode()) + ".lock"), timeout=5):
@@ -330,7 +347,7 @@ class OperationRunner:
                     "bytes": plan["bytes"],
                     "sha256": actual,
                     "reconciled": True,
-                    "backup_available": plan["backup"],
+                    **metadata,
                 }
             if actual != plan["before_sha256"]:
                 raise ValueError(
@@ -351,7 +368,11 @@ class OperationRunner:
             actual = digest(self.access.read_bytes(str(path), limit=LIMIT)[1])
             if actual != plan["after_sha256"]:
                 raise ValueError("写入后文件发生变化，不能报告交付成功")
-            return {**receipt, "sha256": actual, "backup_available": plan["backup"]}
+            return {
+                **receipt,
+                "sha256": actual,
+                **metadata,
+            }
 
     async def invoke(self, call, handler):
         try:
@@ -385,7 +406,14 @@ class OperationRunner:
                 actual = None
             if actual == plan["after_sha256"]:
                 result = ToolMessage(
-                    content=_json({"path": plan["path"], "sha256": actual, "reconciled": True}),
+                    content=_json(
+                        {
+                            "path": plan["path"],
+                            "sha256": actual,
+                            "reconciled": True,
+                            "authorization": self.journal.file_authorization(operation),
+                        }
+                    ),
                     tool_call_id=call["id"],
                 )
                 self.journal.set_state(identifier, "succeeded", encode_result(result))
