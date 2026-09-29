@@ -103,6 +103,13 @@ export function ActionRow({ icon, title, description, onPress, last = false, com
     </Pressable>
   );
 }
+export function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
+  const { s } = useUi();
+  return <View style={s.settingsSection}>
+    <Text accessibilityRole="header" style={s.settingsLabel}>{title}</Text>
+    <View style={s.settingsGroup}>{children}</View>
+  </View>;
+}
 export function IconAction({ icon, label, onPress, tone = "neutral", disabled = false }: { icon: IconName; label: string; onPress: () => void; tone?: UiTone; disabled?: boolean }) {
   const { s, toneColors } = useUi();
   return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.iconAction, disabled && s.disabled, pressed && s.pressed]}><Ionicons name={icon} size={20} color={toneColors[tone][0]} /></Pressable>;
@@ -236,6 +243,9 @@ export const createSharedStyles = (colors: ThemeColors) => StyleSheet.create({
   iconBadgeSmall: { width: 34, height: 34, borderRadius: 11 },
   actionRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 56, paddingVertical: space.sm },
   rowDivider: { borderBottomWidth: 1, borderBottomColor: colors.line },
+  settingsSection: { gap: space.sm },
+  settingsLabel: { ...typography.caption, fontWeight: "600", color: colors.muted, paddingHorizontal: space.md },
+  settingsGroup: { backgroundColor: colors.surfaceRaised, borderRadius: radius.item, paddingHorizontal: space.md, paddingVertical: space.xs },
   serviceGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   serviceTile: { width: "47%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 66, paddingHorizontal: space.sm, paddingVertical: space.sm, borderRadius: radius.item, backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.line },
   serviceTileNarrow: { width: "100%" },

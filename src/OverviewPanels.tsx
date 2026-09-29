@@ -1,4 +1,3 @@
-import { AppearanceControl } from "./AppearanceControl";
 import { useUi, ActionLink, ActionRow, CardHeader, IconAction, PageHero, PageScrollView, ServiceTile, timeLabel } from "./ui";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
@@ -71,28 +70,6 @@ export function WorkPanel({ conversations, projects, schedules, onOpenConversati
         <CardHeader icon="time-outline" title="定时计划" tone="gold" description={schedules.length ? `已有 ${schedules.length} 项计划` : "把要惦记的事交给知行"}
           action={<View style={s.row}><Text style={s.link}>管理</Text><Ionicons name="chevron-forward" size={18} color={colors.accent} /></View>} />
       </Pressable>
-    </PageScrollView>
-  );
-}
-
-export function ToolboxPanel({ onSettings, onAgents, onModels, onResources }: { onSettings: () => void; onAgents: () => void; onModels: () => void; onResources: () => void }) {
-  const { s } = useUi();
-  return (
-    <PageScrollView tabs>
-      <PageHero eyebrow="TOOLBOX" title="工具箱" description="资源、服务与助手设置，按需要放进来。" />
-      <View style={s.card}><AppearanceControl row /></View>
-      <Text accessibilityRole="header" style={s.title}>资料</Text>
-      <View style={s.card}>
-        <ActionRow icon="albums-outline" title="资源库" description="图片、资料和交付文件" onPress={onResources} last compact tone="blue" />
-      </View>
-      <Text accessibilityRole="header" style={s.title}>助手与服务</Text>
-      <View style={s.card}>
-        <View>
-          <ActionRow icon="people-outline" title="子智能体" description="服务助手与自定义助手" onPress={onAgents} compact tone="gold" />
-          <ActionRow icon="options-outline" title="供应商与模型" description="聊天、执行与记忆" onPress={onModels} compact tone="gold" />
-          <ActionRow icon="settings-outline" title="人格与连接" description="称呼、表达方式与服务连接" onPress={onSettings} compact last tone="neutral" />
-        </View>
-      </View>
     </PageScrollView>
   );
 }

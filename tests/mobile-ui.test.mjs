@@ -57,7 +57,7 @@ test("shared controls preserve action callbacks, disabled state and accessible n
   row.props.onPress();
   tile.props.onPress();
   assert.equal(calls, 2);
-  assert.equal(ui.BackLink({ label: "工具箱", onPress }).props.accessibilityLabel, "返回工具箱");
+  assert.equal(ui.BackLink({ label: "设置", onPress }).props.accessibilityLabel, "返回设置");
   const icon = ui.IconAction({ icon: "refresh-outline", label: "刷新文件", disabled: true, onPress });
   assert.equal(icon.props.accessibilityLabel, "刷新文件");
   assert.equal(icon.props.accessibilityState.disabled, true);
@@ -75,6 +75,9 @@ test("shared controls and surfaces change together without inverted button label
     assert.equal(shared.s.root.backgroundColor, palette.paper);
     assert.equal(shared.s.input.backgroundColor, palette.surfaceRaised);
     assert.equal(shared.s.input.color, palette.ink);
+    const group = ui.SettingsGroup({ title: "模型与服务", children: "rows" });
+    assert.equal(group.props.children[1].props.style.backgroundColor, palette.surfaceRaised);
+    assert.equal(group.props.children[0].props.style.color, palette.muted);
     const button = ui.Button({ children: "保存", onPress() {} });
     assert.equal(button.props.style({ pressed: false })[0].backgroundColor, palette.primary);
     const label = button.props.children.find((node) => node?.type === "Text");

@@ -22,7 +22,7 @@ function SearchSnippet({ text, query }: { text: string; query: string }) {
 
 export function AiDrawer({
   visible, connection, name, conversations, selectedId, hasMore, busy,
-  onClose, onOpen, onMore, onNew, onSettings,
+  onClose, onOpen, onMore, onNew,
 }: {
   visible: boolean;
   connection: Connection;
@@ -35,7 +35,6 @@ export function AiDrawer({
   onOpen: (id: string, messageSeq?: number) => void;
   onMore: () => void;
   onNew: () => void;
-  onSettings: () => void;
 }) {
   const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
@@ -91,7 +90,7 @@ export function AiDrawer({
       {item.blocked ? <Ionicons name="pause-circle-outline" size={16} color={colors.muted} /> : null}
     </Pressable>;
   }
-  function shortcut(label: string, icon: "search-outline" | "library-outline" | "settings-outline", onPress: () => void) {
+  function shortcut(label: string, icon: "search-outline" | "library-outline", onPress: () => void) {
     return <Pressable key={label} accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => [styles.shortcut, pressed && s.pressed]}>
       <Ionicons name={icon} size={20} color={colors.accent} />
       <Text style={styles.shortcutText}>{label}</Text>
@@ -139,7 +138,6 @@ export function AiDrawer({
                 <View style={styles.shortcuts}>
                   {shortcut("搜索", "search-outline", () => { setView("search"); setSearchBusy(!!query.trim()); })}
                   {shortcut("记忆", "library-outline", () => setView("memory"))}
-                  {shortcut("设置", "settings-outline", () => { reset(); onSettings(); })}
                 </View>
                 <View style={styles.historyHead}><Text style={styles.heading}>对话历史</Text><Text style={styles.count}>{ordered.length}{hasMore ? "+" : ""}</Text></View>
                 <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.historyList}>
