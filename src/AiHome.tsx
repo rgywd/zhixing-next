@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ConversationComposer } from "./ConversationComposer";
+import { ReasoningPicker } from "./ReasoningPicker";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { type Connection, type ModelCatalog, type ReasoningEffort } from "./api";
-import { ModelPicker, reasoningLabel } from "./ModelPicker";
+import { ModelPicker } from "./ModelPicker";
 import { SearchPicker } from "./SearchPicker";
-import { Button, colors, s } from "./ui";
+import { colors, s } from "./ui";
 
 type Kind = "chat" | "task";
 
@@ -65,7 +66,7 @@ export function AiHome({
         <View style={styles.hero}>
           <View style={styles.orbit}>
             <View style={styles.mark}>
-              <Ionicons name="leaf-outline" size={58} color={colors.accent} />
+              <Ionicons name="leaf-outline" size={32} color={colors.accent} />
             </View>
             <View style={styles.sparkle}><Ionicons name="sparkles" size={20} color={colors.accent} /></View>
           </View>
@@ -89,54 +90,9 @@ export function AiHome({
           ))}
         </View>
       </ScrollView>
-      <View style={styles.composerArea}>
-        <View style={styles.modes}>
-          {(["chat", "task"] as const).map((value) => (
-            <Pressable
-              key={value}
-              accessibilityRole="button"
-              accessibilityState={{ selected: kind === value }}
-              onPress={() => onKind(value)}
-              style={[styles.mode, kind === value && styles.modeActive]}
-            >
-              <Ionicons name={value === "chat" ? "chatbubble-outline" : "flash-outline"} size={16} color={kind === value ? colors.accent : colors.muted} />
-              <Text style={[styles.modeText, kind === value && styles.modeTextActive]}>{value === "chat" ? "聊天" : "任务"}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={styles.modes}>
-          <Pressable accessibilityRole="button" accessibilityLabel={`选择${kind === "task" ? "任务" : "聊天"}模型，当前${model?.name ?? "未配置"}`} disabled={!catalog} onPress={() => setShowModels(true)} style={styles.mode}><Ionicons name="options-outline" size={16} color={colors.accent} /><Text numberOfLines={1} style={[styles.modeText, styles.modelText]}>模型 · {model?.name ?? "未配置"}</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel={model?.reasoning_levels.length ? `思考深度，当前${reasoningLabel[depth]}` : "当前模型未配置思考深度"} accessibilityState={{ disabled: !model?.reasoning_levels.length }} disabled={!model?.reasoning_levels.length} onPress={() => setShowReasoning(true)} style={[styles.mode, !model?.reasoning_levels.length && s.disabled]}><Ionicons name="sparkles-outline" size={16} color={colors.accent} /><Text style={styles.modeText}>思考 · {model?.reasoning_levels.length ? reasoningLabel[depth] : "未配置"}</Text></Pressable>
-          <Pressable accessibilityRole="button" accessibilityLabel={`联网搜索${searchProviderId ? "已开启" : "已关闭"}`} onPress={() => setShowSearch(true)} style={[styles.mode, searchProviderId && styles.modeActive]}><Ionicons name="globe-outline" size={16} color={colors.accent} /><Text style={styles.modeText}>联网{searchProviderId ? " · 开" : ""}</Text></Pressable>
-        </View>
-        <View style={styles.composer}>
-          <Pressable accessibilityRole="button" accessibilityLabel="添加文件" disabled={busy} onPress={onFiles} style={styles.attach}><Ionicons name="add" size={24} color={colors.accent} /></Pressable>
-          <TextInput
-            accessibilityLabel="向知行提问或交代任务"
-            multiline
-            maxLength={20000}
-            placeholder={`向${name}提问…`}
-            placeholderTextColor={colors.muted}
-            value={draft}
-            onChangeText={onDraft}
-            editable={!busy}
-            style={styles.input}
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="发送消息"
-            accessibilityState={{ disabled: busy || !draft.trim() }}
-            disabled={busy || !draft.trim()}
-            onPress={onSend}
-            style={[styles.send, (busy || !draft.trim()) && styles.sendDisabled]}
-          >
-            <Ionicons name="arrow-up" size={23} color={colors.white} />
-          </Pressable>
-        </View>
-        <Text style={styles.disclaimer}>回答由 AI 生成，重要信息请核对来源</Text>
-      </View>
+      <ConversationComposer text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!busy} onText={onDraft} onSend={onSend} onFiles={onFiles} attachmentLocked={busy} canSend={!busy && !!draft.trim()} busy={busy} kind={kind} onKind={onKind} connection={connection} model={model} depth={depth} searchId={searchProviderId} optionsLocked={busy || !catalog} onModel={() => setShowModels(true)} onReasoning={() => setShowReasoning(true)} onSearch={() => setShowSearch(true)} />
       <ModelPicker visible={showModels} title={`选择${kind === "task" ? "任务" : "聊天"}模型`} connectionUrl={connection.url} models={catalog?.items ?? []} selectedId={selectedModelId} onSelect={async (id) => { onModelId(id); onEffort(null); }} onUseDefault={modelId ? async () => { onModelId(null); onEffort(null); } : undefined} defaultLabel={`跟随默认${kind === "task" ? "任务" : "聊天"}模型`} onClose={() => setShowModels(false)} />
-      <Modal visible={showReasoning} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowReasoning(false)}><SafeAreaView style={s.root}><View style={s.header}><Text style={[s.heading, s.grow]}>思考深度</Text><Button secondary onPress={() => setShowReasoning(false)}>关闭</Button></View><ScrollView contentContainerStyle={s.content}><Text style={s.muted}>不同模型支持的档位可能不同。</Text><Button secondary onPress={() => { onEffort(null); setShowReasoning(false); }}>模型默认</Button>{model?.reasoning_levels.map((value) => <Button key={value} secondary={depth !== value} onPress={() => { onEffort(value); setShowReasoning(false); }}>{reasoningLabel[value]}</Button>)}</ScrollView></SafeAreaView></Modal>
+      <ReasoningPicker visible={showReasoning} model={model} selected={effort} onSelect={async (value) => onEffort(value)} onClose={() => setShowReasoning(false)} />
       <SearchPicker visible={showSearch} connection={connection} selectedId={searchProviderId} onSelect={onSearchProviderId} onClose={() => setShowSearch(false)} />
     </View>
   );
@@ -145,26 +101,13 @@ export function AiHome({
 const styles = StyleSheet.create({
   content: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 24, paddingBottom: 28 },
   hero: { alignItems: "flex-start", marginBottom: 32 },
-  orbit: { width: 146, height: 146, borderWidth: 2, borderColor: "#F0D4D0", borderRadius: 73, alignItems: "center", justifyContent: "center", marginBottom: 23 },
-  mark: { width: 114, height: 114, borderRadius: 36, backgroundColor: colors.white, alignItems: "center", justifyContent: "center", shadowColor: colors.accent, shadowOpacity: 0.08, shadowRadius: 16, elevation: 2 },
+  orbit: { width: 78, height: 78, borderWidth: 2, borderColor: "#F0D4D0", borderRadius: 39, alignItems: "center", justifyContent: "center", marginBottom: 23 },
+  mark: { width: 60, height: 60, borderRadius: 36, backgroundColor: colors.white, alignItems: "center", justifyContent: "center", shadowColor: colors.accent, shadowOpacity: 0.08, shadowRadius: 16, elevation: 2 },
   sparkle: { position: "absolute", right: -2, top: 0, width: 38, height: 38, borderRadius: 19, backgroundColor: colors.white, alignItems: "center", justifyContent: "center" },
-  greeting: { color: colors.ink, fontSize: 35, fontWeight: "700", lineHeight: 46 },
-  subtitle: { color: colors.muted, fontSize: 17, lineHeight: 26, marginTop: 7 },
+  greeting: { color: colors.ink, fontSize: 28, fontWeight: "700", lineHeight: 38 },
+  subtitle: { color: colors.muted, fontSize: 14, lineHeight: 22, marginTop: 7 },
   question: { color: colors.muted, fontSize: 15, marginBottom: 14 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  suggestion: { width: "48%", flexGrow: 1, minHeight: 74, backgroundColor: colors.white, borderColor: colors.line, borderWidth: 1, borderRadius: 21, paddingHorizontal: 14, flexDirection: "row", alignItems: "center", gap: 8 },
-  suggestionText: { color: colors.ink, fontSize: 15, fontWeight: "600", flex: 1 },
-  composerArea: { paddingHorizontal: 16, paddingBottom: 10, gap: 9 },
-  modes: { flexDirection: "row", gap: 9, alignItems: "center" },
-  mode: { minHeight: 36, borderRadius: 18, paddingHorizontal: 9, flexDirection: "row", alignItems: "center", gap: 6 },
-  modeActive: { backgroundColor: colors.white },
-  modeText: { color: colors.muted, fontSize: 13 },
-  modelText: { maxWidth: 78 },
-  modeTextActive: { color: colors.ink, fontWeight: "600" },
-  composer: { minHeight: 64, backgroundColor: colors.white, borderRadius: 32, paddingLeft: 8, paddingRight: 7, borderWidth: 1, borderColor: colors.line, flexDirection: "row", alignItems: "center", gap: 8 },
-  attach: { width: 42, height: 42, borderRadius: 21, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center" },
-  input: { flex: 1, color: colors.ink, fontSize: 16, maxHeight: 108, paddingVertical: 12, textAlignVertical: "center" },
-  send: { width: 48, height: 48, borderRadius: 24, backgroundColor: colors.accent, alignItems: "center", justifyContent: "center" },
-  sendDisabled: { backgroundColor: "#DAA29F" },
-  disclaimer: { textAlign: "center", color: colors.muted, fontSize: 11 },
+  suggestion: { width: "48%", flexGrow: 1, minHeight: 54, backgroundColor: colors.white, borderColor: colors.line, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 8 },
+  suggestionText: { color: colors.ink, fontSize: 13, fontWeight: "500", flex: 1 },
 });

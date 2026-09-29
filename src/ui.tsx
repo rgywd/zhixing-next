@@ -119,7 +119,7 @@ export function Button({
         style,
       ]}
     >
-      {icon ? <Ionicons name={icon} size={20} color={danger ? colors.red : secondary ? colors.accent : colors.white} /> : null}
+      {icon ? <Ionicons name={icon} size={20} color={danger ? colors.red : secondary ? colors.ink : colors.white} /> : null}
       <Text
         style={[s.buttonText, secondary && s.secondaryText, danger && s.danger]}
       >
@@ -268,8 +268,8 @@ export const s = StyleSheet.create({
   },
   smallButton: { paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: layout.touchTarget },
   buttonText: { ...typography.button, color: colors.white, flexShrink: 1, textAlign: "center" },
-  secondary: { backgroundColor: colors.pale },
-  secondaryText: { color: colors.accent },
+  secondary: { backgroundColor: colors.neutral },
+  secondaryText: { color: colors.ink },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.72 },
   danger: { color: colors.red },
@@ -279,15 +279,15 @@ export const s = StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.white,
+    borderColor: colors.line,
     borderRadius: radius.card,
     padding: layout.cardPadding,
     gap: 10,
     shadowColor: colors.ink,
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.025,
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 12,
-    elevation: 2,
+    elevation: 0,
   },
   divider: { height: 1, backgroundColor: colors.line },
   floatingTabs: {

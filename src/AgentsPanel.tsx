@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { request, type Agent, type AgentTool, type Connection } from "./api";
-import { Button, CardHeader, Field, PageHeading, PageScrollView, humanError, s } from "./ui";
+import { Button, CardHeader, colors, Field, PageHeading, PageScrollView, humanError, s } from "./ui";
 
 const TOOL_LABELS: { id: AgentTool; label: string }[] = [
   { id: "inspect_environment", label: "查看运行环境" },
@@ -12,11 +13,6 @@ const TOOL_LABELS: { id: AgentTool; label: string }[] = [
   { id: "write_text_file", label: "写入文本" },
   { id: "fetch_public_page", label: "读取公开网页" },
 ];
-const SERVICE_TOOL_LABELS: Record<string, string> = {
-  record_finance_observation: "记录明确金额",
-  list_finance_observations: "读取财务记录",
-  remove_finance_observation: "修正记录",
-};
 type Form = Pick<Agent, "name" | "description" | "instructions" | "tools" | "visible">;
 const blank: Form = { name: "", description: "", instructions: "", tools: [], visible: true };
 
@@ -71,7 +67,7 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
   }
   return (
     <PageScrollView>
-      <PageHeading title="子智能体" description="主知行可以按需委托它们；你也可以直接聊。工具权限由服务端限制。" />
+      <PageHeading title="子智能体" description="各有所长，随时聊聊或交给知行委托。" />
       {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
       {editing ? (
         <View style={s.card}>
@@ -108,11 +104,11 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
         <>
           {agents.filter((agent) => agent.visible).map((agent) => (
             <View key={agent.id} style={s.card}>
-              <CardHeader icon="person-outline" title={`${agent.name}${agent.kind === "service" ? " · 服务助手" : ""}`} description={agent.description} />
-              <Text style={s.muted}>工具：{agent.tools.length ? agent.tools.map((id) => TOOL_LABELS.find((tool) => tool.id === id)?.label ?? SERVICE_TOOL_LABELS[id] ?? id).join("、") : "暂无专用工具"}</Text>
-              <Button onPress={() => onChat(agent.id)}>继续对话</Button>
-              <Button secondary onPress={() => onNewChat(agent.id)}>新对话</Button>
-              <Button secondary onPress={() => edit(agent)}>设置</Button>
+              <CardHeader icon={agent.kind === "service" ? "wallet-outline" : "person-outline"} title={agent.name} description={agent.description} action={<Pressable accessibilityRole="button" accessibilityLabel={`设置${agent.name}`} onPress={() => edit(agent)} style={s.iconButton}><Ionicons name="ellipsis-horizontal" size={22} color={colors.muted} /></Pressable>} />
+              <View style={[s.row, { justifyContent: "flex-end", gap: 8 }]}>
+                <Pressable accessibilityRole="button" accessibilityLabel={`与${agent.name}新建对话`} onPress={() => onNewChat(agent.id)} style={s.linkButton}><Ionicons name="create-outline" size={18} color={colors.muted} /><Text style={s.description}>新对话</Text></Pressable>
+                <Button small icon="chatbubble-ellipses-outline" onPress={() => onChat(agent.id)}>继续聊</Button>
+              </View>
             </View>
           ))}
           {agents.some((agent) => !agent.visible) ? (
@@ -123,7 +119,7 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
               ))}
             </View>
           ) : null}
-          <Button secondary onPress={() => edit("new")}>创建自定义助手</Button>
+          <Pressable accessibilityRole="button" onPress={() => edit("new")} style={s.linkButton}><Ionicons name="add-circle-outline" size={20} color={colors.accent} /><Text style={s.link}>创建助手</Text></Pressable>
         </>
       )}
     </PageScrollView>

@@ -1,7 +1,7 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Conversation, Project, Schedule } from "./api";
-import { ActionRow, Button, CardHeader, Empty, PageHero, PageScrollView, ServiceTile, colors, s, timeLabel } from "./ui";
+import { ActionRow, Button, CardHeader, PageHero, PageScrollView, ServiceTile, colors, s, timeLabel } from "./ui";
 
 export function HomePanel({ conversations, onChat, onOpenConversation, onLife, onWork }: {
   conversations: Conversation[];
@@ -61,10 +61,9 @@ export function WorkPanel({ conversations, projects, schedules, onOpenConversati
         ))}</View> : <Text style={s.description}>还没有对话。普通聊天也可以从 AI 页开始。</Text>}
       </View>
       <View style={s.card}>
-        <CardHeader icon="folder-outline" title="项目" description={projects.length ? `已有 ${projects.length} 个持久工作目录` : "把相关对话、文件和任务放在一起。"} />
-        {projects.length ? projects.slice(0, 4).map((project) => <Text key={project.id} style={s.text}>· {project.name}</Text>) : <Empty compact icon="folder-open-outline" title="还没有项目" />}
+        <CardHeader icon="folder-outline" title="项目" description={projects.length ? `${projects.length} 个项目` : "把相关对话和资料放在一起。"} action={<Pressable accessibilityRole="button" accessibilityLabel="创建项目" onPress={onCreateProject} style={s.iconButton}><Ionicons name="add" size={24} color={colors.ink} /></Pressable>} />
+        {projects.slice(0, 4).map((project) => <Text key={project.id} style={s.text}>· {project.name}</Text>)}
         {projects.length > 4 ? <Text style={s.muted}>还有 {projects.length - 4} 个项目</Text> : null}
-        <Button icon="add" onPress={onCreateProject} style={s.centeredAction}>创建项目</Button>
       </View>
       <Pressable accessibilityRole="button" accessibilityLabel="定时计划" onPress={onSchedules} style={({ pressed }) => [s.card, pressed && s.pressed]}>
         <CardHeader icon="time-outline" title="定时计划" description={schedules.length ? `已有 ${schedules.length} 项计划` : "还没有计划"}
@@ -79,9 +78,7 @@ export function ToolboxPanel({ onSettings, onAgents, onModels, onResources }: { 
     <PageScrollView tabs>
       <PageHero eyebrow="TOOLBOX" title="工具箱" description="资源、服务与助手设置，按需要放进来。" />
       <View style={s.card}>
-        <CardHeader icon="albums-outline" title="资源库" />
-        <Text style={s.description}>查看上传的图片、资料和知行交付的文件。</Text>
-        <Button secondary icon="folder-open-outline" onPress={onResources}>打开资源库</Button>
+        <ActionRow icon="albums-outline" title="资源库" description="图片、资料和知行交付的文件" onPress={onResources} last compact />
       </View>
       <View style={s.card}>
         <CardHeader icon="apps-outline" title="助手与服务" description="管理服务助手、模型和你的个人设置。" />

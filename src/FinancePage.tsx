@@ -1,10 +1,12 @@
-import { ActivityIndicator, FlatList, Modal, Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, FlatList, Modal, Pressable, Text, View } from "react-native";
+import { MessageBody } from "./MessageBody";
+import { ConversationComposer } from "./ConversationComposer";
 import type { Connection, Conversation, FinanceSummary, Message } from "./api";
 import { Attachments } from "./Attachments";
 import { ApprovalCards } from "./ApprovalCards";
 import { FilesPanel } from "./FilesPanel";
 import { useChat } from "./useChat";
-import { Button, colors, humanError, s, timeLabel } from "./ui";
+import { BackLink, Button, colors, humanError, s, timeLabel } from "./ui";
 
 export function FinancePage({
   connection, conversation, finance, onBack, onRefresh,
@@ -16,8 +18,8 @@ export function FinancePage({
   onRefresh: () => void;
 }) {
   const {
-    messages, running, pendingRuns, syncError, refresh, loading, list, nearBottomRef,
-    previous, busy, loadOlder, intent, setIntent, setTarget, setKind, error, setError,
+    messages, running, pendingRuns, refresh, loading, list, nearBottomRef,
+    previous, busy, loadOlder, intent, setIntent, setTarget, kind, setKind, error, setError,
     draft, draftReady, updateDraft, send, cancel, resume, abandonPending,
     showFiles, setShowFiles, attach, removeAttachment,
   } = useChat({ connection, conversation, onRefresh });
@@ -25,15 +27,10 @@ export function FinancePage({
   return (
     <View style={s.body}>
       <View style={[s.header, { paddingBottom: 6 }]}>
-        <Button secondary small onPress={onBack}>‹ 生活</Button>
+        <BackLink label="生活" onPress={onBack} />
         <Text style={[s.heading, s.grow]}>财务</Text>
       </View>
       <Text style={[s.muted, { marginHorizontal: 22, marginBottom: 8 }]}>账户、收支和扣费问题，直接和财务助手聊。</Text>
-      {syncError ? (
-        <Pressable accessibilityRole="button" onPress={() => refresh.current()} style={[s.notice, { marginHorizontal: 18 }]}>
-          <Text style={s.noticeText}>{syncError} · 点击重试，草稿仍在。</Text>
-        </Pressable>
-      ) : null}
       {loading ? <ActivityIndicator color={colors.accent} /> : null}
       <FlatList
         ListFooterComponent={<ApprovalCards connection={connection} conversationId={conversation.id} onChanged={() => refresh.current()} />}
@@ -80,19 +77,19 @@ export function FinancePage({
           </View>
         }
         renderItem={({ item }: { item: Message }) => (
-          <View style={{ alignSelf: item.role === "user" ? "flex-end" : "stretch", maxWidth: "92%", gap: 5 }}>
+          <View style={{ alignSelf: item.role === "user" ? "flex-end" : "stretch", maxWidth: item.role === "user" ? "88%" : "100%", gap: 5 }}>
             <Text style={s.muted}>
               {item.role === "user" ? "你" : "财务助手"} · {timeLabel(item.created_at)}
               {item.intent === "steer" ? ` · 引导${item.status === "applied" ? "已应用" : item.status === "rejected" ? "未应用" : "待应用"}` : ""}
             </Text>
-            <View style={{ backgroundColor: item.role === "user" ? colors.pale : colors.white, padding: 13, borderRadius: 15 }}>
-              <Text selectable style={s.text}>{item.content}</Text>
+            <View style={{ backgroundColor: item.role === "user" ? colors.neutral : "transparent", padding: item.role === "user" ? 13 : 0, borderRadius: 15 }}>
+              <MessageBody>{item.content}</MessageBody>
               <Attachments connection={connection} items={item.attachments} />
             </View>
           </View>
         )}
       />
-      <View style={{ backgroundColor: colors.white, borderTopColor: colors.line, borderTopWidth: 1, padding: 12, gap: 8 }}>
+      <View style={{ backgroundColor: colors.paper, paddingTop: 6, gap: 4 }}>
         {running || queued ? (
           <View style={s.spread}>
             <Text style={s.muted}>{running ? `正在回复 · ${queued} 条等待` : `${queued} 条等待`}</Text>
@@ -110,24 +107,9 @@ export function FinancePage({
           </View>
         ) : null}
         {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-        <Attachments connection={connection} items={draft.attachments} remove={draft.pending ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
-        <View style={[s.row, { alignItems: "flex-end" }]}>
-          <Button secondary small disabled={!!draft.pending} onPress={() => setShowFiles(true)}>＋</Button>
-          <TextInput
-            accessibilityLabel="给财务助手发消息"
-            multiline
-            placeholder="直接说说你的财务问题…"
-            placeholderTextColor={colors.muted}
-            value={draft.text}
-            maxLength={20000}
-            editable={draftReady && !draft.pending && !busy}
-            onChangeText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}
-            style={[s.input, s.grow, { minHeight: 46, maxHeight: 105 }]}
-          />
-          <Button disabled={!draftReady || busy || (!draft.text.trim() && !draft.attachments?.length)} onPress={() => { void send(); }}>
-            {draft.pending ? "重试" : "发送"}
-          </Button>
-        </View>
+        <ConversationComposer text={draft.text} placeholder="说说这笔钱，或发张截图…" editable={draftReady && !draft.pending && !busy} onText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }} onSend={() => { void send(); }} onFiles={() => setShowFiles(true)} attachmentLocked={!draftReady || !!draft.pending || busy} canSend={draftReady && !busy && !!(draft.text.trim() || draft.attachments?.length)} busy={busy} pending={!!draft.pending} kind={kind} onKind={setKind} kindLocked={intent === "steer"}>
+          <Attachments connection={connection} items={draft.attachments} remove={draft.pending ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
+        </ConversationComposer>
         {draft.pending && !busy ? (
           <Button secondary small onPress={abandonPending}>返回编辑草稿</Button>
         ) : null}

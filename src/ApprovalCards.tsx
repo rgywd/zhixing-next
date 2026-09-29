@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
-import { request, type Approval, type Connection, type Page } from "./api";
+import { ApiError, request, type Approval, type Connection, type Page } from "./api";
+import { useSyncStatus } from "./ConnectionStatus";
 import { shareDownload } from "./resources";
 import { Button, humanError, s } from "./ui";
 
@@ -13,25 +14,31 @@ export function ApprovalCards({ connection, conversationId, runId, onChanged }: 
   const [items, setItems] = useState<Approval[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [syncError, setSyncError] = useState("");
+  const retry = useRef<() => void>(() => undefined);
+  const reportSync = useSyncStatus(() => retry.current());
   useEffect(() => {
     const controller = new AbortController();
     let polling = false;
+    let supported = true;
     async function poll() {
-      if (polling) return;
+      if (polling || !supported) return;
       polling = true;
       try {
         const filter = runId ? `run_id=${encodeURIComponent(runId)}` : `conversation_id=${encodeURIComponent(conversationId ?? "")}`;
         const page = await request<Page<Approval>>(connection, `/approvals?${filter}`, { signal: controller.signal });
-        if (!controller.signal.aborted) { setItems(page.items); setSyncError(""); }
+        if (!controller.signal.aborted) { setItems(page.items); reportSync(); }
       } catch (e) {
-        if (!controller.signal.aborted) setSyncError(humanError(e));
+        if (!controller.signal.aborted) {
+          if (e instanceof ApiError && e.status === 404) { supported = false; reportSync(); }
+          else reportSync(e);
+        }
       } finally { polling = false; }
     }
+    retry.current = () => { void poll(); };
     void poll();
     const timer = setInterval(() => { void poll(); }, 2000);
     return () => { controller.abort(); clearInterval(timer); };
-  }, [connection, conversationId, runId]);
+  }, [connection, conversationId, runId, reportSync]);
 
   async function decide(item: Approval, decision: string) {
     setBusy(true); setError("");
@@ -70,6 +77,6 @@ export function ApprovalCards({ connection, conversationId, runId, onChanged }: 
         <Button secondary disabled={busy} onPress={() => { void decide(item, "deny"); }}>不允许</Button>
       </View>}
     </View>)}
-    {error || syncError ? <Text accessibilityRole="alert" style={s.error}>{error || syncError}</Text> : null}
+    {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
   </View>;
 }
