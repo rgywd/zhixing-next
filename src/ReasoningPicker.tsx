@@ -1,11 +1,14 @@
+import type { ThemeColors } from "./theme";
+import { useUi, humanError } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { ModelInfo, ReasoningEffort } from "./api";
 import { BottomSheet } from "./BottomSheet";
 import { reasoningLabel } from "./ModelPicker";
-import { humanError, s } from "./ui";
-import { colors, radius, space, typography } from "./theme";
+
+import { radius, space, typography } from "./theme";
 
 const descriptions: Record<ReasoningEffort, string> = {
   auto: "交给模型决定思考深度", none: "关闭额外思考", low: "轻量思考，快速回应", medium: "兼顾速度与推敲", high: "为复杂问题多想一步", xhigh: "使用当前模型最高思考档位",
@@ -14,6 +17,8 @@ export function ReasoningPicker({ visible, model, selected, onSelect, onClose }:
   visible: boolean; model?: ModelInfo; selected: ReasoningEffort | null;
   onSelect: (value: ReasoningEffort | null) => Promise<void>; onClose: () => void;
 }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const depth = selected ?? model?.default_reasoning_effort ?? "auto";
@@ -44,14 +49,14 @@ export function ReasoningPicker({ visible, model, selected, onSelect, onClose }:
     </ScrollView>
   </BottomSheet>;
 }
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { paddingHorizontal: 22, paddingBottom: 20, gap: space.lg },
   preview: { alignItems: "center", gap: 6, paddingVertical: 8 },
   bulb: { width: 56, height: 56, borderRadius: 20, backgroundColor: colors.goldSoft, alignItems: "center", justifyContent: "center", marginBottom: 2 },
   steps: { flexDirection: "row", paddingTop: 6 },
-  track: { position: "absolute", top: 19, left: "10%", right: "10%", height: 3, backgroundColor: "#E2D6BE", borderRadius: 2 },
+  track: { position: "absolute", top: 19, left: "10%", right: "10%", height: 3, backgroundColor: colors.strongLine, borderRadius: 2 },
   step: { flex: 1, alignItems: "center", minHeight: 65, gap: 9 },
-  dot: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.paper, borderWidth: 2, borderColor: "#DFD5C4", alignItems: "center", justifyContent: "center" },
+  dot: { width: 28, height: 28, borderRadius: 14, backgroundColor: colors.paper, borderWidth: 2, borderColor: colors.strongLine, alignItems: "center", justifyContent: "center" },
   selectedDot: { borderColor: colors.gold, backgroundColor: colors.goldSoft },
   dotCenter: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.gold },
   stepText: { ...typography.caption, color: colors.muted },

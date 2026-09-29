@@ -1,11 +1,12 @@
+import { useUi, ActionLink, Empty, PageHeading, PageScrollView, humanError } from "./ui";
 import { useEffect, useState } from "react";
 import { Text, TextInput, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { mergeById, request, type Connection, type Page, type Resource } from "./api";
 import { Attachments } from "./Attachments";
-import { ActionLink, Empty, PageHeading, PageScrollView, colors, humanError, s } from "./ui";
 
 export function ResourcesPanel({ connection }: { connection: Connection }) {
+  const { s, colors } = useUi();
   const [items, setItems] = useState<Resource[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -28,7 +29,7 @@ export function ResourcesPanel({ connection }: { connection: Connection }) {
   }
   return <PageScrollView>
     <PageHeading title="资源库" description="上传的原始资料和已交付的文件都保存在这里。" />
-    <View style={[s.row, { backgroundColor: colors.white, borderRadius: 12, borderWidth: 1, borderColor: colors.line, paddingLeft: 12 }]}><Ionicons name="search-outline" size={19} color={colors.blue} /><TextInput style={[s.input, { flex: 1, borderWidth: 0, backgroundColor: "transparent" }]} accessibilityLabel="筛选已加载资料" placeholder="筛选已加载资料的名称…" placeholderTextColor={colors.muted} value={query} onChangeText={setQuery} /></View>
+    <View style={[s.row, { backgroundColor: colors.surfaceRaised, borderRadius: 12, borderWidth: 1, borderColor: colors.line, paddingLeft: 12 }]}><Ionicons name="search-outline" size={19} color={colors.blue} /><TextInput style={[s.input, { flex: 1, borderWidth: 0, backgroundColor: "transparent" }]} accessibilityLabel="筛选已加载资料" placeholder="筛选已加载资料的名称…" placeholderTextColor={colors.muted} value={query} onChangeText={setQuery} /></View>
     {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
     {!items.length ? <Empty compact icon="albums-outline" title="还没有资料">可以从聊天或财务页添加图片和文件。</Empty> : null}
     {items.filter((item) => item.name.toLowerCase().includes(query.toLowerCase())).map((item) => <View key={item.id} style={s.card}>

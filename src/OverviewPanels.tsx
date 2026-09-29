@@ -1,7 +1,8 @@
+import { AppearanceControl } from "./AppearanceControl";
+import { useUi, ActionLink, ActionRow, CardHeader, IconAction, PageHero, PageScrollView, ServiceTile, timeLabel } from "./ui";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Conversation, Project, Schedule } from "./api";
-import { ActionLink, ActionRow, CardHeader, IconAction, PageHero, PageScrollView, ServiceTile, colors, s, timeLabel } from "./ui";
 
 export function HomePanel({ conversations, onChat, onOpenConversation, onLife, onWork }: {
   conversations: Conversation[];
@@ -10,13 +11,14 @@ export function HomePanel({ conversations, onChat, onOpenConversation, onLife, o
   onLife: () => void;
   onWork: () => void;
 }) {
+  const { s } = useUi();
   const recent = [...conversations].sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
   return (
     <PageScrollView tabs>
       <PageHero eyebrow="HOME" title="首页" description="你的个人助手，从一句话开始。" />
       <View style={s.card}>
-        <CardHeader icon="sparkles-outline" title="交给知行" description="聊天、研究、处理文件，从一句话开始。" tone="purple" />
-        <ActionLink icon="chatbubble-ellipses-outline" onPress={onChat} tone="purple">开始对话</ActionLink>
+        <CardHeader icon="sparkles-outline" title="交给知行" description="聊天、研究、处理文件，从一句话开始。" tone="red" />
+        <ActionLink icon="chatbubble-ellipses-outline" onPress={onChat} tone="red">开始对话</ActionLink>
       </View>
       <View style={s.card}>
         <Text accessibilityRole="header" style={s.label}>接着上次</Text>
@@ -26,7 +28,7 @@ export function HomePanel({ conversations, onChat, onOpenConversation, onLife, o
       </View>
       <View style={s.sectionHeading}><Text accessibilityRole="header" style={s.title}>生活与工作</Text></View>
       <View style={s.serviceGrid}>
-        <ServiceTile icon="leaf-outline" title="生活" description="财务与日常" onPress={onLife} tone="green" />
+        <ServiceTile icon="leaf-outline" title="生活" description="财务与日常" onPress={onLife} tone="gold" />
         <ServiceTile icon="briefcase-outline" title="工作" description="对话与计划" onPress={onWork} tone="blue" />
       </View>
     </PageScrollView>
@@ -42,19 +44,20 @@ export function WorkPanel({ conversations, projects, schedules, onOpenConversati
   onCreateProject: () => void;
   onSchedules: () => void;
 }) {
+  const { s, colors } = useUi();
   const recent = [...conversations].sort((a, b) => b.updated_at.localeCompare(a.updated_at)).slice(0, 3);
   return (
     <PageScrollView tabs>
       <PageHero eyebrow="WORK" title="工作" description="对话、项目和任务会在这里逐步连起来。"
         art={require("../assets/work-header-red.png")} artStyle={styles.workArtwork} />
       <View style={s.card}>
-        <CardHeader icon="chatbubbles-outline" title="最近对话" tone="purple" action={
+        <CardHeader icon="chatbubbles-outline" title="最近对话" tone="red" action={
           <Pressable accessibilityRole="button" accessibilityLabel="全部对话" onPress={onChooseConversation} style={({ pressed }) => [s.linkButton, pressed && s.pressed]}>
             <Text style={s.link}>全部</Text><Ionicons name="chevron-forward" size={15} color={colors.accent} />
           </Pressable>
         } />
         {recent.length ? <View>{recent.map((conversation, index) => (
-          <ActionRow key={conversation.id} icon={conversation.agent_id === "finance" ? "stats-chart-outline" : "chatbubble-outline"} tone={conversation.agent_id === "finance" ? "green" : "purple"}
+          <ActionRow key={conversation.id} icon={conversation.agent_id === "finance" ? "stats-chart-outline" : "chatbubble-outline"} tone={conversation.agent_id === "finance" ? "gold" : "red"}
             title={conversation.title} description={timeLabel(conversation.updated_at)} compact last={index === recent.length - 1}
             onPress={() => onOpenConversation(conversation.id)} />
         ))}</View> : <Text style={s.description}>还没有对话。普通聊天也可以从 AI 页开始。</Text>}
@@ -73,9 +76,11 @@ export function WorkPanel({ conversations, projects, schedules, onOpenConversati
 }
 
 export function ToolboxPanel({ onSettings, onAgents, onModels, onResources }: { onSettings: () => void; onAgents: () => void; onModels: () => void; onResources: () => void }) {
+  const { s } = useUi();
   return (
     <PageScrollView tabs>
       <PageHero eyebrow="TOOLBOX" title="工具箱" description="资源、服务与助手设置，按需要放进来。" />
+      <View style={s.card}><AppearanceControl row /></View>
       <Text accessibilityRole="header" style={s.title}>资料</Text>
       <View style={s.card}>
         <ActionRow icon="albums-outline" title="资源库" description="图片、资料和交付文件" onPress={onResources} last compact tone="blue" />
@@ -83,8 +88,8 @@ export function ToolboxPanel({ onSettings, onAgents, onModels, onResources }: { 
       <Text accessibilityRole="header" style={s.title}>助手与服务</Text>
       <View style={s.card}>
         <View>
-          <ActionRow icon="people-outline" title="子智能体" description="服务助手与自定义助手" onPress={onAgents} compact tone="green" />
-          <ActionRow icon="options-outline" title="供应商与模型" description="聊天、执行与记忆" onPress={onModels} compact tone="purple" />
+          <ActionRow icon="people-outline" title="子智能体" description="服务助手与自定义助手" onPress={onAgents} compact tone="gold" />
+          <ActionRow icon="options-outline" title="供应商与模型" description="聊天、执行与记忆" onPress={onModels} compact tone="gold" />
           <ActionRow icon="settings-outline" title="人格与连接" description="称呼、表达方式与服务连接" onPress={onSettings} compact last tone="neutral" />
         </View>
       </View>

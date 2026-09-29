@@ -1,3 +1,5 @@
+import { AppearanceControl } from "./AppearanceControl";
+import { useUi, ActionLink, Button, CardHeader, Field, PageHeading, PageScrollView, StatusPill, humanError } from "./ui";
 import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import {
@@ -8,7 +10,6 @@ import {
   type ServiceStatus,
 } from "./api";
 import { saveConnection } from "./storage";
-import { ActionLink, Button, CardHeader, Field, PageHeading, PageScrollView, StatusPill, humanError, s } from "./ui";
 
 export function ConnectionForm({
   initial,
@@ -17,6 +18,7 @@ export function ConnectionForm({
   initial?: Connection;
   onConnect: (connection: Connection) => void;
 }) {
+  const { s } = useUi();
   const [url, setUrl] = useState(initial?.url ?? "");
   const [token, setToken] = useState(initial?.token ?? "");
   const [busy, setBusy] = useState(false);
@@ -99,6 +101,7 @@ export function SettingsPanel({
   onDisconnect: () => void;
   onExplore: () => void;
 }) {
+  const { s } = useUi();
   const [name, setName] = useState(assistant.name);
   const [persona, setPersona] = useState(assistant.persona);
   const [busy, setBusy] = useState(false);
@@ -124,8 +127,9 @@ export function SettingsPanel({
   return (
     <PageScrollView>
       <PageHeading title="人格与连接设置" description="称呼、表达方式和相处习惯，都可以随时调整。" />
+      <View style={s.card}><AppearanceControl row /></View>
       <View style={s.card}>
-        <CardHeader icon="person-outline" title="慢慢熟悉彼此" tone="purple" />
+        <CardHeader icon="person-outline" title="慢慢熟悉彼此" tone="gold" />
         <Field
           label="助手的名字"
           value={name}
@@ -161,7 +165,7 @@ export function SettingsPanel({
         <ActionLink icon="compass-outline" tone="blue" onPress={onExplore}>探索运行环境</ActionLink>
       </View>
       <View style={s.card}>
-        <CardHeader icon="link-outline" title="连接服务" tone="green" />
+        <CardHeader icon="link-outline" title="连接服务" tone="blue" />
         <ConnectionForm initial={connection} onConnect={onConnect} />
         <ActionLink
           icon="log-out-outline"

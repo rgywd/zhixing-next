@@ -1,14 +1,18 @@
+import type { ThemeColors } from "./theme";
+import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { ApiError } from "./api";
 import { failedSync, syncNotice, type SyncFailure } from "./syncHealth";
-import { colors, space, typography } from "./theme";
+import { space, typography } from "./theme";
 
 type Reporter = { report: (id: string, error?: unknown) => void; register: (id: string, retry: () => void) => () => void };
 const Context = createContext<Reporter | null>(null);
 
 export function ConnectionStatusProvider({ children }: { children: ReactNode }) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const [failures, setFailures] = useState<Record<string, SyncFailure>>({});
   const [now, setNow] = useState(() => Date.now());
   const retries = useRef(new Map<string, () => void>());
@@ -54,7 +58,7 @@ export function useSyncStatus(retry?: () => void) {
   return useCallback((error?: unknown) => context?.report(id, error), [context, id]);
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   notice: { flexDirection: "row", alignItems: "center", gap: space.sm, marginHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
   message: { flex: 1, ...typography.caption, color: colors.muted },
   retry: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },

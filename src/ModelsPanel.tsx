@@ -1,11 +1,13 @@
+import type { ThemeColors } from "./theme";
+import { useUi, ActionLink, PageHeading, PageScrollView, StatusPill, humanError } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { BrandIcon } from "./BrandIcon";
-import { colors, radius, space } from "./theme";
+import { radius, space } from "./theme";
 import { request, type Connection, type ModelCatalog } from "./api";
 import { ModelPicker } from "./ModelPicker";
-import { ActionLink, PageHeading, PageScrollView, StatusPill, humanError, s } from "./ui";
 
 const roles = [
   { id: "chat", label: "聊天", hint: "主知行新对话的默认模型", icon: "chatbubbles-outline" },
@@ -20,6 +22,8 @@ export function ModelsPanel({
   catalog: ModelCatalog | null;
   onCatalog: (catalog: ModelCatalog) => void;
 }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [selectedRole, setSelectedRole] = useState<(typeof roles)[number]["id"] | null>(null);
   const [error, setError] = useState("");
   async function refresh() {
@@ -48,7 +52,7 @@ export function ModelsPanel({
               const model = catalog.items.find((item) => item.id === catalog.roles[role.id]);
               return (
                 <Pressable key={role.id} accessibilityRole="button" accessibilityLabel={`选择${role.label}模型`} onPress={() => setSelectedRole(role.id)} style={[styles.role, role.id !== "memory" && styles.divider]}>
-                  <View style={[styles.roleIcon, { backgroundColor: role.id === "chat" ? colors.purpleSoft : role.id === "task" ? colors.greenSoft : colors.goldSoft }]}><Ionicons name={role.icon} size={20} color={role.id === "chat" ? colors.purple : role.id === "task" ? colors.green : colors.gold} /></View>
+                  <View style={[styles.roleIcon, { backgroundColor: role.id === "chat" ? colors.pale : role.id === "task" ? colors.blueSoft : colors.goldSoft }]}><Ionicons name={role.icon} size={20} color={role.id === "chat" ? colors.accent : role.id === "task" ? colors.blue : colors.gold} /></View>
                   <View style={s.headingCopy}><Text style={s.itemTitle}>{role.label}</Text><Text numberOfLines={1} style={s.muted}>{model?.name ?? "尚未配置"}</Text></View>
                   <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={23} /><Ionicons name="chevron-forward" size={16} color={colors.muted} />
                 </Pressable>
@@ -87,8 +91,8 @@ export function ModelsPanel({
   );
 }
 
-const styles = StyleSheet.create({
-  roles: { backgroundColor: colors.white, borderRadius: radius.item, paddingHorizontal: space.md },
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
+  roles: { backgroundColor: colors.surfaceRaised, borderRadius: radius.item, paddingHorizontal: space.md },
   role: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 65 },
   roleIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.neutral, alignItems: "center", justifyContent: "center" },
   divider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },

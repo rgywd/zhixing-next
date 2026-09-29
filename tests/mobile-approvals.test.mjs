@@ -29,7 +29,7 @@ function screen(item, decisionError = false, pollError = () => null) {
     },
     "react-native": { View: "View", Text: "Text" },
     "./ConnectionStatus": { useSyncStatus: () => (error) => reports.push(error) },
-    "./ui": { Button: "Button", s: {}, humanError: (error) => error.message },
+    "./ui": { Button: "Button", useUi: () => ({ s: {} }), humanError: (error) => error.message },
     "./resources": { shareDownload: async (...args) => { calls.push(args); } },
     "./api": {
       ApiError,

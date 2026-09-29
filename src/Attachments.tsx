@@ -1,9 +1,10 @@
+import { useUi, ActionLink, SheetHeader, humanError } from "./ui";
 import { useState } from "react";
 import { Image, Modal, Pressable, ScrollView, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Connection, Resource } from "./api";
-import { ActionLink, SheetHeader, colors, humanError, s } from "./ui";
+
 import { shareResource } from "./resources";
 
 export function Attachments({ connection, items = [], remove }: {
@@ -11,6 +12,7 @@ export function Attachments({ connection, items = [], remove }: {
   items?: Resource[];
   remove?: (id: string) => void;
 }) {
+  const { s, colors } = useUi();
   const [selected, setSelected] = useState<Resource | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
