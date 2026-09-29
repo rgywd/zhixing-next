@@ -8,7 +8,7 @@ import {
   type ServiceStatus,
 } from "./api";
 import { saveConnection } from "./storage";
-import { ActionLink, Button, CardHeader, Field, PageHeading, PageScrollView, StatusPill, humanError, s } from "./ui";
+import { ActionLink, Button, Field, PageHeading, PageScrollView, SettingsGroup, StatusPill, humanError, s } from "./ui";
 
 export function ConnectionForm({
   initial,
@@ -84,20 +84,14 @@ export function ConnectionForm({
     </View>
   );
 }
-export function SettingsPanel({
+export function PersonaSettingsPanel({
   connection,
   assistant,
   onAssistant,
-  onConnect,
-  onDisconnect,
-  onExplore,
 }: {
   connection: Connection;
   assistant: Assistant;
   onAssistant: (assistant: Assistant) => void;
-  onConnect: (connection: Connection) => void;
-  onDisconnect: () => void;
-  onExplore: () => void;
 }) {
   const [name, setName] = useState(assistant.name);
   const [persona, setPersona] = useState(assistant.persona);
@@ -123,25 +117,26 @@ export function SettingsPanel({
   }
   return (
     <PageScrollView>
-      <PageHeading title="人格与连接设置" description="称呼、表达方式和相处习惯，都可以随时调整。" />
-      <View style={s.card}>
-        <CardHeader icon="person-outline" title="慢慢熟悉彼此" tone="purple" />
+      <PageHeading title="人格偏好" description="称呼、表达方式和相处习惯，都可以随时调整。" />
+      <View style={s.form}>
         <Field
           label="助手的名字"
           value={name}
-          onChangeText={setName}
+          onChangeText={(value) => { setName(value); setNotice(""); }}
           maxLength={80}
+          editable={!busy}
         />
         <Field
           label="你希望我们怎样相处"
           placeholder="例如：自然直接，先给结论；遇到不确定的事坦诚说明。可以称呼我…"
           multiline
           value={persona}
-          onChangeText={setPersona}
+          onChangeText={(value) => { setPersona(value); setNotice(""); }}
           maxLength={20000}
+          editable={!busy}
           style={{ minHeight: 132 }}
         />
-        {error ? <Text style={s.error}>{error}</Text> : null}
+        {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
         {notice ? <StatusPill tone="green">已保存</StatusPill> : null}
         <Button
           disabled={busy || !name.trim()}
@@ -153,16 +148,25 @@ export function SettingsPanel({
           {busy ? "保存中…" : "保存人格设定"}
         </Button>
       </View>
-      <View style={s.card}>
-        <CardHeader icon="desktop-outline" title="认识运行环境" tone="blue" />
-        <Text style={s.muted}>
-          创建一次可追踪的只读任务，了解实际可访问的目录和工具。结果保留在独立会话中。
-        </Text>
+    </PageScrollView>
+  );
+}
+
+export function ConnectionSettingsPanel({ connection, onConnect, onDisconnect, onExplore }: {
+  connection?: Connection;
+  onConnect: (connection: Connection) => void;
+  onDisconnect?: () => void;
+  onExplore?: () => void;
+}) {
+  return (
+    <PageScrollView>
+      <PageHeading title="服务连接" description="连接你的知行，继续聊天与工作。" />
+      <ConnectionForm initial={connection} onConnect={onConnect} />
+      {onExplore ? <SettingsGroup title="运行环境">
         <ActionLink icon="compass-outline" tone="blue" onPress={onExplore}>探索运行环境</ActionLink>
-      </View>
-      <View style={s.card}>
-        <CardHeader icon="link-outline" title="连接服务" tone="green" />
-        <ConnectionForm initial={connection} onConnect={onConnect} />
+        <Text style={[s.muted, { paddingBottom: 12 }]}>了解可访问的目录和工具，结果会保留在一段新对话中。</Text>
+      </SettingsGroup> : null}
+      {onDisconnect ? (
         <ActionLink
           icon="log-out-outline"
           onPress={() =>
@@ -176,7 +180,7 @@ export function SettingsPanel({
             )
           }
         >断开并移除令牌</ActionLink>
-      </View>
+      ) : null}
     </PageScrollView>
   );
 }

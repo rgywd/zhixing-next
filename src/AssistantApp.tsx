@@ -40,11 +40,13 @@ import { AiDrawer } from "./AiDrawer";
 import { BottomSheet } from "./BottomSheet";
 import { FinancePage } from "./FinancePage";
 import { ResourcesPanel } from "./ResourcesPanel";
-import { ModelsPanel } from "./ModelsPanel";
-import { HomePanel, ToolboxPanel, WorkPanel } from "./OverviewPanels";
+import { ModelsPanel, ProvidersPanel } from "./ModelsPanel";
+import { HomePanel, WorkPanel } from "./OverviewPanels";
 import { LifePanel } from "./LifePanel";
 import { SchedulesPanel } from "./SchedulesPanel";
-import { ConnectionForm, SettingsPanel } from "./SettingsPanel";
+import { ConnectionForm, ConnectionSettingsPanel, PersonaSettingsPanel } from "./SettingsPanel";
+import { SettingsHome, type SettingsDestination } from "./SettingsHome";
+import { SearchPicker } from "./SearchPicker";
 import { AgentsPanel } from "./AgentsPanel";
 import {
   draftKey,
@@ -55,7 +57,7 @@ import {
 } from "./storage";
 import { ActionLink, ActionRow, BackLink, Button, CardHeader, colors, Field, humanError, PageHeading, PageScrollView, SheetHeader, s, timeLabel } from "./ui";
 
-type Tab = "home" | "life" | "chat" | "work" | "toolbox";
+type Tab = "home" | "life" | "chat" | "work" | "settings";
 
 export default function AssistantApp() {
   const [connection, setConnection] = useState<Connection | null>(null);
@@ -136,7 +138,7 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
           { id: "life", label: "生活", icon: "leaf-outline" },
           { id: "chat", label: "AI", icon: null },
           { id: "work", label: "工作", icon: "briefcase-outline" },
-          { id: "toolbox", label: "工具箱", icon: "grid-outline" },
+          { id: "settings", label: "设置", icon: "settings-outline" },
         ] as const).map((item) => (
           <Pressable
             accessibilityRole={item.id === "chat" ? "button" : "tab"}
@@ -168,16 +170,18 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
 function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection) => void; error: string }) {
   const [tab, setTab] = useState<Tab>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
-  const showTabs = tab !== "chat" && (tab !== "life" || lifeView === "overview");
+  const [showConnection, setShowConnection] = useState(false);
+  const showTabs = tab !== "chat" && (tab !== "life" || lifeView === "overview") && (tab !== "settings" || !showConnection);
   useEffect(() => {
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
       if (tab === "chat") { setTab("home"); return true; }
       if (tab === "life" && lifeView !== "overview") { setLifeView("overview"); return true; }
+      if (tab === "settings" && showConnection) { setShowConnection(false); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, lifeView]);
+  }, [tab, lifeView, showConnection]);
   return (
     <View style={s.body}>
       {tab === "home" ? (
@@ -201,8 +205,12 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           onChooseConversation={() => setTab("chat")}
           onCreateProject={() => setTab("chat")}
           onSchedules={() => setTab("chat")} />
-      ) : tab === "toolbox" ? (
-        <ToolboxPanel onResources={() => setTab("chat")} onSettings={() => setTab("chat")} onAgents={() => setTab("chat")} onModels={() => setTab("chat")} />
+      ) : tab === "settings" ? (
+        showConnection ? <>
+          <BackLink label="设置" onPress={() => setShowConnection(false)} />
+          {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+          <ConnectionSettingsPanel onConnect={onConnect} />
+        </> : <SettingsHome onOpen={() => setShowConnection(true)} />
       ) : (
         <View style={s.body}>
           <View style={[s.header, s.spread]}>
@@ -216,7 +224,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           </PageScrollView>
         </View>
       )}
-      {showTabs ? <BottomTabs value={tab} onChange={setTab} /> : null}
+      {showTabs ? <BottomTabs value={tab} onChange={(next) => { setShowConnection(false); setTab(next); }} /> : null}
     </View>
   );
 }
@@ -240,7 +248,8 @@ function ConnectedSession({
   const [returnTab, setReturnTab] = useState<Exclude<Tab, "chat">>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
   const [workView, setWorkView] = useState<"overview" | "schedules">("overview");
-  const [toolView, setToolView] = useState<"overview" | "settings" | "agents" | "models" | "resources">("overview");
+  const [settingsView, setSettingsView] = useState<"overview" | Exclude<SettingsDestination, "search">>("overview");
+  const [showSearchSettings, setShowSearchSettings] = useState(false);
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [status, setStatus] = useState<ServiceStatus | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -287,7 +296,7 @@ function ConnectedSession({
   const showTabs = tab === "home"
     || (tab === "life" && lifeView === "overview")
     || (tab === "work" && workView === "overview")
-    || (tab === "toolbox" && toolView === "overview");
+    || (tab === "settings" && settingsView === "overview");
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
     const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
@@ -299,11 +308,11 @@ function ConnectedSession({
       if (tab === "chat") { setTab(returnTab); return true; }
       if (tab === "life" && lifeView !== "overview") { setLifeView("overview"); return true; }
       if (tab === "work" && workView !== "overview") { setWorkView("overview"); return true; }
-      if (tab === "toolbox" && toolView !== "overview") { setToolView("overview"); return true; }
+      if (tab === "settings" && settingsView !== "overview") { setSettingsView("overview"); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, returnTab, lifeView, workView, toolView]);
+  }, [tab, returnTab, lifeView, workView, settingsView]);
   function openMainChat() {
     if (tab !== "chat") setReturnTab(tab);
     setShowWelcome(true);
@@ -314,7 +323,7 @@ function ConnectedSession({
     else setTab(next);
     if (next === "life") setLifeView("overview");
     if (next === "work") setWorkView("overview");
-    if (next === "toolbox") setToolView("overview");
+    if (next === "settings") setSettingsView("overview");
   }
   async function openConversation(id: string, messageSeq?: number) {
     let target = conversations.find((item) => item.id === id);
@@ -711,34 +720,30 @@ function ConnectedSession({
             />
           </>
         )
-      ) : toolView === "overview" ? (
-        <ToolboxPanel onResources={() => setToolView("resources")} onSettings={() => setToolView("settings")} onAgents={() => setToolView("agents")} onModels={() => setToolView("models")} />
+      ) : settingsView === "overview" ? (
+        <SettingsHome assistant={assistant} catalog={catalog} connectionUrl={connection.url} onOpen={(destination) => {
+          if (destination === "search") setShowSearchSettings(true);
+          else setSettingsView(destination);
+        }} />
       ) : (
         <>
-          <BackLink label="工具箱" onPress={() => setToolView("overview")} />
-          {toolView === "agents" ? (
+          <BackLink label="设置" onPress={() => setSettingsView("overview")} />
+          {settingsView === "agents" ? (
             <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />
-          ) : toolView === "models" ? (
+          ) : settingsView === "models" ? (
             <ModelsPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
-          ) : toolView === "resources" ? (
+          ) : settingsView === "providers" ? (
+            <ProvidersPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
+          ) : settingsView === "resources" ? (
             <ResourcesPanel connection={connection} />
+          ) : settingsView === "connection" ? (
+            <ConnectionSettingsPanel connection={connection} onConnect={onConnect} onDisconnect={onDisconnect} onExplore={() => { void newConversation(true); }} />
           ) : assistant ? (
-            <SettingsPanel
-              connection={connection}
-              assistant={assistant}
-              onAssistant={setAssistant}
-              onConnect={onConnect}
-              onDisconnect={onDisconnect}
-              onExplore={() => {
-                void newConversation(true);
-              }}
-            />
+            <PersonaSettingsPanel connection={connection} assistant={assistant} onAssistant={setAssistant} />
           ) : (
             <PageScrollView>
-              <PageHeading title="连接设置" description="服务连接恢复后，可以编辑人格设定。" />
-              <Button secondary onPress={onDisconnect}>
-                移除当前连接，重新设置
-              </Button>
+              <PageHeading title="人格偏好" description="暂时无法读取人格设定，连接恢复后可继续编辑。" />
+              <ActionLink icon="refresh-outline" onPress={refresh}>重新加载</ActionLink>
             </PageScrollView>
           )}
         </>
@@ -756,8 +761,9 @@ function ConnectedSession({
         onOpen={openConversation}
         onMore={() => { void loadMore("conversations"); }}
         onNew={() => { setShowWelcome(true); setShowAiDrawer(false); setTab("chat"); }}
-        onSettings={() => { setShowAiDrawer(false); setToolView("settings"); setTab("toolbox"); }}
       />
+      <SearchPicker visible={showSearchSettings} connection={connection} management selectedId={welcomeSearchId} onSelect={setWelcomeSearchId}
+        onRemoved={(id) => setChatStart((old) => old?.searchId === id ? { ...old, searchId: null } : old)} onClose={() => setShowSearchSettings(false)} />
       <BottomSheet visible={showProjectCreator} title="创建项目" subtitle="为相关对话、文件和任务留一个工作目录" onClose={() => setShowProjectCreator(false)}>
         <View style={{ paddingHorizontal: 20, paddingBottom: 12, gap: 12 }}>
           <Field label="项目名称" placeholder="例如：我的项目" value={projectName} onChangeText={setProjectName} maxLength={100} />

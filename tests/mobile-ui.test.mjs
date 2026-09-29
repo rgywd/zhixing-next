@@ -54,7 +54,7 @@ test("shared controls preserve action callbacks, disabled state and accessible n
   row.props.onPress();
   tile.props.onPress();
   assert.equal(calls, 2);
-  assert.equal(ui.BackLink({ label: "工具箱", onPress }).props.accessibilityLabel, "返回工具箱");
+  assert.equal(ui.BackLink({ label: "设置", onPress }).props.accessibilityLabel, "返回设置");
   const icon = ui.IconAction({ icon: "refresh-outline", label: "刷新文件", disabled: true, onPress });
   assert.equal(icon.props.accessibilityLabel, "刷新文件");
   assert.equal(icon.props.accessibilityState.disabled, true);

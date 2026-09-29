@@ -72,26 +72,6 @@ export function WorkPanel({ conversations, projects, schedules, onOpenConversati
   );
 }
 
-export function ToolboxPanel({ onSettings, onAgents, onModels, onResources }: { onSettings: () => void; onAgents: () => void; onModels: () => void; onResources: () => void }) {
-  return (
-    <PageScrollView tabs>
-      <PageHero eyebrow="TOOLBOX" title="工具箱" description="资源、服务与助手设置，按需要放进来。" />
-      <Text accessibilityRole="header" style={s.title}>资料</Text>
-      <View style={s.card}>
-        <ActionRow icon="albums-outline" title="资源库" description="图片、资料和交付文件" onPress={onResources} last compact tone="blue" />
-      </View>
-      <Text accessibilityRole="header" style={s.title}>助手与服务</Text>
-      <View style={s.card}>
-        <View>
-          <ActionRow icon="people-outline" title="子智能体" description="服务助手与自定义助手" onPress={onAgents} compact tone="green" />
-          <ActionRow icon="options-outline" title="供应商与模型" description="聊天、执行与记忆" onPress={onModels} compact tone="purple" />
-          <ActionRow icon="settings-outline" title="人格与连接" description="称呼、表达方式与服务连接" onPress={onSettings} compact last tone="neutral" />
-        </View>
-      </View>
-    </PageScrollView>
-  );
-}
-
 const styles = StyleSheet.create({
   workArtwork: { left: -16, right: undefined, top: -4, width: "110%", height: 130, opacity: 0.88 },
   projectRow: { flexDirection: "row", alignItems: "center", gap: 9, paddingVertical: 5 },
