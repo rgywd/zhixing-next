@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   AppState,
   BackHandler,
+  Image,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -124,7 +125,9 @@ export default function AssistantApp() {
 function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => void }) {
   return (
     <View pointerEvents="box-none" style={s.floatingTabs}>
-      <View pointerEvents="none" style={s.tabs} />
+      <View pointerEvents="none" style={s.tabs}>
+        <Image accessible={false} source={require("../assets/navigation-notch.webp")} style={s.tabNotch} />
+      </View>
       <View pointerEvents="box-none" style={s.tabItems}>
         {([
           { id: "home", label: "首页", icon: "home-outline" },
@@ -143,8 +146,7 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
           >
             {item.id === "chat" ? (
               <View style={s.aiButton}>
-                <Ionicons name="sparkles" size={25} color={colors.white} />
-                <Text style={s.aiButtonText}>AI</Text>
+                <Image accessible={false} source={require("../assets/ai-radial.webp")} style={s.aiButtonIcon} />
               </View>
             ) : (
               <>
