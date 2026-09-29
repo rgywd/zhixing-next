@@ -148,6 +148,55 @@ test("download names cannot escape their unique cache directory", () => {
   assert.equal(safeDownloadName(".."), "artifact");
   assert.equal(safeDownloadName(""), "artifact");
 });
+
+test("image-only drafts preserve attachment IDs in immutable retries", () => {
+  const image = { id: "image-one", name: "截图.png", path: "uploads/image-one/截图.png", mime_type: "image/png", size: 100, conversation_id: "chat" };
+  const draft = { text: "", attachments: [image], pending: null };
+  const payload = prepareMessage(draft, "queue", "chat", null, null, () => "message-with-image");
+  assert.equal(payload.content, "");
+  assert.deepEqual(payload.attachments, [image.id]);
+  const restored = JSON.parse(JSON.stringify({ ...draft, pending: payload }));
+  assert.deepEqual(prepareMessage(restored, "steer", "task", "other", "other", () => assert.fail("retry changed ID")), payload);
+  assert.throws(() => prepareMessage({ text: "", pending: null }, "queue", "chat", null, null, () => "empty"));
+});
+
+test("shared composer permits attachment-only sends and freezes pending edits", () => {
+  const exported = {};
+  const element = (type, props) => ({ type, props });
+  const native = Object.fromEntries(["ActivityIndicator", "Modal", "Pressable", "ScrollView", "Text", "TextInput", "View"].map((name) => [name, name]));
+  const modules = {
+    react: { useState: (value) => [value, () => {}] },
+    "react/jsx-runtime": { jsx: element, jsxs: element },
+    "react-native": { ...native, StyleSheet: { create: (styles) => styles } },
+    "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
+    "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
+    "./Attachments": { Attachments: "Attachments" },
+    "./ModelPicker": { ModelPicker: "ModelPicker", reasoningLabel: {} },
+    "./SearchPicker": { SearchPicker: "SearchPicker" },
+    "./ui": { Button: "Button", colors: {}, s: {} },
+  };
+  runInNewContext(ts.transpileModule(readFileSync(new URL("../src/ChatComposer.tsx", import.meta.url), "utf8"), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
+  }).outputText, { exports: exported, require: (name) => {
+    assert.ok(modules[name], `Unexpected dependency: ${name}`);
+    return modules[name];
+  } });
+  const walk = (node) => node?.props ? [node, ...[node.props.children].flat(Infinity).flatMap(walk)] : [];
+  const attachments = [{ id: "screenshot", name: "截图.png", mime_type: "image/png" }];
+  let sends = 0;
+  const props = { name: "财务助手", draft: "", kind: "chat", busy: false, connection: {}, catalog: null, onSend: () => sends++, onRemoveAttachment: () => {} };
+  for (const [state, disabled] of [[{}, true], [{ attachments }, false], [{ attachments, pending: true }, false], [{ attachments, busy: true }, true], [{ attachments, ready: false }, true]]) {
+    const nodes = walk(exported.ChatComposer({ ...props, ...state }));
+    const send = nodes.find((node) => node.props.accessibilityLabel === (state.pending ? "重试发送" : "发送消息"));
+    assert.equal(send.props.disabled, disabled);
+    if (!disabled) send.props.onPress();
+    if (state.pending) {
+      assert.equal(nodes.find((node) => node.type === "TextInput").props.editable, false);
+      assert.equal(nodes.find((node) => node.type === "Attachments").props.remove, undefined);
+    }
+  }
+  assert.equal(sends, 2);
+});
 test("schedule retry after due time preserves persisted ID, time and original conversation", () => {
   const pending = {
     id: "plan-a",

@@ -38,6 +38,7 @@ import { ChatPanel } from "./ChatPanel";
 import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
 import { FinancePage } from "./FinancePage";
+import { ResourcesPanel } from "./ResourcesPanel";
 import { ModelsPanel } from "./ModelsPanel";
 import { HomePanel, ToolboxPanel, WorkPanel } from "./OverviewPanels";
 import { LifePanel } from "./LifePanel";
@@ -200,7 +201,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           onCreateProject={() => setTab("chat")}
           onSchedules={() => setTab("chat")} />
       ) : tab === "toolbox" ? (
-        <ToolboxPanel onSettings={() => setTab("chat")} onAgents={() => setTab("chat")} onModels={() => setTab("chat")} />
+        <ToolboxPanel onResources={() => setTab("chat")} onSettings={() => setTab("chat")} onAgents={() => setTab("chat")} onModels={() => setTab("chat")} />
       ) : (
         <View style={s.body}>
           <View style={[s.header, s.spread]}>
@@ -234,7 +235,7 @@ function Connected({
   const [returnTab, setReturnTab] = useState<Exclude<Tab, "chat">>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
   const [workView, setWorkView] = useState<"overview" | "schedules">("overview");
-  const [toolView, setToolView] = useState<"overview" | "settings" | "agents" | "models">("overview");
+  const [toolView, setToolView] = useState<"overview" | "settings" | "agents" | "models" | "resources">("overview");
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [status, setStatus] = useState<ServiceStatus | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -702,7 +703,7 @@ function Connected({
           </>
         )
       ) : toolView === "overview" ? (
-        <ToolboxPanel onSettings={() => setToolView("settings")} onAgents={() => setToolView("agents")} onModels={() => setToolView("models")} />
+        <ToolboxPanel onResources={() => setToolView("resources")} onSettings={() => setToolView("settings")} onAgents={() => setToolView("agents")} onModels={() => setToolView("models")} />
       ) : (
         <>
           <Pressable accessibilityRole="button" onPress={() => setToolView("overview")} style={s.backLink}>
@@ -712,6 +713,8 @@ function Connected({
             <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />
           ) : toolView === "models" ? (
             <ModelsPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
+          ) : toolView === "resources" ? (
+            <ResourcesPanel connection={connection} />
           ) : assistant ? (
             <SettingsPanel
               connection={connection}

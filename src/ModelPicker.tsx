@@ -87,7 +87,7 @@ export function ModelPicker({
           <Text numberOfLines={1} style={s.muted}>
             {item.model} · {item.protocol === "chat_completions" ? "OpenAI 兼容" : item.protocol === "responses" ? "Responses" : "Gemini"}
           </Text>
-          <Text style={s.muted}>{item.ready ? (item.reasoning_levels.length ? "密钥已配置 · 可调思考深度" : "密钥已配置") : "密钥未就绪"}</Text>
+          <Text style={s.muted}>{item.ready ? (item.reasoning_levels.length ? "密钥已配置 · 可调思考深度" : "密钥已配置") : "密钥未就绪"}{item.image_input ? " · 支持图片" : ""}</Text>
         </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel={`${favorites.includes(item.id) ? "取消收藏" : "收藏"} ${item.name}`} onPress={() => { void toggleFavorite(item.id); }} style={{ padding: 8 }}>
           <Text style={{ fontSize: 22, color: favorites.includes(item.id) ? colors.accent : colors.muted }}>

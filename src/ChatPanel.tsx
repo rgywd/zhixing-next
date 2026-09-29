@@ -25,6 +25,7 @@ import {
 import { useChat } from "./useChat";
 import { reasoningLabel } from "./ModelPicker";
 import { ChatComposer } from "./ChatComposer";
+import { Attachments } from "./Attachments";
 import { FilesPanel } from "./FilesPanel";
 import {
   Button,
@@ -133,6 +134,7 @@ export function ChatPanel({
     resume,
     abandonPending,
     attach,
+    removeAttachment,
     speak,
     pendingRuns,
     updateDraft,
@@ -215,19 +217,19 @@ export function ChatPanel({
         renderItem={({ item }) => (
           <View
             style={{
-              alignSelf: item.role === "user" ? "flex-end" : "stretch",
-              maxWidth: item.role === "user" ? "88%" : "100%",
+              alignSelf: item.role === "user" && !item.origin ? "flex-end" : "stretch",
+              maxWidth: item.role === "user" && !item.origin ? "88%" : "100%",
               gap: 5,
             }}
           >
-            <Text style={[s.muted, item.role === "user" && chatStyles.userMeta]}>
-              {item.role === "assistant" ? assistantName : "你"} ·{" "}
+            <Text style={[s.muted, item.role === "user" && !item.origin && chatStyles.userMeta]}>
+              {item.origin === "assistant_task" ? "后台任务" : item.role === "assistant" ? assistantName : "你"} ·{" "}
               {timeLabel(item.created_at)}
               {item.intent === "steer"
                 ? ` · 引导${item.status === "applied" ? "已应用" : item.status === "rejected" ? "未应用" : "待应用"}`
                 : ""}
             </Text>
-            <View style={item.role === "user" ? chatStyles.userBubble : chatStyles.assistantContent}>
+            <View style={item.role === "user" && !item.origin ? chatStyles.userBubble : chatStyles.assistantContent}>
               <Markdown
                 style={markdownStyles}
                 textcomponent={SelectableText}
@@ -236,6 +238,7 @@ export function ChatPanel({
               >
                 {item.content}
               </Markdown>
+              <Attachments connection={connection} items={item.attachments} />
             </View>
             {item.role === "assistant" || item.run_id ? (
               <View style={chatStyles.messageActions}>
@@ -302,6 +305,8 @@ export function ChatPanel({
       <ChatComposer
         name={assistantName}
         draft={draft.text}
+        attachments={draft.attachments}
+        onRemoveAttachment={(id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }}
         kind={kind}
         busy={busy}
         ready={draftReady}
@@ -312,7 +317,7 @@ export function ChatPanel({
         modelId={kind === "task" ? taskModelId : conversation.model_id}
         effort={kind === "task" ? taskEffort : conversation.reasoning_effort}
         searchProviderId={searchProviderId}
-        onDraft={(text) => { void updateDraft({ text, pending: null }).catch((e) => setError(humanError(e))); }}
+        onDraft={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}
         onKind={setKind}
         onModel={updateModel}
         onSearchProviderId={setSearchProviderId}
@@ -500,6 +505,14 @@ function RunDetail({
   );
 }
 function eventSummary(event: RunEvent) {
+  if (event.type === "execution") {
+    const labels: Record<string, string> = { started: "开始执行", running: "执行中", completed: "执行完成", failed: "执行失败", cancelled: "已停止执行", timed_out: "执行超时，已停止", interrupted: "服务重启，已停止旧进程" };
+    return `${labels[String(event.data.status)] ?? "执行进度"}${typeof event.data.exit_code === "number" ? ` · 退出码 ${event.data.exit_code}` : ""}${typeof event.data.output === "string" && event.data.output ? `\n${event.data.output}` : ""}`;
+  }
+  if (event.type === "artifact") {
+    const resource = event.data.resource as { name?: string } | undefined;
+    return `已交付：${resource?.name ?? "文件"}`;
+  }
   const content =
     event.data.message ??
     event.data.content ??

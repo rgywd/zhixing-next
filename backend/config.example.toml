@@ -12,6 +12,8 @@ task = "primary"
 [models.primary]
 protocol = "gemini"
 model = "YOUR_GEMINI_MODEL_ID"
+# Enable only after verifying this endpoint/model supports image input.
+image_input = false
 provider = "Gemini"
 api_key_env = "ZHIXING_GEMINI_API_KEY"
 # Gemini 3 models may declare: reasoning_levels = ["auto", "low", "medium", "high"]
@@ -32,3 +34,12 @@ api_key_env = "ZHIXING_GEMINI_API_KEY"
 # [[grants]]
 # path = "/absolute/path/to/reference-materials"
 # writable = false
+
+# Build sandbox/Dockerfile and verify the target host before enabling execution.
+[execution]
+enabled = false
+image = "zhixing-sandbox:1"
+network = "none" # bridge also allows Docker-reachable private networks.
+memory_mb = 2048
+cpus = 2
+timeout_seconds = 120

@@ -255,7 +255,7 @@ export function WorkPanel({
   );
 }
 
-export function ToolboxPanel({ onSettings, onAgents, onModels }: { onSettings: () => void; onAgents: () => void; onModels: () => void }) {
+export function ToolboxPanel({ onSettings, onAgents, onModels, onResources }: { onSettings: () => void; onAgents: () => void; onModels: () => void; onResources: () => void }) {
   return (
     <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
       <View style={styles.intro}>
@@ -266,15 +266,9 @@ export function ToolboxPanel({ onSettings, onAgents, onModels }: { onSettings: (
       <View style={s.card}>
         <View style={styles.row}>
           <Text style={styles.cardTitle}>资源库</Text>
-          <Text style={styles.tag}>正在搭建</Text>
         </View>
-        <Text style={styles.description}>
-          以后上传和生成的图片、文件产物会统一放在这里。当前会话的文件仍可在 AI 对话中查看。
-        </Text>
-        <View style={styles.split}>
-          <View style={styles.placeholder}><Text style={s.label}>图片</Text></View>
-          <View style={styles.placeholder}><Text style={s.label}>文件</Text></View>
-        </View>
+        <Text style={styles.description}>查看上传的图片、资料和知行交付的文件。</Text>
+        <Button secondary onPress={onResources}>打开资源库</Button>
       </View>
       <View style={s.card}>
         <Text style={styles.cardTitle}>助手与服务</Text>

@@ -355,7 +355,7 @@ def test_file_upload_retry_list_download_and_conflict(client):
     data = "用户上传的资料".encode()
     first = client.put(endpoint, content=data, **options)
     assert first.status_code == 200
-    assert first.json() == {
+    assert {key: first.json()[key] for key in ("path", "name", "size")} == {
         "path": f"uploads/{identifier}/资料.txt",
         "name": "资料.txt",
         "size": len(data),
@@ -369,7 +369,7 @@ def test_file_upload_retry_list_download_and_conflict(client):
         == 409
     )
     listing = client.get(f"/v1/conversations/{conversation}/files").json()
-    assert listing["items"] == [first.json()]
+    assert listing["items"] == [{key: first.json()[key] for key in ("path", "name", "size")}]
     downloaded = client.get(
         f"/v1/conversations/{conversation}/files/content", params={"path": first.json()["path"]}
     )

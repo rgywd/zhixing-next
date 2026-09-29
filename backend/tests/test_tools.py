@@ -5,7 +5,29 @@ import zipfile
 import pytest
 
 from zhixing_next.config import PathGrant, Settings
-from zhixing_next.tools import MAX_FILE_BYTES, FileAccess, capability_status
+from zhixing_next.tools import MAX_FILE_BYTES, FileAccess, capability_status, create_file_tools
+
+
+def test_binary_copy_obeys_both_source_and_destination_grants(tmp_path):
+    workspace = tmp_path / "workspace"
+    source = tmp_path / "reference"
+    export = tmp_path / "export"
+    for directory in (workspace, source, export):
+        directory.mkdir()
+    settings = Settings(data_dir=tmp_path / "data", workspace_root=workspace,
+                        grants=[PathGrant(path=source), PathGrant(path=export, writable=True)])
+    data = b"binary\x00\xff"
+    (source / "report.xlsx").write_bytes(data)
+    (tmp_path / "ungranted.xlsx").write_bytes(data)
+    copy = next(tool for tool in create_file_tools(settings, workspace) if tool.name == "copy_file")
+    copy.invoke({"source": str(source / "report.xlsx"), "destination": "import.xlsx"})
+    copy.invoke({"source": "import.xlsx", "destination": str(export / "result.xlsx")})
+    assert (export / "result.xlsx").read_bytes() == data
+    with pytest.raises(PermissionError):
+        copy.invoke({"source": "import.xlsx", "destination": str(source / "report.xlsx"), "overwrite": True})
+    with pytest.raises(PermissionError):
+        copy.invoke({"source": str(tmp_path / "ungranted.xlsx"), "destination": "bad.xlsx"})
+    assert not (workspace / "bad.xlsx").exists()
 
 
 def test_physical_file_grants_and_atomic_writes(tmp_path):

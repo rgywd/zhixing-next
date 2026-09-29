@@ -5,7 +5,7 @@ export type Page<T> = {
   previous_cursor?: string | null;
 };
 export type Assistant = { name: string; persona: string };
-export type AgentTool = "inspect_environment" | "list_directory" | "read_text_file" | "read_document" | "write_text_file" | "fetch_public_page" | "record_finance_observation" | "list_finance_observations" | "remove_finance_observation";
+export type AgentTool = "inspect_environment" | "list_directory" | "read_text_file" | "read_document" | "view_image" | "write_text_file" | "fetch_public_page" | "record_finance_observation" | "list_finance_observations" | "remove_finance_observation";
 export type FinanceObservation = { id: string; kind: "balance" | "income" | "expense"; platform: string; amount: string; note: string; created_at: string };
 export type FinanceSummary = { balances: FinanceObservation[]; recent: FinanceObservation[] };
 export type Agent = {
@@ -31,6 +31,7 @@ export type ModelInfo = {
   provider: string;
   protocol: "chat_completions" | "responses" | "gemini";
   ready: boolean;
+  image_input: boolean;
   reasoning_levels: ReasoningEffort[];
   default_reasoning_effort: Exclude<ReasoningEffort, "auto"> | null;
 };
@@ -67,7 +68,9 @@ export type Message = {
   id: string;
   conversation_id: string;
   role: "user" | "assistant";
+  origin?: "assistant_task";
   content: string;
+  attachments?: Resource[];
   intent: "queue" | "steer";
   run_id: string;
   status: "accepted" | "applied" | "rejected";
@@ -77,6 +80,7 @@ export type Message = {
 export type MessageInput = {
   id: string;
   content: string;
+  attachments?: string[];
   intent: "queue" | "steer";
   kind: "chat" | "task";
   target_run_id?: string;
@@ -85,7 +89,8 @@ export type MessageInput = {
   search_provider_id?: string;
 };
 export type SearchProvider = { id: string; name: string; kind: "brave" | "tavily" | "serper" };
-export type Draft = { text: string; pending: MessageInput | null };
+export type Resource = { id: string; name: string; path: string; size: number; mime_type: string; conversation_id: string };
+export type Draft = { text: string; attachments?: Resource[]; pending: MessageInput | null };
 export type Schedule = {
   id: string;
   conversation_id: string;
@@ -228,12 +233,14 @@ export function prepareMessage(
   newId: () => string,
 ): MessageInput {
   if (draft.pending) return draft.pending;
-  if (!draft.text.trim()) throw new Error("先写下要说的话。");
+  if (!draft.text.trim() && !draft.attachments?.length) throw new Error("先写下要说的话或添加资料。");
+  if ((draft.attachments?.length ?? 0) > 8) throw new Error("每条消息最多 8 份资料。");
   if (intent === "steer" && (!target || target !== runningId))
     throw new Error("原目标已经结束。请选择排队发送，或重新选择当前运行。");
   return {
     id: newId(),
     content: draft.text.trim(),
+    ...(draft.attachments?.length ? { attachments: draft.attachments.map((item) => item.id) } : {}),
     intent,
     kind,
     ...(intent === "steer" && target ? { target_run_id: target } : {}),

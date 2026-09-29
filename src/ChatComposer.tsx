@@ -2,7 +2,8 @@ import { useState, type ReactNode } from "react";
 import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import type { Connection, ModelCatalog, ReasoningEffort } from "./api";
+import type { Connection, ModelCatalog, ReasoningEffort, Resource } from "./api";
+import { Attachments } from "./Attachments";
 import { ModelPicker, reasoningLabel } from "./ModelPicker";
 import { SearchPicker } from "./SearchPicker";
 import { Button, colors, humanError, s } from "./ui";
@@ -10,6 +11,8 @@ import { Button, colors, humanError, s } from "./ui";
 export type ChatComposerProps = {
   name: string;
   draft: string;
+  attachments?: Resource[];
+  onRemoveAttachment?: (id: string) => void;
   kind: "chat" | "task";
   busy: boolean;
   ready?: boolean;
@@ -32,7 +35,7 @@ export type ChatComposerProps = {
 };
 
 export function ChatComposer({
-  name, draft, kind, busy, ready = true, pending = false, optionsLocked = false,
+  name, draft, attachments, onRemoveAttachment, kind, busy, ready = true, pending = false, optionsLocked = false,
   connection, catalog, modelId, effort, searchProviderId, onDraft, onKind, onModel,
   onSearchProviderId, onFiles, onSend, onEditPending, error, children,
 }: ChatComposerProps) {
@@ -45,7 +48,7 @@ export function ChatComposer({
   const model = catalog?.items.find((item) => item.id === selectedModelId);
   const depth = effort ?? model?.default_reasoning_effort ?? "auto";
   const locked = !ready || pending || busy || modelBusy || optionsLocked;
-  const sendDisabled = !ready || busy || modelBusy || !draft.trim();
+  const sendDisabled = !ready || busy || modelBusy || (!draft.trim() && !attachments?.length);
   async function updateModel(id: string | null, value: ReasoningEffort | null) {
     setModelBusy(true);
     try { await onModel(id, value); }
@@ -81,6 +84,7 @@ export function ChatComposer({
         </Pressable>
       </ScrollView>
       {optionsLocked ? <Text style={styles.hint}>引导模式 · 沿用目标运行的模型与联网设置</Text> : null}
+      <Attachments connection={connection} items={attachments} remove={ready && !pending && !busy ? onRemoveAttachment : undefined} />
       <View style={styles.composer}>
         <Pressable accessibilityRole="button" accessibilityLabel="添加文件" accessibilityState={{ disabled: !ready || busy }} disabled={!ready || busy} onPress={onFiles} style={styles.attach}><Ionicons name="add" size={24} color={colors.accent} /></Pressable>
         <TextInput accessibilityLabel={`向${name}提问或交代任务`} multiline maxLength={20000} scrollEnabled placeholder={`向${name}提问…`} placeholderTextColor={colors.muted} value={draft} onChangeText={onDraft} editable={ready && !pending && !busy} style={styles.input} />

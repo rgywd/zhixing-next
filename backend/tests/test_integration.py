@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import httpx
 from langchain_core.messages import AIMessage, ToolMessage
+from test_resources import png
 from test_runtime import ScriptedModel
 
 from zhixing_next.api import create_app
@@ -41,11 +42,12 @@ async def test_finance_shared_chat_reads_upload_searches_and_keeps_tool_scope(tm
     settings = settings_for(tmp_path)
     settings.models = {"selected": ModelConfig(
         protocol="chat_completions", model="test", api_key_env="UNUSED_TEST_KEY",
-        reasoning_levels=["high"],
+        reasoning_levels=["high"], image_input=True,
     )}
     outside = tmp_path / "main-assistant-files"
     outside.mkdir()
     (outside / "private.txt").write_text("must not reach finance", encoding="utf-8")
+    (outside / "private.png").write_bytes(png())
     settings.grants = [PathGrant(path=outside, writable=True)]
     searches = []
 
@@ -62,6 +64,9 @@ async def test_finance_shared_chat_reads_upload_searches_and_keeps_tool_scope(tm
         upload = await client.put(f"{prefix}/files/{uuid4()}", params={"filename": "statement.txt"},
             content=b"Account fee: 12.50", headers={"Content-Type": "application/octet-stream"})
         assert upload.status_code == 200
+        image = await client.put(f"{prefix}/files/{uuid4()}", params={"filename": "statement.png"},
+            content=png(), headers={"Content-Type": "application/octet-stream"})
+        assert image.status_code == 200
         provider = (await client.post("/v1/search/providers", json={
             "name": "Test search", "kind": "brave", "api_key": "test-only-secret",
         })).json()
@@ -70,6 +75,8 @@ async def test_finance_shared_chat_reads_upload_searches_and_keeps_tool_scope(tm
             AIMessage(content="", tool_calls=[
                 {"name": "read_text_file", "args": {"path": upload.json()["path"]}, "id": "read-upload", "type": "tool_call"},
                 {"name": "read_text_file", "args": {"path": str(outside / "private.txt")}, "id": "deny-outside", "type": "tool_call"},
+                {"name": "view_image", "args": {"resource_id": image.json()["id"]}, "id": "view-upload", "type": "tool_call"},
+                {"name": "view_image", "args": {"path": str(outside / "private.png")}, "id": "deny-image", "type": "tool_call"},
                 {"name": "search_web", "args": {"query": "account fees"}, "id": "search-fees", "type": "tool_call"},
             ]),
             AIMessage(content="附件手续费为 12.50，搜索来源 https://example.com/fees。"),
@@ -82,8 +89,10 @@ async def test_finance_shared_chat_reads_upload_searches_and_keeps_tool_scope(tm
             selected = model if run["search_provider"] else next_model
             return await run_agent(settings, run, **callbacks, model_override=selected)
 
-        body = {"id": "finance-files", "content": "分析附件中的手续费并查公开信息", "search_provider_id": provider["id"]}
+        body = {"id": "finance-files", "content": "分析附件中的手续费并查公开信息", "search_provider_id": provider["id"],
+            "attachments": [upload.json()["id"], image.json()["id"]]}
         receipt = (await client.post(f"{prefix}/messages", json=body)).json()
+        assert [item["id"] for item in receipt["message"]["attachments"]] == body["attachments"]
         stop = asyncio.Event()
         worker = asyncio.create_task(Worker(settings, runner).run(stop))
         try:
@@ -92,6 +101,8 @@ async def test_finance_shared_chat_reads_upload_searches_and_keeps_tool_scope(tm
             results = {item.tool_call_id: item for item in model.seen[-1] if isinstance(item, ToolMessage)}
             assert "Account fee: 12.50" in results["read-upload"].content
             assert results["deny-outside"].status == "error"
+            assert results["deny-image"].status == "error"
+            assert results["view-upload"].content[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
             assert "must not reach finance" not in str(model.seen)
             assert "https://example.com/fees" in results["search-fees"].content
             assert searches == [("brave", "account fees")]

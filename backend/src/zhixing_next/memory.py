@@ -120,7 +120,7 @@ async def organize_run(
         return False
     current = store.memory_context(run["id"])
     user_input = "\n".join(item["content"] for item in current)
-    if user_input.strip().casefold() in {"你好", "谢谢", "好的", "嗯", "ok", "收到", "再见"}:
+    if not user_input.strip() or user_input.strip().casefold() in {"你好", "谢谢", "好的", "嗯", "ok", "收到", "再见"}:
         return store.apply_memory_actions(run["id"], [])
     existing = store.memory_candidates()
     history = store.memory_context(

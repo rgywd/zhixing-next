@@ -18,7 +18,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from filelock import Timeout
 from starlette.exceptions import HTTPException
 
-from . import files
+from . import files, resources
 from .config import Settings, load_settings
 from .models import model_ready
 from .schemas import (
@@ -31,6 +31,7 @@ from .schemas import (
     MessageInput,
     ModelRoleInput,
     ProjectInput,
+    ResourceInput,
     ScheduleInput,
     ScheduleUpdate,
     SearchProviderInput,
@@ -160,6 +161,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     }[config.protocol],
                     "protocol": config.protocol,
                     "ready": bool(os.environ.get(config.api_key_env, "").strip()),
+                    "image_input": config.image_input,
                     "reasoning_levels": config.reasoning_levels,
                     "default_reasoning_effort": config.reasoning_effort,
                 }
@@ -331,7 +333,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         )
                     digest.update(chunk)
                     await asyncio.to_thread(output.write, chunk)
-            return await asyncio.to_thread(
+            upload = await asyncio.to_thread(
                 files.complete_upload,
                 settings,
                 workspace,
@@ -340,9 +342,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 temporary,
                 digest.hexdigest(),
             )
+            return await asyncio.to_thread(
+                resources.register_upload, settings, conversation_id, str(file_id),
+                upload, temporary, digest.hexdigest(),
+            )
         finally:
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
+
+    @router.get("/resources")
+    def resource_list(conversation_id: str | None = None, cursor: Cursor = 0, limit: Limit = 50):
+        return store.list_resources(conversation_id, cursor, limit)
+
+    @router.post("/conversations/{conversation_id}/resources")
+    def capture_resource(conversation_id: str, body: ResourceInput):
+        return resources.capture_file(settings, conversation_id, body.path)
+
+    @router.get("/resources/{resource_id}/content")
+    def resource_content(resource_id: UUID, preview: bool = False):
+        item = store.get_resource(str(resource_id))
+        if preview and not item["mime_type"].startswith("image/"):
+            raise StoreError("preview_unavailable", "This resource has no image preview", 422)
+        return Response(resources.resource_bytes(settings, item, preview=preview),
+                        media_type="image/jpeg" if preview else item["mime_type"],
+                        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
+                                 "Content-Disposition": "inline" if preview else "attachment; filename*=UTF-8''" + quote(item["name"])})
 
     @router.get("/conversations/{conversation_id}/messages")
     def messages(
