@@ -30,7 +30,7 @@ export function ModelsPanel({
   const providers = [...new Set(catalog?.items.map((item) => item.provider) ?? [])];
   return (
     <>
-      <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
+      <ScrollView contentContainerStyle={s.content}>
         <Text style={s.heading}>供应商与模型</Text>
         <Text style={s.muted}>供应商地址和密钥留在服务器配置，手机只选择已接入的模型。</Text>
         {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}

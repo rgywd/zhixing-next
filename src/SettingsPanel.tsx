@@ -123,7 +123,7 @@ export function SettingsPanel({
   return (
     <ScrollView
       keyboardShouldPersistTaps="handled"
-      contentContainerStyle={[s.content, s.tabContent]}
+      contentContainerStyle={s.content}
     >
       <Text style={s.heading}>慢慢熟悉彼此</Text>
       <Text style={s.muted}>称呼、表达方式和相处习惯，都可以随时调整。</Text>

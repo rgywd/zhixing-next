@@ -4,12 +4,11 @@ import { useChat } from "./useChat";
 import { Button, colors, humanError, s, timeLabel } from "./ui";
 
 export function FinancePage({
-  connection, conversation, finance, bottomInset, onBack, onRefresh,
+  connection, conversation, finance, onBack, onRefresh,
 }: {
   connection: Connection;
   conversation: Conversation;
   finance: FinanceSummary;
-  bottomInset: number;
   onBack: () => void;
   onRefresh: () => void;
 }) {
@@ -87,7 +86,7 @@ export function FinancePage({
           </View>
         )}
       />
-      <View style={{ backgroundColor: colors.white, borderTopColor: colors.line, borderTopWidth: 1, padding: 12, gap: 8, marginBottom: bottomInset }}>
+      <View style={{ backgroundColor: colors.white, borderTopColor: colors.line, borderTopWidth: 1, padding: 12, gap: 8 }}>
         {running || queued ? (
           <View style={s.spread}>
             <Text style={s.muted}>{running ? `正在回复 · ${queued} 条等待` : `${queued} 条等待`}</Text>

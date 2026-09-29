@@ -148,7 +148,7 @@ export function SchedulesPanel({
   return (
     <ScrollView
       keyboardShouldPersistTaps="handled"
-      contentContainerStyle={[s.content, s.tabContent]}
+      contentContainerStyle={s.content}
     >
       <View style={s.spread}>
         <View style={s.grow}>

@@ -104,12 +104,11 @@ export const runLabels = {
   cancelled: "已取消",
   interrupted: "执行中断",
 };
-export const tabBarClearance = 112;
 export const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.paper },
   body: { flex: 1 },
   content: { padding: 22, gap: 18, paddingBottom: 36 },
-  tabContent: { paddingBottom: tabBarClearance + 20 },
+  tabContent: { paddingBottom: 132 },
   row: { flexDirection: "row", alignItems: "center", gap: 10 },
   spread: {
     flexDirection: "row",

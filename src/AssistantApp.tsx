@@ -50,7 +50,7 @@ import {
   removeConnection,
   saveDraft,
 } from "./storage";
-import { Button, colors, Field, humanError, s, tabBarClearance, timeLabel } from "./ui";
+import { Button, colors, Field, humanError, s, timeLabel } from "./ui";
 
 type Tab = "home" | "life" | "chat" | "work" | "toolbox";
 
@@ -164,11 +164,16 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
 function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection) => void; error: string }) {
   const [tab, setTab] = useState<Tab>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
+  const showTabs = tab !== "chat" && (tab !== "life" || lifeView === "overview");
   useEffect(() => {
-    if (tab !== "chat") return;
-    const listener = BackHandler.addEventListener("hardwareBackPress", () => { setTab("home"); return true; });
+    const listener = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
+      if (tab === "chat") { setTab("home"); return true; }
+      if (tab === "life" && lifeView !== "overview") { setLifeView("overview"); return true; }
+      return false;
+    });
     return () => listener.remove();
-  }, [tab]);
+  }, [tab, lifeView]);
   return (
     <View style={s.body}>
       {tab === "home" ? (
@@ -179,7 +184,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
         lifeView === "overview" ? (
           <LifePanel onFinance={() => setLifeView("finance")} onChat={() => setTab("chat")} />
         ) : (
-          <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
+          <ScrollView contentContainerStyle={s.content}>
             <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
             <Text style={s.heading}>财务</Text>
             <Text style={s.muted}>连接服务后，可以在这里和财务助手聊。</Text>
@@ -207,7 +212,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           </ScrollView>
         </View>
       )}
-      {tab !== "chat" ? <BottomTabs value={tab} onChange={setTab} /> : null}
+      {showTabs ? <BottomTabs value={tab} onChange={setTab} /> : null}
     </View>
   );
 }
@@ -268,16 +273,26 @@ function Connected({
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
   const selectedModel = catalog?.items.find((item) => item.id === (selected?.model_id ?? catalog.roles.chat));
   const financeConversation = conversations.find((item) => item.id === financeId) ?? null;
+  const showTabs = tab === "home"
+    || (tab === "life" && lifeView === "overview")
+    || (tab === "work" && workView === "overview")
+    || (tab === "toolbox" && toolView === "overview");
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
     const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
     return () => { show.remove(); hide.remove(); };
   }, []);
   useEffect(() => {
-    if (tab !== "chat") return;
-    const listener = BackHandler.addEventListener("hardwareBackPress", () => { setTab(returnTab); return true; });
+    const listener = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
+      if (tab === "chat") { setTab(returnTab); return true; }
+      if (tab === "life" && lifeView !== "overview") { setLifeView("overview"); return true; }
+      if (tab === "work" && workView !== "overview") { setWorkView("overview"); return true; }
+      if (tab === "toolbox" && toolView !== "overview") { setToolView("overview"); return true; }
+      return false;
+    });
     return () => listener.remove();
-  }, [tab, returnTab]);
+  }, [tab, returnTab, lifeView, workView, toolView]);
   function openMainChat() {
     if (tab !== "chat") setReturnTab(tab);
     setShowWelcome(true);
@@ -602,7 +617,7 @@ function Connected({
             openMainChat();
           }} />
         ) : financeConversation ? (
-          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} bottomInset={keyboardVisible ? 0 : tabBarClearance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
+          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
         ) : (
           <View style={[s.body, { padding: 22, gap: 18 }]}>
             <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
@@ -707,7 +722,7 @@ function Connected({
               }}
             />
           ) : (
-            <ScrollView contentContainerStyle={[s.content, s.tabContent]}>
+            <ScrollView contentContainerStyle={s.content}>
               <Text style={s.title}>连接设置</Text>
               <Text style={s.muted}>服务连接恢复后，可以编辑人格设定。</Text>
               <Button secondary onPress={onDisconnect}>
@@ -717,7 +732,7 @@ function Connected({
           )}
         </>
       )}
-      {tab !== "chat" && !keyboardVisible ? <BottomTabs value={tab} onChange={selectTab} /> : null}
+      {showTabs && !keyboardVisible ? <BottomTabs value={tab} onChange={selectTab} /> : null}
       <AiDrawer
         visible={showAiDrawer}
         name={assistant?.name ?? "知行"}
