@@ -14,7 +14,7 @@ import {
   type Connection,
   type Resource,
 } from "./api";
-import { Button, CardHeader, Empty, PageScrollView, SheetHeader, humanError, s } from "./ui";
+import { ActionLink, Button, CardHeader, Empty, IconAction, PageScrollView, SheetHeader, humanError, s } from "./ui";
 
 type WorkspaceFile = { path: string; name: string; size: number };
 export function FilesPanel({
@@ -187,13 +187,13 @@ export function FilesPanel({
           当前会话的持久工作目录。上传资料后，在消息里说明要做什么；处理结果也会出现在这里。
         </Text>
         <View style={s.card}>
-          <CardHeader icon="cloud-upload-outline" title="交给知行一份资料" />
+          <CardHeader icon="cloud-upload-outline" title="添加资料" tone="blue" />
           <Text style={s.muted}>
             每个文件最多 20 MiB。图片可直接交给支持视觉的模型；PDF 和 Word 可提取文字。
           </Text>
           {upload ? (
             <>
-              <Text style={s.text}>{upload.name}</Text>
+              <Text numberOfLines={2} style={s.text}>{upload.name}</Text>
               <Button
                 disabled={busy || !canAttach}
                 onPress={() => {
@@ -202,13 +202,12 @@ export function FilesPanel({
               >
                 {busy ? "上传中…" : "上传并加入草稿"}
               </Button>
-              <Button secondary disabled={busy} onPress={() => setUpload(null)}>
-                重新选择
-              </Button>
+              <ActionLink icon="refresh-outline" tone="blue" disabled={busy} onPress={() => setUpload(null)}>重新选择</ActionLink>
             </>
           ) : (
             <Button
               disabled={busy || !canAttach}
+              style={{ alignSelf: "flex-start" }}
               onPress={() => {
                 void pick();
               }}
@@ -230,16 +229,15 @@ export function FilesPanel({
         {notice ? <Text style={s.muted}>{notice}</Text> : null}
         <View style={s.spread}>
           <Text style={s.title}>工作目录里的文件</Text>
-          <Button
-            secondary
-            small
+          <IconAction
+            icon="refresh-outline"
+            label="刷新文件"
+            tone="blue"
             disabled={busy}
             onPress={() => {
               void refresh();
             }}
-          >
-            刷新
-          </Button>
+          />
         </View>
         {!files.length ? (
           <Empty compact icon="documents-outline" title="暂时没有文件">
@@ -252,20 +250,18 @@ export function FilesPanel({
               <Text selectable style={s.muted}>
                 {file.path} · {(file.size / 1024).toFixed(1)} KiB
               </Text>
-              <View style={s.row}>
-                <Button
-                  secondary
-                  small
+              <View style={[s.row, { flexWrap: "wrap" }]}>
+                <ActionLink
+                  icon="share-outline"
+                  tone="blue"
                   disabled={busy}
                   onPress={() => {
                     void share(file);
                   }}
-                >
-                  下载并分享
-                </Button>
-                <Button
-                  secondary
-                  small
+                >下载分享</ActionLink>
+                <ActionLink
+                  icon="attach-outline"
+                  tone="blue"
                   disabled={busy || !canAttach}
                   onPress={() => {
                     void request<Resource>(connection, `/conversations/${conversationId}/resources`, { method: "POST", body: { path: file.path } })
@@ -273,9 +269,7 @@ export function FilesPanel({
                       .then(() => setNotice("资料已加入草稿。"))
                       .catch((e) => setError(humanError(e)));
                   }}
-                >
-                  加入草稿
-                </Button>
+                >加入草稿</ActionLink>
               </View>
             </View>
           ))

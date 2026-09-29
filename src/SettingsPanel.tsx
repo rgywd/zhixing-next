@@ -8,7 +8,7 @@ import {
   type ServiceStatus,
 } from "./api";
 import { saveConnection } from "./storage";
-import { Button, CardHeader, Field, PageHeading, PageScrollView, humanError, s } from "./ui";
+import { ActionLink, Button, CardHeader, Field, PageHeading, PageScrollView, StatusPill, humanError, s } from "./ui";
 
 export function ConnectionForm({
   initial,
@@ -74,6 +74,7 @@ export function ConnectionForm({
       ) : null}
       <Button
         disabled={busy}
+        style={{ alignSelf: "flex-start" }}
         onPress={() => {
           void connect();
         }}
@@ -124,7 +125,7 @@ export function SettingsPanel({
     <PageScrollView>
       <PageHeading title="人格与连接设置" description="称呼、表达方式和相处习惯，都可以随时调整。" />
       <View style={s.card}>
-        <CardHeader icon="person-outline" title="慢慢熟悉彼此" />
+        <CardHeader icon="person-outline" title="慢慢熟悉彼此" tone="purple" />
         <Field
           label="助手的名字"
           value={name}
@@ -138,12 +139,13 @@ export function SettingsPanel({
           value={persona}
           onChangeText={setPersona}
           maxLength={20000}
-          style={{ minHeight: 190 }}
+          style={{ minHeight: 132 }}
         />
         {error ? <Text style={s.error}>{error}</Text> : null}
-        {notice ? <Text style={s.muted}>{notice}</Text> : null}
+        {notice ? <StatusPill tone="green">已保存</StatusPill> : null}
         <Button
           disabled={busy || !name.trim()}
+          style={{ alignSelf: "flex-start" }}
           onPress={() => {
             void save();
           }}
@@ -152,20 +154,17 @@ export function SettingsPanel({
         </Button>
       </View>
       <View style={s.card}>
-        <CardHeader icon="desktop-outline" title="认识运行环境" />
+        <CardHeader icon="desktop-outline" title="认识运行环境" tone="blue" />
         <Text style={s.muted}>
           创建一次可追踪的只读任务，了解实际可访问的目录和工具。结果保留在独立会话中。
         </Text>
-        <Button secondary onPress={onExplore}>
-          探索我的运行环境
-        </Button>
+        <ActionLink icon="compass-outline" tone="blue" onPress={onExplore}>探索运行环境</ActionLink>
       </View>
       <View style={s.card}>
-        <CardHeader icon="link-outline" title="连接服务" />
+        <CardHeader icon="link-outline" title="连接服务" tone="green" />
         <ConnectionForm initial={connection} onConnect={onConnect} />
-        <Button
-          secondary
-          danger
+        <ActionLink
+          icon="log-out-outline"
           onPress={() =>
             Alert.alert(
               "断开当前服务？",
@@ -176,9 +175,7 @@ export function SettingsPanel({
               ],
             )
           }
-        >
-          断开并移除令牌
-        </Button>
+        >断开并移除令牌</ActionLink>
       </View>
     </PageScrollView>
   );

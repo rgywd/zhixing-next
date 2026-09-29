@@ -10,10 +10,19 @@ export const colors = {
   pale: "#F8E9E6",
   red: "#B3261E",
   amber: "#8A5A28",
+  neutral: "#F0EDE8",
+  purple: "#7155BE",
+  purpleSoft: "#EFEAF9",
+  blue: "#357D94",
+  blueSoft: "#E8F1F5",
+  gold: "#A67A2C",
+  goldSoft: "#F6EEDC",
+  green: "#52775B",
+  greenSoft: "#EAF1E9",
 };
 
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 };
-export const radius = { small: 12, control: 16, item: 20, card: 25, pill: 999 };
+export const radius = { small: 10, control: 12, item: 16, card: 20, pill: 999 };
 export const layout = { gutter: 16, pageGap: 14, cardPadding: 14, heroHeight: 116, touchTarget: 44, compactWidth: 360, tabClearance: 132 };
 
 export const typography = {

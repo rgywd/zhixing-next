@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Alert, Modal, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { request, type Connection, type Page } from "./api";
-import { Button, Empty, PageScrollView, SheetHeader, humanError, s } from "./ui";
+import { ActionLink, Empty, PageScrollView, SheetHeader, humanError, s } from "./ui";
 
 type Memory = { id: string; content: string; seq: number };
 
@@ -52,8 +52,8 @@ export function MemoryPanel({ connection, onClose }: {
           <Text style={s.muted}>你可以直接在对话里告诉知行要记住、纠正或忘记什么。</Text>
           {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
           {!busy && !items.length && !error ? <Empty compact icon="library-outline" title="还没有整理出记忆" /> : null}
-          {items.map((item) => <View key={item.id} style={s.card}><Text selectable style={s.text}>{item.content}</Text><Button small secondary danger disabled={busy} onPress={() => forget(item)}>忘记</Button></View>)}
-          {cursor ? <Button secondary disabled={busy} onPress={() => { void more(); }}>{busy ? "加载中…" : "查看更多"}</Button> : null}
+          {items.map((item) => <View key={item.id} style={s.card}><Text selectable style={s.text}>{item.content}</Text><ActionLink icon="trash-outline" disabled={busy} onPress={() => forget(item)}>忘记这条</ActionLink></View>)}
+          {cursor ? <ActionLink icon="chevron-down" disabled={busy} onPress={() => { void more(); }}>{busy ? "加载中…" : "查看更多"}</ActionLink> : null}
         </PageScrollView>
       </SafeAreaView>
     </Modal>

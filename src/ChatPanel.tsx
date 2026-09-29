@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import Markdown, { type ASTNode, type MarkdownStyleMap } from "@ronradtke/react-native-markdown-display";
+import { useEffect, useRef, useState } from "react";
+import { MessageBody } from "./MessageBody";
 import {
   ActivityIndicator,
   FlatList,
@@ -8,10 +8,12 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
-  type TextProps,
 } from "react-native";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
+import { useSyncStatus } from "./ConnectionStatus";
+import { ConversationComposer } from "./ConversationComposer";
+import { ReasoningPicker } from "./ReasoningPicker";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
   request,
@@ -35,41 +37,10 @@ import {
   Empty,
   humanError,
   runLabels,
+  SheetHeader,
   s,
   timeLabel,
 } from "./ui";
-
-function SelectableText(props: TextProps) {
-  return <Text selectable {...props} />;
-}
-
-const markdownRules = {
-  image: (node: ASTNode) => (
-    <Text key={node.key} style={{ color: colors.muted }}>
-      {node.attributes.alt || "[图片]"}
-    </Text>
-  ),
-};
-
-const openWebLink = (url: string) => /^https?:\/\//i.test(url);
-
-const markdownStyles = {
-  body: { color: colors.ink, fontSize: 15, lineHeight: 24 },
-  text: { color: colors.ink, fontSize: 15, lineHeight: 24 },
-  paragraph: { marginTop: 0, marginBottom: 8 },
-  heading1: { color: colors.ink, fontSize: 20, fontWeight: "600", marginBottom: 8 },
-  heading2: { color: colors.ink, fontSize: 18, fontWeight: "600", marginBottom: 7 },
-  heading3: { color: colors.ink, fontSize: 16, fontWeight: "600", marginBottom: 6 },
-  bullet_list: { marginVertical: 5 },
-  ordered_list: { marginVertical: 5 },
-  code_inline: { backgroundColor: colors.pale, color: colors.ink, fontSize: 13, padding: 0, paddingHorizontal: 4, borderWidth: 0, borderRadius: 4 },
-  code_block: { backgroundColor: colors.pale, color: colors.ink, fontSize: 13, padding: 10, borderRadius: 10 },
-  fence: { borderColor: colors.line, borderWidth: 1, borderRadius: 10, overflow: "hidden", marginVertical: 6 },
-  fence_header: { backgroundColor: colors.pale, borderBottomColor: colors.line },
-  fence_code: { backgroundColor: colors.white },
-  blockquote: { backgroundColor: colors.pale, borderLeftColor: colors.accent, borderLeftWidth: 3, paddingHorizontal: 10 },
-  link: { color: colors.accent, textDecorationLine: "underline" },
-} satisfies MarkdownStyleMap;
 
 export function ChatPanel({
   connection,
@@ -83,6 +54,7 @@ export function ChatPanel({
   startWithFiles = false,
   onFilesOpened,
   onConversationChanged,
+  onComposerContext,
   onRefresh,
 }: {
   connection: Connection;
@@ -96,6 +68,7 @@ export function ChatPanel({
   startWithFiles?: boolean;
   onFilesOpened?: () => void;
   onConversationChanged: (conversation: Conversation) => void;
+  onComposerContext: (value: { conversationId: string; modelId: string | null; kind: "chat" | "task" }) => void;
   onRefresh: () => void;
 }) {
   const [showModels, setShowModels] = useState(false);
@@ -120,7 +93,6 @@ export function ChatPanel({
     busy,
     error,
     setError,
-    syncError,
     loading,
     detail,
     setDetail,
@@ -145,6 +117,7 @@ export function ChatPanel({
   const chatModelId = conversation.model_id ?? catalog?.roles.chat ?? null;
   const modelId = kind === "task" ? taskModelId ?? catalog?.roles.task ?? null : chatModelId;
   const model = catalog?.items.find((item) => item.id === modelId);
+  useEffect(() => { onComposerContext({ conversationId: conversation.id, modelId, kind }); }, [conversation.id, modelId, kind, onComposerContext]);
   const depth = (kind === "task" ? taskEffort : conversation.reasoning_effort) ?? model?.default_reasoning_effort ?? "auto";
   async function updateModel(model_id: string | null, reasoning_effort: ReasoningEffort | null) {
     if (kind === "task") {
@@ -165,15 +138,6 @@ export function ChatPanel({
 
   return (
     <View style={s.body}>
-      {syncError ? (
-        <Pressable
-          onPress={() => refresh.current()}
-          style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}
-          accessibilityRole="button"
-        >
-          <Text style={s.noticeText}>{syncError} 点击重新连接；草稿保留。</Text>
-        </Pressable>
-      ) : null}
       {loading ? (
         <ActivityIndicator color={colors.accent} style={{ padding: 16 }} />
       ) : null}
@@ -185,7 +149,7 @@ export function ChatPanel({
         contentContainerStyle={{
           paddingHorizontal: 18,
           paddingVertical: 16,
-          gap: 24,
+          gap: 20,
           flexGrow: 1,
         }}
         keyboardShouldPersistTaps="handled"
@@ -229,26 +193,21 @@ export function ChatPanel({
               gap: 5,
             }}
           >
-            <Text style={[s.muted, item.role === "user" && !item.origin && chatStyles.userMeta]}>
-              {item.origin === "assistant_task" ? "后台任务" : item.role === "assistant" ? assistantName : "你"} ·{" "}
-              {timeLabel(item.created_at)}
+            <View style={[chatStyles.messageIdentity, item.role === "user" && !item.origin && { justifyContent: "flex-end" }]}>
+            {item.role === "assistant" ? <View style={chatStyles.assistantMark}><Ionicons name="sparkles" size={13} color={colors.accent} /></View> : null}
+            <Text style={[s.muted, item.role === "assistant" && { color: colors.ink, fontWeight: "600" }]}>
+              {item.origin === "assistant_task" ? "后台任务" : item.role === "assistant" ? assistantName : "你"}
               {item.intent === "steer"
                 ? ` · 引导${item.status === "applied" ? "已应用" : item.status === "rejected" ? "未应用" : "待应用"}`
                 : ""}
             </Text>
+            </View>
             <View style={item.role === "user" && !item.origin ? chatStyles.userBubble : chatStyles.assistantContent}>
-              <Markdown
-                style={markdownStyles}
-                textcomponent={SelectableText}
-                rules={markdownRules}
-                onLinkPress={openWebLink}
-              >
-                {item.content}
-              </Markdown>
+              <MessageBody>{item.content}</MessageBody>
               <Attachments connection={connection} items={item.attachments} />
             </View>
             {item.role === "assistant" || item.run_id ? (
-              <View style={chatStyles.messageActions}>
+              <View style={[chatStyles.messageActions, item.role === "user" && !item.origin && { justifyContent: "flex-end" }]}>
                 {item.role === "assistant" ? (
                   <Pressable
                     accessibilityRole="button"
@@ -258,7 +217,7 @@ export function ChatPanel({
                       void speak(item).catch((e) => setError(humanError(e)));
                     }}
                   >
-                    <Text style={chatStyles.actionText}>{speaking === item.id ? "停止朗读" : "朗读"}</Text>
+                    <Ionicons name={speaking === item.id ? "stop-circle-outline" : "volume-medium-outline"} size={18} color={colors.muted} />
                   </Pressable>
                 ) : null}
                 {item.run_id ? (
@@ -268,9 +227,10 @@ export function ChatPanel({
                     style={chatStyles.messageAction}
                     onPress={() => setDetail(item.run_id)}
                   >
-                    <Text style={chatStyles.actionText}>任务记录</Text>
+                    <Ionicons name="receipt-outline" size={18} color={colors.muted} />
                   </Pressable>
                 ) : null}
+                <Text style={s.small}>{timeLabel(item.created_at)}</Text>
               </View>
             ) : null}
           </View>
@@ -309,66 +269,27 @@ export function ChatPanel({
           </Button>
         </View>
       ) : null}
-      <View style={chatStyles.composerArea}>
-        <View style={chatStyles.composer}>
-          <Attachments connection={connection} items={draft.attachments} remove={draft.pending ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
-          <TextInput
-            accessibilityLabel="消息或任务要求"
-            multiline
-            placeholder={kind === "task" ? "交给知行完成…" : "输入消息与知行聊天…"}
-            placeholderTextColor={colors.muted}
-            value={draft.text}
-            maxLength={20000}
-            scrollEnabled
-            editable={draftReady && !draft.pending && !busy}
-            onChangeText={(text) => {
-              void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e)));
-            }}
-            style={chatStyles.composerInput}
-          />
-          {intent === "steer" ? (
-            <Text style={chatStyles.composerHint}>
-              {running?.id === target ? "引导当前运行 · 在下一可调整步骤生效" : "目标已结束，请切回排队发送"}
-            </Text>
-          ) : null}
-          <View style={chatStyles.toolbar}>
-            <ScrollView horizontal keyboardShouldPersistTaps="always" showsHorizontalScrollIndicator={false} style={chatStyles.toolbarChoices} contentContainerStyle={chatStyles.toolbarChoicesContent}>
-              {!conversation.agent_id ? (
-              <Pressable accessibilityRole="button" accessibilityLabel={`选择${kind === "task" ? "任务" : "聊天"}模型，当前${model?.name ?? "未配置"}`} accessibilityState={{ disabled: !catalog || modelBusy || !!draft.pending || intent === "steer" }} disabled={!catalog || modelBusy || !!draft.pending || intent === "steer"} onPress={() => setShowModels(true)} style={[chatStyles.tool, intent === "steer" && s.disabled]}>
-                <Text style={chatStyles.toolText}>模型 · {model?.name ?? "未配置"}</Text>
-              </Pressable>
-            ) : null}
-            <Pressable accessibilityRole="button" accessibilityLabel={kind === "chat" ? "当前聊天，切换为任务" : "当前任务，切换为聊天"} accessibilityState={{ disabled: !!draft.pending }} disabled={!!draft.pending} onPress={() => setKind(kind === "chat" ? "task" : "chat")} style={[chatStyles.tool, kind === "task" && chatStyles.toolActive]}>
-              <Text style={[chatStyles.toolText, kind === "task" && chatStyles.toolActiveText]}>{kind === "chat" ? "聊天" : "任务"}</Text>
-            </Pressable>
-            {!conversation.agent_id ? (
-              <Pressable accessibilityRole="button" accessibilityLabel={model?.reasoning_levels.length ? `思考深度，当前${reasoningLabel[depth]}` : "当前模型未配置思考深度"} accessibilityState={{ disabled: modelBusy || !!draft.pending || intent === "steer" || !model?.reasoning_levels.length }} disabled={modelBusy || !!draft.pending || intent === "steer" || !model?.reasoning_levels.length} onPress={() => setShowReasoning(true)} style={[chatStyles.tool, (!model?.reasoning_levels.length || intent === "steer") && s.disabled]}>
-                <Text style={chatStyles.toolText}>思考 · {model?.reasoning_levels.length ? reasoningLabel[depth] : "未配置"}</Text>
-              </Pressable>
-            ) : null}
-            {!conversation.agent_id ? <Pressable accessibilityRole="button" accessibilityLabel={`联网搜索${searchProviderId ? "已开启" : "已关闭"}`} accessibilityState={{ disabled: !!draft.pending || intent === "steer" }} disabled={!!draft.pending || intent === "steer"} onPress={() => setShowSearch(true)} style={[chatStyles.tool, !!searchProviderId && chatStyles.toolActive, intent === "steer" && s.disabled]}><Text style={[chatStyles.toolText, !!searchProviderId && chatStyles.toolActiveText]}>联网{searchProviderId ? " · 开" : ""}</Text></Pressable> : null}
-            {(running || intent === "steer") && (["queue", "steer"] as const).map((value) => (
-              <Pressable key={value} accessibilityRole="button" accessibilityLabel={value === "queue" ? "排队：当前运行结束后处理" : "引导：发送给当前运行"} accessibilityState={{ selected: intent === value, disabled: !!draft.pending || (value === "steer" && !running) }} disabled={!!draft.pending || (value === "steer" && !running)} onPress={() => {
-                setIntent(value);
-                if (value === "steer" && running) setKind(running.kind);
-                setTarget(value === "steer" ? (running?.id ?? null) : null);
-              }} style={[chatStyles.tool, intent === value && chatStyles.toolActive, value === "steer" && !running && s.disabled]}>
-                <Text style={[chatStyles.toolText, intent === value && chatStyles.toolActiveText]}>{value === "queue" ? "排队" : "引导"}</Text>
-              </Pressable>
-            ))}
-            </ScrollView>
-            <Pressable accessibilityRole="button" accessibilityLabel="添加资料" onPress={() => setShowFiles(true)} style={chatStyles.tool}>
-              <Text style={[chatStyles.toolText, { fontSize: 24, lineHeight: 25 }]}>＋</Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel={draft.pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !draftReady || busy || modelBusy || (!draft.text.trim() && !draft.attachments?.length) }} disabled={!draftReady || busy || modelBusy || (!draft.text.trim() && !draft.attachments?.length)} onPress={() => { void send({ ...(kind === "task" && taskModelId ? { model_id: taskModelId } : {}), ...(kind === "task" && taskEffort ? { reasoning_effort: taskEffort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }} style={[chatStyles.send, (!draftReady || busy || modelBusy || (!draft.text.trim() && !draft.attachments?.length)) && s.disabled]}>
-              <Text style={chatStyles.sendText}>{busy ? "…" : draft.pending ? "重试" : "↑"}</Text>
-            </Pressable>
-          </View>
-        </View>
-        {draft.pending ? <Text style={s.muted}>提交尚未确认 · 重试沿用原请求{!busy ? " · 可返回编辑" : ""}</Text> : null}
-        {draft.pending && !busy ? <Button secondary small onPress={abandonPending}>返回编辑草稿</Button> : null}
-        {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-      </View>
+      <ConversationComposer
+        text={draft.text} editable={draftReady && !draft.pending && !busy}
+        onText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}
+        canSend={draftReady && !busy && !modelBusy && !!(draft.text.trim() || draft.attachments?.length)} busy={busy} pending={!!draft.pending}
+        attachmentLocked={!draftReady || !!draft.pending || busy} onFiles={() => setShowFiles(true)}
+        kind={kind} onKind={setKind} kindLocked={intent === "steer"}
+        connection={connection} model={model} depth={depth} searchId={searchProviderId}
+        optionsLocked={!catalog || modelBusy || busy || !!draft.pending || intent === "steer"}
+        onModel={conversation.agent_id ? undefined : () => setShowModels(true)}
+        onReasoning={conversation.agent_id ? undefined : () => setShowReasoning(true)}
+        onSearch={conversation.agent_id ? undefined : () => setShowSearch(true)}
+        onSend={() => { void send({ ...(kind === "task" && taskModelId ? { model_id: taskModelId } : {}), ...(kind === "task" && taskEffort ? { reasoning_effort: taskEffort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }}
+        hint={(running || intent === "steer") ? <View style={chatStyles.delivery}>
+          {(["queue", "steer"] as const).map((value) => <Pressable key={value} accessibilityRole="radio" accessibilityLabel={value === "queue" ? "排队：当前运行结束后处理" : "引导：发送给当前运行"} accessibilityState={{ checked: intent === value, disabled: !!draft.pending || (value === "steer" && !running) }} disabled={!!draft.pending || (value === "steer" && !running)} onPress={() => { setIntent(value); if (value === "steer" && running) setKind(running.kind); setTarget(value === "steer" ? running?.id ?? null : null); }} style={[chatStyles.deliveryChoice, intent === value && { backgroundColor: colors.neutral }]}><Ionicons name={value === "queue" ? "layers-outline" : "git-branch-outline"} size={13} color={colors.muted} /><Text style={s.caption}>{value === "queue" ? "接着处理" : "调整当前任务"}</Text></Pressable>)}
+          {intent === "steer" && running?.id !== target ? <Text style={s.error}>目标已结束，请切回接着处理</Text> : null}
+        </View> : null}
+      >
+        <Attachments connection={connection} items={draft.attachments} remove={draft.pending ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
+      </ConversationComposer>
+      {draft.pending ? <View style={chatStyles.pending}><Text style={[s.muted, s.grow]}>提交尚未确认 · 可重试，内容仍保留</Text>{!busy ? <Pressable accessibilityRole="button" onPress={abandonPending} style={s.linkButton}><Text style={s.link}>编辑草稿</Text></Pressable> : null}</View> : null}
+      {error ? <Text accessibilityRole="alert" style={[s.error, { marginHorizontal: 18, marginBottom: 6 }]}>{error}</Text> : null}
       <ModelPicker
         visible={showModels}
         title={`选择${kind === "task" ? "任务" : "聊天"}模型`}
@@ -380,28 +301,7 @@ export function ChatPanel({
         defaultLabel={kind === "task" ? "跟随默认任务模型" : "跟随默认聊天模型"}
         onClose={() => setShowModels(false)}
       />
-      <Modal visible={showReasoning} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setShowReasoning(false)}>
-        <SafeAreaView style={s.root}>
-          <View style={s.header}>
-            <Text style={[s.heading, s.grow]}>思考深度</Text>
-            <Button secondary onPress={() => setShowReasoning(false)}>关闭</Button>
-          </View>
-          <ScrollView contentContainerStyle={s.content}>
-            <Text style={s.muted}>只影响之后提交的{kind === "task" ? "任务" : "聊天"}。不同模型支持的档位可能不同。</Text>
-            {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-            <Button secondary disabled={modelBusy} onPress={() => {
-              void updateModel(kind === "task" ? taskModelId : conversation.model_id, null).then(() => setShowReasoning(false)).catch((e) => setError(humanError(e)));
-            }}>
-              模型默认{model?.default_reasoning_effort ? ` · ${reasoningLabel[model.default_reasoning_effort]}` : " · 自动"}
-            </Button>
-            {model?.reasoning_levels.map((value) => (
-              <Button key={value} secondary={depth !== value} disabled={modelBusy} onPress={() => {
-                void updateModel(kind === "task" ? taskModelId : conversation.model_id, value).then(() => setShowReasoning(false)).catch((e) => setError(humanError(e)));
-              }}>{reasoningLabel[value]}</Button>
-            ))}
-          </ScrollView>
-        </SafeAreaView>
-      </Modal>
+      <ReasoningPicker visible={showReasoning} model={model} selected={kind === "task" ? taskEffort : conversation.reasoning_effort} onSelect={(value) => updateModel(kind === "task" ? taskModelId : conversation.model_id, value)} onClose={() => setShowReasoning(false)} />
       <SearchPicker visible={showSearch} connection={connection} selectedId={searchProviderId} onSelect={setSearchProviderId} onClose={() => setShowSearch(false)} />
       <Modal
         visible={!!detail}
@@ -451,6 +351,8 @@ function RunDetail({
 }) {
   const [run, setRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const retry = useRef<() => void>(() => undefined);
+  const reportSync = useSyncStatus(() => retry.current());
   const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
@@ -475,13 +377,14 @@ function RunDetail({
         setRun(task);
         setEvents((old) => [...old, ...page.items]);
         if (page.items.length) cursor = page.items[page.items.length - 1].seq;
-        setError("");
+        reportSync();
       } catch (e) {
-        if (active) setError(humanError(e));
+        if (active) reportSync(e);
       } finally {
         polling = false;
       }
     }
+    retry.current = () => { void poll(); };
     void poll();
     const timer = setInterval(() => {
       void poll();
@@ -491,15 +394,10 @@ function RunDetail({
       controller.abort();
       clearInterval(timer);
     };
-  }, [connection, id]);
+  }, [connection, id, reportSync]);
   return (
     <SafeAreaView style={s.root}>
-      <View style={s.header}>
-        <Text style={[s.heading, s.grow]}>任务记录</Text>
-        <Button secondary onPress={close}>
-          关闭
-        </Button>
-      </View>
+      <SheetHeader title="任务记录" onClose={close} />
       <ScrollView contentContainerStyle={s.content}>
         {error ? <Text style={s.error}>{error}</Text> : null}
         {run ? (
@@ -605,11 +503,15 @@ function eventSummary(event: RunEvent) {
 }
 
 const chatStyles = StyleSheet.create({
-  userMeta: { textAlign: "right" },
-  userBubble: { backgroundColor: colors.pale, borderRadius: 17, borderTopRightRadius: 5, paddingHorizontal: 13, paddingVertical: 10 },
+  delivery: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4, paddingBottom: 5 },
+  deliveryChoice: { minHeight: 36, paddingHorizontal: 9, borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 5 },
+  pending: { flexDirection: "row", alignItems: "center", marginHorizontal: 18 },
+  messageIdentity: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 24 },
+  assistantMark: { width: 24, height: 24, borderRadius: 8, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center" },
+  userBubble: { backgroundColor: colors.neutral, borderRadius: 17, borderTopRightRadius: 5, paddingHorizontal: 13, paddingVertical: 10 },
   assistantContent: { paddingHorizontal: 2 },
   messageActions: { flexDirection: "row", alignItems: "center", gap: 10 },
-  messageAction: { minHeight: 36, justifyContent: "center", paddingHorizontal: 4 },
+  messageAction: { minHeight: 44, minWidth: 36, alignItems: "center", justifyContent: "center" },
   actionText: { color: colors.accent, fontSize: 12, fontWeight: "500" },
   runBar: {
     flexDirection: "row",
@@ -617,51 +519,7 @@ const chatStyles = StyleSheet.create({
     gap: 16,
     paddingHorizontal: 20,
     paddingVertical: 10,
-    backgroundColor: colors.pale,
+    backgroundColor: colors.neutral,
   },
   link: { color: colors.accent, fontSize: 12, fontWeight: "600" },
-  composerArea: { paddingHorizontal: 12, paddingTop: 4, paddingBottom: 8, gap: 6 },
-  composer: {
-    backgroundColor: colors.white,
-    borderColor: colors.line,
-    borderWidth: 1,
-    borderRadius: 21,
-    paddingHorizontal: 10,
-    paddingBottom: 6,
-  },
-  composerInput: {
-    color: colors.ink,
-    fontSize: 16,
-    lineHeight: 24,
-    minHeight: 48,
-    maxHeight: 128,
-    paddingTop: 11,
-    paddingBottom: 5,
-    textAlignVertical: "top",
-  },
-  composerHint: { color: colors.amber, fontSize: 12, paddingBottom: 6 },
-  toolbar: { flexDirection: "row", alignItems: "center", gap: 4 },
-  toolbarChoices: { flex: 1 },
-  toolbarChoicesContent: { alignItems: "center", gap: 3 },
-  tool: {
-    minHeight: 40,
-    minWidth: 40,
-    paddingHorizontal: 8,
-    borderRadius: 12,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.pale,
-  },
-  toolText: { color: colors.accent, fontSize: 12, fontWeight: "600" },
-  toolActive: { backgroundColor: colors.accent },
-  toolActiveText: { color: colors.white },
-  send: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  sendText: { color: colors.white, fontSize: 21, fontWeight: "600" },
 });

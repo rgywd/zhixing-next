@@ -1,8 +1,11 @@
 import { useState } from "react";
-import { Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
+import { BrandIcon } from "./BrandIcon";
+import { colors, radius, space } from "./theme";
 import { request, type Connection, type ModelCatalog } from "./api";
 import { ModelPicker } from "./ModelPicker";
-import { Button, CardHeader, PageHeading, PageScrollView, humanError, s } from "./ui";
+import { ActionLink, PageHeading, PageScrollView, StatusPill, humanError, s } from "./ui";
 
 const roles = [
   { id: "chat", label: "聊天", hint: "主知行新对话的默认模型", icon: "chatbubbles-outline" },
@@ -31,41 +34,39 @@ export function ModelsPanel({
   return (
     <>
       <PageScrollView>
-        <PageHeading title="供应商与模型" description="供应商地址和密钥留在服务器配置，手机只选择已接入的模型。" />
+        <PageHeading title="供应商与模型" description="为聊天、执行和记忆选择合适的模型。" />
         {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
         {!catalog ? (
           <View style={s.card}>
             <Text style={s.text}>服务尚未提供模型目录。请更新服务后重试。</Text>
-            <Button secondary onPress={() => { void refresh(); }}>重试</Button>
+            <ActionLink icon="refresh-outline" onPress={() => { void refresh(); }}>重试</ActionLink>
           </View>
         ) : (
           <>
             <Text style={s.title}>默认分工</Text>
-            {roles.map((role) => {
+            <View style={styles.roles}>{roles.map((role) => {
               const model = catalog.items.find((item) => item.id === catalog.roles[role.id]);
               return (
-                <View key={role.id} style={s.card}>
-                  <CardHeader icon={role.icon} title={role.label} description={role.hint} />
-                  <Text style={s.text}>{model ? `${model.name} · ${model.provider}` : "尚未配置"}</Text>
-                  <Button secondary onPress={() => setSelectedRole(role.id)}>选择模型</Button>
-                </View>
+                <Pressable key={role.id} accessibilityRole="button" accessibilityLabel={`选择${role.label}模型`} onPress={() => setSelectedRole(role.id)} style={[styles.role, role.id !== "memory" && styles.divider]}>
+                  <View style={[styles.roleIcon, { backgroundColor: role.id === "chat" ? colors.purpleSoft : role.id === "task" ? colors.greenSoft : colors.goldSoft }]}><Ionicons name={role.icon} size={20} color={role.id === "chat" ? colors.purple : role.id === "task" ? colors.green : colors.gold} /></View>
+                  <View style={s.headingCopy}><Text style={s.itemTitle}>{role.label}</Text><Text numberOfLines={1} style={s.muted}>{model?.name ?? "尚未配置"}</Text></View>
+                  <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={23} /><Ionicons name="chevron-forward" size={16} color={colors.muted} />
+                </Pressable>
               );
-            })}
+            })}</View>
             <Text style={s.title}>已接入的供应商</Text>
-            {providers.length ? providers.map((provider) => (
-              <View key={provider} style={s.card}>
-                <CardHeader icon="server-outline" title={provider} />
+            {providers.length ? <View style={s.card}>{providers.map((provider, index) => (
+              <View key={provider} style={[styles.providerGroup, index > 0 && styles.providerDivider]}>
+                <Text style={s.caption}>{provider}</Text>
                 {catalog.items.filter((item) => item.provider === provider).map((item) => (
-                  <View key={item.id} style={s.spread}>
-                    <Text numberOfLines={1} style={[s.text, s.grow]}>{item.name}</Text>
-                    <Text style={[s.caption, item.ready ? s.accentText : s.danger]}>
-                      {item.ready ? "密钥已配置" : "密钥未就绪"}
-                    </Text>
+                  <View key={item.id} style={[s.spread, { minHeight: 46 }]}>
+                    <View style={[s.row, s.grow]}><BrandIcon name={`${item.model} ${item.provider}`} size={22} /><Text numberOfLines={1} style={[s.itemTitle, s.grow]}>{item.name}</Text></View>
+                    <StatusPill tone={item.ready ? "green" : "neutral"}>{item.ready ? "就绪" : "未就绪"}</StatusPill>
                   </View>
                 ))}
               </View>
-            )) : <Text style={s.muted}>服务器尚未配置模型。</Text>}
-            <Button secondary onPress={() => { void refresh(); }}>刷新目录</Button>
+            ))}</View> : <Text style={s.muted}>服务器尚未配置模型。</Text>}
+            <Pressable accessibilityRole="button" onPress={() => { void refresh(); }} style={styles.refresh}><Ionicons name="refresh-outline" size={16} color={colors.muted} /><Text style={s.description}>刷新目录</Text></Pressable>
           </>
         )}
       </PageScrollView>
@@ -85,3 +86,13 @@ export function ModelsPanel({
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  roles: { backgroundColor: colors.white, borderRadius: radius.item, paddingHorizontal: space.md },
+  role: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 65 },
+  roleIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.neutral, alignItems: "center", justifyContent: "center" },
+  divider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
+  providerGroup: { gap: 3, paddingVertical: space.sm },
+  providerDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
+  refresh: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44 },
+});

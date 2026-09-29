@@ -20,6 +20,12 @@ import { colors, layout, radius, space, typography } from "./theme";
 
 export { colors } from "./theme";
 type IconName = ComponentProps<typeof Ionicons>["name"];
+export type UiTone = "red" | "purple" | "blue" | "gold" | "green" | "neutral";
+const toneColors = {
+  red: [colors.accent, colors.pale], purple: [colors.purple, colors.purpleSoft],
+  blue: [colors.blue, colors.blueSoft], gold: [colors.gold, colors.goldSoft],
+  green: [colors.green, colors.greenSoft], neutral: [colors.ink, colors.neutral],
+} as const;
 
 export function PageScrollView({ tabs = false, contentContainerStyle, ...props }: ScrollViewProps & { tabs?: boolean }) {
   return <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" {...props} contentContainerStyle={[s.content, tabs && s.mainPage, tabs && s.tabContent, contentContainerStyle]} />;
@@ -31,10 +37,10 @@ export function PageHero({ eyebrow, title, description, art, artStyle }: {
   const narrow = useWindowDimensions().width < layout.compactWidth;
   return (
     <View style={s.hero}>
-      {art ? <Image source={art} resizeMode="contain" style={[s.heroArt, artStyle]} accessible={false} /> : null}
+      {art && !narrow ? <Image source={art} resizeMode="contain" style={[s.heroArt, artStyle]} accessible={false} /> : null}
       <Text style={s.kicker}>{eyebrow}</Text>
       <Text accessibilityRole="header" style={s.heroTitle}>{title}</Text>
-      <Text style={[s.description, art ? s.heroDescription : null, art && narrow ? s.heroDescriptionNarrow : null]}>{description}</Text>
+      <Text style={[s.description, art && !narrow ? s.heroDescription : null]}>{description}</Text>
     </View>
   );
 }
@@ -52,38 +58,47 @@ export function PageHeading({ title, description, action }: { title: string; des
 }
 
 export function SheetHeader({ title, onClose }: { title: string; onClose: () => void }) {
-  return <View style={s.header}><Text accessibilityRole="header" style={[s.heading, s.grow]}>{title}</Text><Button secondary small onPress={onClose}>关闭</Button></View>;
+  return <View style={s.header}><Text accessibilityRole="header" style={[s.heading, s.grow]}>{title}</Text><IconAction icon="close" label="关闭" onPress={onClose} /></View>;
 }
 
 export function BackLink({ label, onPress }: { label: string; onPress: () => void }) {
   return <Pressable accessibilityRole="button" accessibilityLabel={`返回${label}`} onPress={onPress} style={({ pressed }) => [s.backLink, pressed && s.pressed]}><Ionicons name="chevron-back" size={20} color={colors.accent} /><Text style={s.backLinkText}>{label}</Text></Pressable>;
 }
 
-export function IconBadge({ name, small = false }: { name: IconName; small?: boolean }) {
-  return <View accessible={false} style={[s.iconBadge, small && s.iconBadgeSmall]}><Ionicons name={name} size={small ? 22 : 28} color={colors.accent} /></View>;
+export function IconBadge({ name, small = false, tone = "red" }: { name: IconName; small?: boolean; tone?: UiTone }) {
+  return <View accessible={false} style={[s.iconBadge, small && s.iconBadgeSmall, { backgroundColor: toneColors[tone][1] }]}><Ionicons name={name} size={small ? 19 : 23} color={toneColors[tone][0]} /></View>;
 }
 
-export function CardHeader({ icon, title, description, action }: { icon: IconName; title: string; description?: string; action?: ReactNode }) {
-  return <View style={s.row}><IconBadge name={icon} /><View style={s.headingCopy}><Text accessibilityRole="header" style={s.title}>{title}</Text>{description ? <Text style={s.muted}>{description}</Text> : null}</View>{action}</View>;
+export function CardHeader({ icon, title, description, action, tone = "red" }: { icon: IconName; title: string; description?: string; action?: ReactNode; tone?: UiTone }) {
+  return <View style={s.row}><IconBadge name={icon} tone={tone} /><View style={s.headingCopy}><Text accessibilityRole="header" style={s.title}>{title}</Text>{description ? <Text style={s.muted}>{description}</Text> : null}</View>{action}</View>;
 }
 
-export function ServiceTile({ icon, title, description, onPress, accessibilityLabel = title }: {
-  icon: IconName; title: string; description: string; onPress: () => void; accessibilityLabel?: string;
+export function ServiceTile({ icon, title, description, onPress, accessibilityLabel = title, tone = "red" }: {
+  icon: IconName; title: string; description: string; onPress: () => void; accessibilityLabel?: string; tone?: UiTone;
 }) {
   const narrow = useWindowDimensions().width < layout.compactWidth;
-  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} onPress={onPress} style={({ pressed }) => [s.serviceTile, narrow && s.serviceTileNarrow, pressed && s.pressed]}><IconBadge name={icon} small /><View style={s.headingCopy}><Text style={s.itemTitle}>{title}</Text><Text style={s.small}>{description}</Text></View><Ionicons name="chevron-forward" size={16} color={colors.muted} /></Pressable>;
+  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} onPress={onPress} style={({ pressed }) => [s.serviceTile, narrow && s.serviceTileNarrow, pressed && s.pressed]}><IconBadge name={icon} small tone={tone} /><View style={s.headingCopy}><Text style={s.itemTitle}>{title}</Text><Text numberOfLines={1} style={s.small}>{description}</Text></View><Ionicons name="chevron-forward" size={16} color={colors.muted} /></Pressable>;
 }
 
-export function ActionRow({ icon, title, description, onPress, last = false, compact = false }: {
-  icon: IconName; title: string; description?: string; onPress: () => void; last?: boolean; compact?: boolean;
+export function ActionRow({ icon, title, description, onPress, last = false, compact = false, tone = "red" }: {
+  icon: IconName; title: string; description?: string; onPress: () => void; last?: boolean; compact?: boolean; tone?: UiTone;
 }) {
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={title} onPress={onPress} style={({ pressed }) => [s.actionRow, !last && s.rowDivider, pressed && s.pressed]}>
-      <IconBadge name={icon} small={compact} />
+      <IconBadge name={icon} small={compact} tone={tone} />
       <View style={s.headingCopy}><Text numberOfLines={1} style={compact ? s.listTitle : s.itemTitle}>{title}</Text>{description ? <Text style={s.muted}>{description}</Text> : null}</View>
       <Ionicons name="chevron-forward" size={18} color={colors.muted} />
     </Pressable>
   );
+}
+export function IconAction({ icon, label, onPress, tone = "neutral", disabled = false }: { icon: IconName; label: string; onPress: () => void; tone?: UiTone; disabled?: boolean }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.iconAction, disabled && s.disabled, pressed && s.pressed]}><Ionicons name={icon} size={20} color={toneColors[tone][0]} /></Pressable>;
+}
+export function ActionLink({ icon, children, onPress, tone = "red", disabled = false }: { icon?: IconName; children: string; onPress: () => void; tone?: UiTone; disabled?: boolean }) {
+  return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.actionLink, disabled && s.disabled, pressed && s.pressed]}>{icon ? <Ionicons name={icon} size={17} color={toneColors[tone][0]} /> : null}<Text style={[s.actionLinkText, { color: toneColors[tone][0] }]}>{children}</Text></Pressable>;
+}
+export function StatusPill({ children, tone = "neutral" }: { children: string; tone?: UiTone }) {
+  return <View style={[s.statusPill, { backgroundColor: toneColors[tone][1] }]}><Text style={[s.statusPillText, { color: toneColors[tone][0] }]}>{children}</Text></View>;
 }
 export function Button({
   children,
@@ -119,7 +134,7 @@ export function Button({
         style,
       ]}
     >
-      {icon ? <Ionicons name={icon} size={20} color={danger ? colors.red : secondary ? colors.accent : colors.white} /> : null}
+      {icon ? <Ionicons name={icon} size={20} color={danger ? colors.red : secondary ? colors.ink : colors.white} /> : null}
       <Text
         style={[s.buttonText, secondary && s.secondaryText, danger && s.danger]}
       >
@@ -194,16 +209,15 @@ export const s = StyleSheet.create({
   kicker: { ...typography.kicker, color: colors.accent },
   heroTitle: { ...typography.hero, color: colors.ink },
   heroDescription: { maxWidth: "76%" },
-  heroDescriptionNarrow: { maxWidth: "62%" },
   description: { ...typography.body, color: colors.muted },
   itemTitle: { ...typography.item, color: colors.ink },
   listTitle: { ...typography.body, color: colors.ink, fontWeight: "500" },
-  iconBadge: { width: 46, height: 46, borderRadius: 17, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center", flexShrink: 0 },
-  iconBadgeSmall: { width: 36, height: 36, borderRadius: 13 },
-  actionRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 64, paddingVertical: space.sm },
+  iconBadge: { width: 42, height: 42, borderRadius: 14, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  iconBadgeSmall: { width: 34, height: 34, borderRadius: 11 },
+  actionRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 56, paddingVertical: space.sm },
   rowDivider: { borderBottomWidth: 1, borderBottomColor: colors.line },
   serviceGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  serviceTile: { width: "47%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 72, paddingHorizontal: space.md, paddingVertical: 10, borderRadius: radius.item, backgroundColor: colors.white },
+  serviceTile: { width: "47%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 66, paddingHorizontal: space.sm, paddingVertical: space.sm, borderRadius: radius.item, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line },
   serviceTileNarrow: { width: "100%" },
   caption: { ...typography.caption, color: colors.muted },
   small: { ...typography.small, color: colors.muted },
@@ -214,6 +228,11 @@ export const s = StyleSheet.create({
   centeredAction: { minWidth: 176, maxWidth: "100%", alignSelf: "center", borderRadius: radius.pill },
   cardRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
   iconButton: { minWidth: layout.touchTarget, minHeight: layout.touchTarget, alignItems: "center", justifyContent: "center" },
+  iconAction: { width: layout.touchTarget, height: layout.touchTarget, borderRadius: radius.control, alignItems: "center", justifyContent: "center" },
+  actionLink: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, minHeight: layout.touchTarget, paddingHorizontal: 4 },
+  actionLinkText: { ...typography.button },
+  statusPill: { alignSelf: "flex-start", borderRadius: radius.pill, paddingHorizontal: 9, paddingVertical: 4 },
+  statusPillText: { ...typography.caption, fontWeight: "700" },
   accentText: { color: colors.accent },
   spread: {
     flexDirection: "row",
@@ -268,8 +287,8 @@ export const s = StyleSheet.create({
   },
   smallButton: { paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: layout.touchTarget },
   buttonText: { ...typography.button, color: colors.white, flexShrink: 1, textAlign: "center" },
-  secondary: { backgroundColor: colors.pale },
-  secondaryText: { color: colors.accent },
+  secondary: { backgroundColor: colors.neutral },
+  secondaryText: { color: colors.ink },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.72 },
   danger: { color: colors.red },
@@ -279,15 +298,15 @@ export const s = StyleSheet.create({
   card: {
     backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.white,
+    borderColor: colors.line,
     borderRadius: radius.card,
     padding: layout.cardPadding,
-    gap: 10,
+    gap: 9,
     shadowColor: colors.ink,
-    shadowOpacity: 0.05,
+    shadowOpacity: 0.025,
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 12,
-    elevation: 2,
+    elevation: 0,
   },
   divider: { height: 1, backgroundColor: colors.line },
   floatingTabs: {

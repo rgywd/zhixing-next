@@ -33,9 +33,11 @@ import {
   type Schedule,
   type ServiceStatus,
 } from "./api";
+import { ConnectionStatusProvider, useSyncStatus } from "./ConnectionStatus";
 import { ChatPanel } from "./ChatPanel";
 import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
+import { BottomSheet } from "./BottomSheet";
 import { FinancePage } from "./FinancePage";
 import { ResourcesPanel } from "./ResourcesPanel";
 import { ModelsPanel } from "./ModelsPanel";
@@ -51,7 +53,7 @@ import {
   removeConnection,
   saveDraft,
 } from "./storage";
-import { BackLink, Button, CardHeader, colors, Field, humanError, PageHeading, PageScrollView, SheetHeader, s, timeLabel } from "./ui";
+import { ActionLink, ActionRow, BackLink, Button, CardHeader, colors, Field, humanError, PageHeading, PageScrollView, SheetHeader, s, timeLabel } from "./ui";
 
 type Tab = "home" | "life" | "chat" | "work" | "toolbox";
 
@@ -99,7 +101,7 @@ export default function AssistantApp() {
         <StatusBar style="dark" />
         <KeyboardAvoidingView
           style={s.body}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
           {!ready ? (
             <ActivityIndicator style={s.body} color={colors.accent} />
@@ -187,7 +189,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           <LifePanel onFinance={() => setLifeView("finance")} onChat={() => setTab("chat")} />
         ) : (
           <PageScrollView>
-            <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
+            <BackLink label="生活" onPress={() => setLifeView("overview")} />
             <Text style={s.heading}>财务</Text>
             <Text style={s.muted}>连接服务后，可以在这里和财务助手聊。</Text>
             <Button onPress={() => setTab("chat")}>连接知行</Button>
@@ -205,7 +207,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
         <View style={s.body}>
           <View style={[s.header, s.spread]}>
             <Text style={s.heading}>连接知行</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel="返回首页" onPress={() => setTab("home")} style={s.iconButton}><Ionicons name="close" size={26} color={colors.ink} /></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="返回首页" onPress={() => setTab("home")} style={s.iconButton}><Ionicons name="close" size={22} color={colors.ink} /></Pressable>
           </View>
           <PageScrollView>
             <Text style={s.muted}>连接后可以聊天、运行任务，并看到自己的真实资料。</Text>
@@ -219,7 +221,11 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
   );
 }
 
-function Connected({
+function Connected(props: Parameters<typeof ConnectedSession>[0]) {
+  return <ConnectionStatusProvider><ConnectedSession {...props} /></ConnectionStatusProvider>;
+}
+
+function ConnectedSession({
   connection,
   onConnect,
   onDisconnect,
@@ -265,15 +271,17 @@ function Connected({
   const [projectName, setProjectName] = useState("");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [syncError, setSyncError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
   const refreshRef = useRef<() => void>(() => undefined);
   const alive = useRef(true);
   const refresh = useCallback(() => refreshRef.current(), []);
+  const reportSync = useSyncStatus(refresh);
+  const [composerContext, setComposerContext] = useState<{ conversationId: string; modelId: string | null; kind: "chat" | "task" } | null>(null);
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
-  const selectedModel = catalog?.items.find((item) => item.id === (selected?.model_id ?? catalog.roles.chat));
+  const currentComposer = composerContext?.conversationId === selectedId ? composerContext : null;
+  const selectedModel = catalog?.items.find((item) => item.id === (currentComposer ? currentComposer.modelId : selected?.model_id ?? catalog.roles.chat));
   const financeConversation = conversations.find((item) => item.id === financeId) ?? null;
   const showTabs = tab === "home"
     || (tab === "life" && lifeView === "overview")
@@ -388,11 +396,10 @@ function Connected({
         setSelectedId(
           (old) => old ?? [...chats.items].reverse().find((item) => !item.agent_id)?.id ?? null,
         );
-        setSyncError("");
+        reportSync();
       } catch (e) {
         if (active) {
-          setSyncError(humanError(e));
-          setStatus(null);
+          reportSync(e);
         }
       } finally {
         polling = false;
@@ -416,7 +423,7 @@ function Connected({
       controller.abort();
       listener.remove();
     };
-  }, [connection]);
+  }, [connection, reportSync]);
 
   async function newConversation(
     explore = false,
@@ -577,14 +584,7 @@ function Connected({
   }
   return (
     <View style={s.body}>
-      {syncError ? (
-        <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
-          <Text style={s.noticeText}>{syncError}</Text>
-          <Button secondary small onPress={refresh}>
-            重新连接
-          </Button>
-        </View>
-      ) : status && (!status.model_ready || !status.worker_online) ? (
+      {status && (!status.model_ready || !status.worker_online) ? (
         <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
           <Text style={s.noticeText}>
             {!status.model_ready
@@ -621,29 +621,29 @@ function Connected({
         ) : financeConversation ? (
           <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
         ) : (
-          <View style={[s.body, { padding: 22, gap: 18 }]}>
-            <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
+          <View style={[s.body, { padding: 16, gap: 12 }]}>
+            <BackLink label="生活" onPress={() => setLifeView("overview")} />
             <Text style={s.heading}>财务</Text>
             {busy ? <ActivityIndicator color={colors.accent} /> : <Button onPress={openFinance}>连接财务助手</Button>}
           </View>
         )
       ) : tab === "chat" ? (
         <>
-          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 9, gap: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 5, gap: 5 }}>
             <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="menu-outline" size={29} color={colors.ink} />
+              <Ionicons name="menu-outline" size={25} color={colors.ink} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={s.grow}>
-              <Text numberOfLines={1} style={[s.title, { textAlign: "center" }]}>{assistant?.name ?? "知行"}</Text>
-              <Text numberOfLines={1} style={[s.muted, { textAlign: "center" }]}>
-                {showWelcome ? "AI 伙伴" : selected?.title ?? "新的对话"}{!showWelcome && selectedModel ? ` · ${selectedModel.name}` : ""}
+              <Text numberOfLines={1} style={[s.itemTitle, { textAlign: "left" }]}>{showWelcome ? assistant?.name ?? "知行" : selected?.title ?? "新的对话"}</Text>
+              <Text numberOfLines={1} style={[s.muted, { textAlign: "left" }]}>
+                {showWelcome ? "随时聊聊，把事情做成" : `${currentComposer?.kind === "task" ? "任务 · " : ""}${selectedModel?.name ?? "知行"}`}
               </Text>
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => setShowWelcome(true)} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="add" size={29} color={colors.ink} />
+              <Ionicons name="create-outline" size={23} color={colors.ink} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="返回上一页" onPress={() => setTab(returnTab)} style={{ width: 38, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="close" size={26} color={colors.ink} />
+              <Ionicons name="close" size={22} color={colors.ink} />
             </Pressable>
           </View>
           {showWelcome ? (
@@ -662,6 +662,7 @@ function Connected({
               startWithFiles={chatStart?.id === selected.id && chatStart.files}
               onFilesOpened={() => setChatStart((old) => old ? { ...old, files: false } : null)}
               onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))}
+              onComposerContext={setComposerContext}
               onRefresh={refresh}
             />
           ) : <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy || loading} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />}
@@ -745,24 +746,15 @@ function Connected({
         onNew={() => { setShowWelcome(true); setShowAiDrawer(false); setTab("chat"); }}
         onSettings={() => { setShowAiDrawer(false); setToolView("settings"); setTab("toolbox"); }}
       />
-      <Modal
-        visible={showProjectCreator}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowProjectCreator(false)}
-      >
-        <SafeAreaView style={s.root}>
-          <SheetHeader title="创建项目" onClose={() => setShowProjectCreator(false)} />
-          <PageScrollView>
-            <Text style={s.muted}>为相关对话、文件和任务留一个持久工作目录。</Text>
-            <Field label="项目名称" placeholder="例如：我的项目" value={projectName} onChangeText={setProjectName} maxLength={100} />
-            <Button disabled={busy || !projectName.trim()} onPress={() => { void newProject(true); }}>
-              {busy ? "正在创建…" : "创建项目"}
-            </Button>
-            {error ? <Text style={s.error}>{error}</Text> : null}
-          </PageScrollView>
-        </SafeAreaView>
-      </Modal>
+      <BottomSheet visible={showProjectCreator} title="创建项目" subtitle="为相关对话、文件和任务留一个工作目录" onClose={() => setShowProjectCreator(false)}>
+        <View style={{ paddingHorizontal: 20, paddingBottom: 12, gap: 12 }}>
+          <Field label="项目名称" placeholder="例如：我的项目" value={projectName} onChangeText={setProjectName} maxLength={100} />
+          <Button disabled={busy || !projectName.trim()} onPress={() => { void newProject(true); }}>
+            {busy ? "正在创建…" : "创建项目"}
+          </Button>
+          {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+        </View>
+      </BottomSheet>
       <Modal
         visible={showConversations}
         animationType="slide"
@@ -773,7 +765,7 @@ function Connected({
           <SheetHeader title="你的对话" onClose={() => setShowConversations(false)} />
           <PageScrollView>
             <View style={s.card}>
-              <CardHeader icon="chatbubble-outline" title="留一个新的话题" />
+              <CardHeader icon="chatbubble-outline" title="留一个新的话题" tone="purple" />
               <Field
                 label="对话名称"
                 placeholder="例如：周末计划、游戏攻略"
@@ -783,22 +775,17 @@ function Connected({
               />
               <Text style={s.label}>工作项目（可选）</Text>
               <View style={s.wrap}>
-                <Button
-                  small
-                  secondary={projectId !== null}
-                  onPress={() => setProjectId(null)}
-                >
-                  日常对话
-                </Button>
+                <Pressable accessibilityRole="button" accessibilityState={{ selected: projectId === null }} onPress={() => setProjectId(null)} style={[s.chip, projectId === null && s.chipActive]}><Text style={[s.chipText, projectId === null && s.chipActiveText]}>日常对话</Text></Pressable>
                 {projects.map((project) => (
-                  <Button
+                  <Pressable
                     key={project.id}
-                    small
-                    secondary={projectId !== project.id}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: projectId === project.id }}
+                    style={[s.chip, projectId === project.id && s.chipActive]}
                     onPress={() => setProjectId(project.id)}
                   >
-                    {project.name}
-                  </Button>
+                    <Text numberOfLines={1} style={[s.chipText, projectId === project.id && s.chipActiveText]}>{project.name}</Text>
+                  </Pressable>
                 ))}
               </View>
               <View style={s.row}>
@@ -812,16 +799,13 @@ function Connected({
                   />
                 </View>
                 <View style={{ paddingTop: 23 }}>
-                  <Button
-                    small
-                    secondary
+                  <ActionLink
+                    icon="add"
                     disabled={busy || !projectName.trim()}
                     onPress={() => {
                       void newProject();
                     }}
-                  >
-                    创建
-                  </Button>
+                  >创建</ActionLink>
                 </View>
               </View>
               {projectId ? (
@@ -843,39 +827,30 @@ function Connected({
               {error ? <Text style={s.error}>{error}</Text> : null}
             </View>
             <Text style={s.label}>已有的对话</Text>
-            {[...conversations]
+            <View style={s.card}>{[...conversations]
               .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-              .map((conversation) => (
-                <Pressable
+              .map((conversation, index, all) => (
+                <ActionRow
                   key={conversation.id}
-                  accessibilityRole="button"
+                  icon={conversation.agent_id === "finance" ? "wallet-outline" : "chatbubble-outline"}
+                  tone={conversation.agent_id === "finance" ? "green" : "purple"}
+                  title={conversation.title}
+                  description={`${timeLabel(conversation.updated_at)}${conversation.blocked ? " · 队列等待继续" : ""}`}
+                  compact
+                  last={index === all.length - 1}
                   onPress={() => {
                     openConversation(conversation.id);
                   }}
-                  style={[
-                    s.card,
-                    conversation.id === selectedId && {
-                      backgroundColor: colors.pale,
-                    },
-                  ]}
-                >
-                  <Text style={s.title}>{conversation.title}</Text>
-                  <Text style={s.muted}>
-                    {timeLabel(conversation.updated_at)}
-                    {conversation.blocked ? " · 队列等待继续" : ""}
-                  </Text>
-                </Pressable>
-              ))}
+                />
+              ))}</View>
             {conversationCursor ? (
-              <Button
-                secondary
+              <ActionLink
+                icon="chevron-down"
                 disabled={busy}
                 onPress={() => {
                   void loadMore("conversations");
                 }}
-              >
-                更早的对话
-              </Button>
+              >更早的对话</ActionLink>
             ) : null}
           </PageScrollView>
         </SafeAreaView>

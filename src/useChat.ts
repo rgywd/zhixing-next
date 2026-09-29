@@ -21,6 +21,7 @@ import {
   saveDraft,
   type Draft,
 } from "./storage";
+import { useSyncStatus } from "./ConnectionStatus";
 import { humanError } from "./ui";
 
 export function useChat({
@@ -62,7 +63,6 @@ export function useChat({
   const [target, setTarget] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [syncError, setSyncError] = useState("");
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<string | null>(null);
   const [showFiles, setShowFiles] = useState(startWithFiles);
@@ -72,6 +72,7 @@ export function useChat({
   const nearBottomRef = useRef(true);
   const key = draftKey(connection.url, conversation.id);
   const refresh = useRef<() => void>(() => undefined);
+  const reportSync = useSyncStatus(() => refresh.current());
 
   useEffect(() => {
     alive.current = true;
@@ -159,9 +160,9 @@ export function useChat({
           setPrevious(history.previous_cursor ?? null);
           initial = false;
         }
-        setSyncError("");
+        reportSync();
       } catch (e) {
-        if (active) setSyncError(humanError(e));
+        if (active) reportSync(e);
       } finally {
         polling = false;
         if (active) setLoading(false);
@@ -188,7 +189,7 @@ export function useChat({
       controller.abort();
       listener.remove();
     };
-  }, [connection, conversation.id]);
+  }, [connection, conversation.id, reportSync]);
 
   async function loadOlder() {
     if (!previous || busy) return;
@@ -359,7 +360,6 @@ export function useChat({
     busy,
     error,
     setError,
-    syncError,
     loading,
     detail,
     setDetail,
