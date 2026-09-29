@@ -9,7 +9,7 @@ from PIL import Image
 from test_runtime import ScriptedModel, ignore, no_controls
 
 from zhixing_next.api import create_app
-from zhixing_next.config import ModelConfig, Settings
+from zhixing_next.config import Settings
 from zhixing_next.resources import hydrate_messages, input_message, resource_bytes
 from zhixing_next.runtime import _portable_history, run_agent
 from zhixing_next.store import Store
@@ -191,12 +191,16 @@ async def test_steer_image_and_capability_check_are_atomic(setup):
             isinstance(m, HumanMessage) and isinstance(m.content, list) for m in model.seen[-1]
         )
         assert store.get_controls(run["id"])["steers"] == []
-        settings.models["text-only"] = ModelConfig(
-            protocol="chat_completions", model="text", api_key_env="TEST_KEY"
-        )
+        provider = (await client.post("/v1/providers", json={
+            "name": "Text only", "protocol": "chat_completions", "base_url": "https://example.invalid/v1",
+        })).json()
+        provider = (await client.post(f"/v1/providers/{provider['id']}/models", json={
+            "revision": provider["revision"], "models": [{"model": "text"}],
+        })).json()
+        text_model_id = provider["models"][0]["id"]
         response = await client.post(
             f"/v1/conversations/{conversation}/messages",
-            json={"id": "unsupported", "attachments": [resource["id"]], "model_id": "text-only"},
+            json={"id": "unsupported", "attachments": [resource["id"]], "model_id": text_model_id},
         )
         assert response.status_code == 422
         assert all(

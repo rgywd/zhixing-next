@@ -75,7 +75,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 9:
+            if version > 10:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -129,6 +129,11 @@ class Store:
                 db.execute("CREATE TABLE approvals(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),operation_id TEXT,kind TEXT NOT NULL,details_json TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',created_at TEXT NOT NULL,decided_at TEXT)")
                 db.execute("CREATE INDEX approvals_pending ON approvals(run_id,state)")
                 db.execute("PRAGMA user_version=9")
+            if version < 10:
+                from .catalog import migrate
+
+                migrate(db, settings)
+                db.execute("PRAGMA user_version=10")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)
@@ -508,41 +513,57 @@ class Store:
         with self._connection() as db:
             return _record(self._require(db, "conversations", conversation_id))
 
-    def model_roles(self):
+    def _model_roles(self, db, models):
+        configured = {row["role"]: row["model_id"] for row in db.execute("SELECT role,model_id FROM model_roles")}
+        roles = {role: configured.get(role, self.settings.roles.get(role)) for role in ("chat", "task", "memory")}
+        roles = {role: model_id if model_id in models else None for role, model_id in roles.items()}
+        roles["memory"] = roles["memory"] or roles["chat"]
+        return roles
+
+    def runtime_settings(self, db=None):
+        from .catalog import active_configs
+
+        if db is None:
+            with self._connection() as connection:
+                return self.runtime_settings(connection)
+        models = active_configs(db)
+        return self.settings.model_copy(update={"models": models, "roles": self._model_roles(db, models)})
+
+    def settings_for_run(self, run):
+        from .config import ModelConfig
+
         with self._connection() as db:
-            configured = {row["role"]: row["model_id"] for row in db.execute(
-                "SELECT role,model_id FROM model_roles"
-            )}
-            roles = {
-                role: configured.get(role, self.settings.roles.get(role))
-                for role in ("chat", "task", "memory")
-            }
-            if roles["memory"] not in self.settings.models:
-                roles["memory"] = roles["chat"]
-            return roles
+            saved = db.execute("SELECT * FROM run_model_configs WHERE run_id=?", (run["id"],)).fetchone()
+            if saved is None or json.loads(saved["config_json"]) is None:
+                return self.settings.model_copy(update={"models": {}, "roles": {}})
+            config = ModelConfig(**(json.loads(saved["config_json"]) | {"api_key_env": None, "api_key": saved["api_key"]}))
+            return self.settings.model_copy(update={"models": {run["model_id"]: config}})
+
+    def model_roles(self):
+        return self.runtime_settings().roles
 
     def set_model_role(self, role, model_id):
-        if model_id not in self.settings.models:
-            raise StoreError("unknown_model", "Choose a configured model", 422)
         with self._connection(write=True) as db:
+            if model_id not in self.runtime_settings(db).models:
+                raise StoreError("unknown_model", "Choose an enabled model", 422)
             db.execute(
                 "INSERT INTO model_roles(role,model_id) VALUES(?,?) "
                 "ON CONFLICT(role) DO UPDATE SET model_id=excluded.model_id",
                 (role, model_id),
             )
-        return self.model_roles()
+            return self.runtime_settings(db).roles
 
     def set_conversation_model(self, conversation_id, model_id, reasoning_effort):
-        if model_id is not None and model_id not in self.settings.models:
-            raise StoreError("unknown_model", "Choose a configured model", 422)
         with self._connection(write=True) as db:
+            models = self.runtime_settings(db).models
+            if model_id is not None and model_id not in models:
+                raise StoreError("unknown_model", "Choose an enabled model", 422)
             conversation = self._require(db, "conversations", conversation_id)
             if conversation["agent_id"] is not None:
                 raise StoreError("agent_model", "Model controls belong to main assistant chats", 422)
             selected = model_id or self._role_model(db, "chat")
             if reasoning_effort is not None and (
-                selected not in self.settings.models
-                or reasoning_effort not in self.settings.models[selected].reasoning_levels
+                selected not in models or reasoning_effort not in models[selected].reasoning_levels
             ):
                 raise StoreError("unsupported_reasoning", "This model does not support that thinking depth", 422)
             db.execute(
@@ -552,8 +573,7 @@ class Store:
             return _record(self._require(db, "conversations", conversation_id))
 
     def _role_model(self, db, role):
-        row = db.execute("SELECT model_id FROM model_roles WHERE role=?", (role,)).fetchone()
-        return row["model_id"] if row else self.settings.roles.get(role)
+        return self.runtime_settings(db).roles.get(role)
 
     def list_search_providers(self):
         with self._connection() as db:
@@ -699,6 +719,9 @@ class Store:
             "INSERT INTO runs(id,conversation_id,message_id,kind,prompt,created_at,model_id,reasoning_effort,search_provider_id) VALUES(?,?,?,?,?,?,?,?,?)",
             (run_id, conversation_id, message_id, kind, content, now, model_id, reasoning_effort, search_provider_id),
         )
+        from .catalog import snapshot
+
+        snapshot(db, run_id, model_id)
         db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id))
         return run_id
 
@@ -767,12 +790,13 @@ class Store:
                 )
             else:
                 conversation = self._require(db, "conversations", conversation_id)
-                if model_id is not None and (conversation["agent_id"] is not None or model_id not in self.settings.models):
+                models = self.runtime_settings(db).models
+                if model_id is not None and (conversation["agent_id"] is not None or model_id not in models):
                     raise StoreError("unknown_model", "Choose a configured model for the main assistant", 422)
                 selected_model = model_id or (conversation["model_id"] if kind == "chat" and conversation["agent_id"] is None and conversation["model_id"] else self._role_model(db, kind))
                 if reasoning_effort is not None and (
-                    conversation["agent_id"] is not None or selected_model not in self.settings.models
-                    or reasoning_effort not in self.settings.models[selected_model].reasoning_levels
+                    conversation["agent_id"] is not None or selected_model not in models
+                    or reasoning_effort not in models[selected_model].reasoning_levels
                 ):
                     raise StoreError("unsupported_reasoning", "This model does not support that thinking depth", 422)
                 if search_provider_id is not None:
@@ -780,9 +804,11 @@ class Store:
                         raise StoreError("agent_search", "Search controls belong to main assistant chats", 422)
                     self._require(db, "search_providers", search_provider_id)
                 run_id = self._enqueue(db, conversation_id, id, content, kind, request_json, model_id, reasoning_effort, search_provider_id)
-            selected = self._require(db, "runs", run_id)["model_id"]
             if any(item["mime_type"].startswith("image/") for item in resources):
-                config = self.settings.models.get(selected)
+                from .config import ModelConfig
+
+                saved = db.execute("SELECT config_json FROM run_model_configs WHERE run_id=?", (run_id,)).fetchone()
+                config = ModelConfig.model_validate_json(saved[0]) if saved and saved[0] != "null" else None
                 if config is not None and not config.image_input:
                     raise StoreError("image_not_supported", "当前模型未启用图片输入，请选择支持图片的模型。", 422)
             db.execute("UPDATE messages SET attachments_json=? WHERE id=?", (_json(resources), id))
@@ -923,6 +949,7 @@ class Store:
             (status, result, error, now, run["id"]),
         )
         if status in {"cancelled", "completed", "failed"}:
+            db.execute("DELETE FROM run_model_configs WHERE run_id=?", (run["id"],))
             db.execute("UPDATE approvals SET state='cancelled',decided_at=? WHERE run_id=? AND state='pending'", (now, run["id"]))
         db.execute(
             "UPDATE messages SET status='rejected' WHERE run_id=? AND status='accepted'",

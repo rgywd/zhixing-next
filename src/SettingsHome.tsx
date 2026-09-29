@@ -10,14 +10,13 @@ export function SettingsHome({ assistant, catalog, connectionUrl, onOpen }: {
   connectionUrl?: string;
   onOpen: (destination: SettingsDestination) => void;
 }) {
-  const providerCount = new Set(catalog?.items.map((item) => item.provider)).size;
   const chatModel = catalog?.items.find((item) => item.id === catalog.roles.chat);
   return <PageScrollView tabs>
     <PageHero eyebrow="SETTINGS" title="设置" description="把知行调成你习惯的样子。" />
     <SettingsGroup title="通用"><AppearanceControl row /></SettingsGroup>
     <SettingsGroup title="模型与服务">
       <ActionRow icon="server-outline" title="模型供应商" tone="gold" compact
-        description={catalog ? `${providerCount} 个供应商 · ${catalog.items.length} 个模型` : "查看已接入的供应商与模型"} onPress={() => onOpen("providers")} />
+        description="管理供应商、密钥与模型" onPress={() => onOpen("providers")} />
       <ActionRow icon="sparkles-outline" title="默认模型" tone="gold" compact
         description={chatModel ? `聊天 · ${chatModel.name}` : "聊天、执行与记忆整理"} onPress={() => onOpen("models")} />
       <ActionRow icon="globe-outline" title="搜索服务" description="管理聊天中使用的联网搜索" tone="blue" compact last onPress={() => onOpen("search")} />

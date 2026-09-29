@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import hmac
-import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -19,8 +18,10 @@ from filelock import Timeout
 from starlette.exceptions import HTTPException
 
 from . import files, resources
+from .catalog import Catalog, public_model
 from .config import Settings, load_settings
 from .models import model_ready
+from .provider_network import discover, probe
 from .schemas import (
     AgentInput,
     AgentUpdate,
@@ -28,10 +29,14 @@ from .schemas import (
     AssistantInput,
     ConversationInput,
     ConversationModelInput,
+    ManagedModelUpdate,
     MemoryInput,
     MessageInput,
     ModelRoleInput,
+    ModelsImport,
     ProjectInput,
+    ProviderInput,
+    ProviderUpdate,
     ResourceInput,
     ScheduleInput,
     ScheduleUpdate,
@@ -46,6 +51,7 @@ Cursor = Annotated[int, Query(ge=0)]
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings if settings is not None else load_settings()
     store = Store(settings)
+    catalog = Catalog(store)
     app = FastAPI(title="知行 Next", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.settings = settings
@@ -128,8 +134,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def status():
         from .tools import capability_status
 
-        roles = store.model_roles()
-        ready = all(model_ready(settings, role, roles.get(role)) for role in ("chat", "task"))
+        runtime_settings = store.runtime_settings()
+        roles = runtime_settings.roles
+        ready = all(model_ready(runtime_settings, role, roles.get(role)) for role in ("chat", "task"))
         capability = capability_status(settings)
         return {
             "model_ready": ready,
@@ -149,27 +156,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @router.get("/models")
     def models():
-        return {
-            "items": [
-                {
-                    "id": identifier,
-                    "name": config.display_name or config.model,
-                    "model": config.model,
-                    "provider": config.provider or {
-                        "chat_completions": "OpenAI 兼容",
-                        "responses": "OpenAI Responses",
-                        "gemini": "Gemini",
-                    }[config.protocol],
-                    "protocol": config.protocol,
-                    "ready": bool(os.environ.get(config.api_key_env, "").strip()),
-                    "image_input": config.image_input,
-                    "reasoning_levels": config.reasoning_levels,
-                    "default_reasoning_effort": config.reasoning_effort,
-                }
-                for identifier, config in settings.models.items()
-            ],
-            "roles": store.model_roles(),
-        }
+        configured = store.runtime_settings()
+        return {"items": [public_model(identifier, config) for identifier, config in configured.models.items()], "roles": configured.roles}
+
+    @router.get("/providers")
+    def providers():
+        return catalog.list()
+
+    @router.post("/providers", status_code=201)
+    def add_provider(body: ProviderInput):
+        return catalog.create(body)
+
+    @router.put("/providers/{provider_id}")
+    def update_provider(provider_id: str, body: ProviderUpdate):
+        return catalog.update(provider_id, body)
+
+    @router.delete("/providers/{provider_id}")
+    def delete_provider(provider_id: str, revision: Annotated[int, Query(ge=1)]):
+        catalog.delete(provider_id, revision)
+        return {"deleted": True}
+
+    @router.post("/providers/{provider_id}/discover")
+    async def discover_models(provider_id: str):
+        return await discover(catalog.connection(provider_id))
+
+    @router.post("/providers/{provider_id}/models", status_code=201)
+    def add_models(provider_id: str, body: ModelsImport):
+        return catalog.save_models(provider_id, body)
+
+    @router.put("/providers/{provider_id}/models/{model_id}")
+    def update_model(provider_id: str, model_id: str, body: ManagedModelUpdate):
+        return catalog.save_models(provider_id, body, model_id)
+
+    @router.delete("/providers/{provider_id}/models/{model_id}")
+    def delete_model(provider_id: str, model_id: str, revision: Annotated[int, Query(ge=1)]):
+        return catalog.delete_model(provider_id, model_id, revision)
+
+    @router.post("/providers/{provider_id}/models/{model_id}/test")
+    async def test_model(provider_id: str, model_id: str):
+        return await probe(settings, catalog.connection(provider_id, model_id))
 
     @router.put("/models/roles/{role}")
     def update_model_role(role: Literal["chat", "task", "memory"], body: ModelRoleInput):

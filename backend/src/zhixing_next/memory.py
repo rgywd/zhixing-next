@@ -126,7 +126,8 @@ async def organize_run(
     history = store.memory_context(
         run["id"], include_previous_assistant=explicit_memory_request(user_input)
     )
-    roles = store.model_roles()
+    settings = store.runtime_settings()
+    roles = settings.roles
     memory_model = roles.get("memory")
     model_id = memory_model if memory_model in settings.models else roles.get("chat")
     model = model_override or create_model(settings, "chat", model_id)

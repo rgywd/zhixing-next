@@ -1,3 +1,4 @@
+import { availablePreference } from "./providerEditing";
 import { ThemeProvider } from "./ThemeProvider";
 import { AppearanceControl } from "./AppearanceControl";
 import { useUi, ActionLink, ActionRow, BackLink, Button, CardHeader, Field, humanError, PageHeading, PageScrollView, SheetHeader, timeLabel } from "./ui";
@@ -43,7 +44,8 @@ import { AiDrawer } from "./AiDrawer";
 import { BottomSheet } from "./BottomSheet";
 import { FinancePage } from "./FinancePage";
 import { ResourcesPanel } from "./ResourcesPanel";
-import { ModelsPanel, ProvidersPanel } from "./ModelsPanel";
+import { ModelsPanel } from "./ModelsPanel";
+import { ProvidersPanel } from "./ProvidersPanel";
 import { HomePanel, WorkPanel } from "./OverviewPanels";
 import { LifePanel } from "./LifePanel";
 import { SchedulesPanel } from "./SchedulesPanel";
@@ -537,16 +539,17 @@ function ConnectedSession({
       if (alive.current) setBusy(false);
     }
   }
+  const welcomePreference = availablePreference(catalog, welcomeKind, welcomeModels[welcomeKind], welcomeEfforts[welcomeKind]);
   function submitWelcome() {
     const text = welcomeDraft.trim();
-    if (text && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomeModels[welcomeKind], effort: welcomeEfforts[welcomeKind], searchId: welcomeSearchId });
+    if (text && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
   }
   const welcomeControls = {
-    connection, catalog, modelId: welcomeModels[welcomeKind], effort: welcomeEfforts[welcomeKind], searchProviderId: welcomeSearchId,
+    connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchProviderId: welcomeSearchId,
     onModelId: (id: string | null) => setWelcomeModels((old) => ({ ...old, [welcomeKind]: id })),
     onEffort: (value: ReasoningEffort | null) => setWelcomeEfforts((old) => ({ ...old, [welcomeKind]: value })),
     onSearchProviderId: setWelcomeSearchId,
-    onFiles: () => { if (!busy) void newConversation(false, null, true, { text: welcomeDraft, kind: welcomeKind, modelId: welcomeModels[welcomeKind], effort: welcomeEfforts[welcomeKind], searchId: welcomeSearchId, filesOnly: true }); },
+    onFiles: () => { if (!busy) void newConversation(false, null, true, { text: welcomeDraft, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId, filesOnly: true }); },
   };
   function openAgent(agentId: string) {
     const existing = [...conversations].reverse().find((item) => item.agent_id === agentId);
@@ -617,7 +620,7 @@ function ConnectedSession({
         <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
           <Text style={s.noticeText}>
             {!status.model_ready
-              ? "服务已连接，模型尚未配置。请在服务器上设置模型后开始使用。"
+              ? "服务已连接，模型尚未配置。请在设置中添加供应商并选择默认模型。"
               : "执行服务暂时离线。已接收任务会保留，等待 worker 恢复。"}
           </Text>
         </View>

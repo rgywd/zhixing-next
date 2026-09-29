@@ -1,3 +1,4 @@
+import { availablePreference } from "./providerEditing";
 import type { ThemeColors } from "./theme";
 import { useUi, Button, Empty, humanError, runLabels, SheetHeader, timeLabel } from "./ui";
 import { useThemedStyles } from "./ThemeProvider";
@@ -123,11 +124,13 @@ export function ChatPanel({
     return () => clearTimeout(timer);
   }, [focusMessageSeq, list, loading, messages]);
   useEffect(() => { if (startWithFiles) onFilesOpened?.(); }, [startWithFiles, onFilesOpened]);
-  const chatModelId = conversation.model_id ?? catalog?.roles.chat ?? null;
-  const modelId = kind === "task" ? taskModelId ?? catalog?.roles.task ?? null : chatModelId;
+  const taskPreference = availablePreference(catalog, "task", taskModelId, taskEffort);
+  const chatPreference = availablePreference(catalog, "chat", conversation.model_id, conversation.reasoning_effort);
+  const chatModelId = chatPreference.modelId ?? catalog?.roles.chat ?? null;
+  const modelId = kind === "task" ? taskPreference.modelId ?? catalog?.roles.task ?? null : chatModelId;
   const model = catalog?.items.find((item) => item.id === modelId);
   useEffect(() => { onComposerContext({ conversationId: conversation.id, modelId, kind }); }, [conversation.id, modelId, kind, onComposerContext]);
-  const depth = (kind === "task" ? taskEffort : conversation.reasoning_effort) ?? model?.default_reasoning_effort ?? "auto";
+  const depth = (kind === "task" ? taskPreference.effort : chatPreference.effort) ?? model?.default_reasoning_effort ?? "auto";
   async function updateModel(model_id: string | null, reasoning_effort: ReasoningEffort | null) {
     if (kind === "task") {
       setTaskModelId(model_id);
@@ -296,7 +299,7 @@ export function ChatPanel({
         onModel={conversation.agent_id ? undefined : () => setShowModels(true)}
         onReasoning={conversation.agent_id ? undefined : () => setShowReasoning(true)}
         onSearch={conversation.agent_id ? undefined : () => setShowSearch(true)}
-        onSend={() => { void send({ ...(kind === "task" && taskModelId ? { model_id: taskModelId } : {}), ...(kind === "task" && taskEffort ? { reasoning_effort: taskEffort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }}
+        onSend={() => { void send({ ...(kind === "task" && taskPreference.modelId ? { model_id: taskPreference.modelId } : {}), ...(kind === "task" && taskPreference.effort ? { reasoning_effort: taskPreference.effort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }}
         hint={(running || intent === "steer") ? <View style={chatStyles.delivery}>
           {(["queue", "steer"] as const).map((value) => <Pressable key={value} accessibilityRole="radio" accessibilityLabel={value === "queue" ? "排队：当前运行结束后处理" : "引导：发送给当前运行"} accessibilityState={{ checked: intent === value, disabled: !!draft.pending || (value === "steer" && !running) }} disabled={!!draft.pending || (value === "steer" && !running)} onPress={() => { setIntent(value); if (value === "steer" && running) setKind(running.kind); setTarget(value === "steer" ? running?.id ?? null : null); }} style={[chatStyles.deliveryChoice, intent === value && { backgroundColor: colors.neutral }]}><Ionicons name={value === "queue" ? "layers-outline" : "git-branch-outline"} size={13} color={colors.muted} /><Text style={s.caption}>{value === "queue" ? "接着处理" : "调整当前任务"}</Text></Pressable>)}
           {intent === "steer" && running?.id !== target ? <Text style={s.error}>目标已结束，请切回接着处理</Text> : null}
@@ -317,7 +320,7 @@ export function ChatPanel({
         defaultLabel={kind === "task" ? "跟随默认任务模型" : "跟随默认聊天模型"}
         onClose={() => setShowModels(false)}
       />
-      <ReasoningPicker visible={showReasoning} model={model} selected={kind === "task" ? taskEffort : conversation.reasoning_effort} onSelect={(value) => updateModel(kind === "task" ? taskModelId : conversation.model_id, value)} onClose={() => setShowReasoning(false)} />
+      <ReasoningPicker visible={showReasoning} model={model} selected={kind === "task" ? taskPreference.effort : chatPreference.effort} onSelect={(value) => updateModel(kind === "task" ? taskPreference.modelId : chatPreference.modelId, value)} onClose={() => setShowReasoning(false)} />
       <SearchPicker visible={showSearch} connection={connection} selectedId={searchProviderId} onSelect={setSearchProviderId} onClose={() => setShowSearch(false)} />
       <Modal
         visible={!!detail}
