@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import os
 import platform
@@ -248,6 +249,7 @@ class FileAccess:
         *,
         overwrite: bool = False,
         limit: int = MAX_DOCUMENT_BYTES,
+        expected_sha256: str | None = None,
     ) -> dict[str, Any]:
         if len(data) > limit:
             raise ValueError(f"Content exceeds the {limit}-byte limit.")
@@ -274,6 +276,10 @@ class FileAccess:
                     file.flush()
                     os.fsync(file.fileno())
                 self.authorize(supplied, write=True)
+                if expected_sha256 is not None:
+                    _, existing = self.read_bytes(supplied, limit=limit)
+                    if hashlib.sha256(existing).hexdigest() != expected_sha256:
+                        raise ValueError("File changed before publication; replacement was not performed")
                 if overwrite:
                     os.replace(temp, target, src_dir_fd=directory, dst_dir_fd=directory)
                 else:

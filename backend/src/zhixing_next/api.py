@@ -24,6 +24,7 @@ from .models import model_ready
 from .schemas import (
     AgentInput,
     AgentUpdate,
+    ApprovalDecision,
     AssistantInput,
     ConversationInput,
     ConversationModelInput,
@@ -353,6 +354,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.get("/resources")
     def resource_list(conversation_id: str | None = None, cursor: Cursor = 0, limit: Limit = 50):
         return store.list_resources(conversation_id, cursor, limit)
+
+    @router.get("/approvals")
+    def approval_list(conversation_id: str | None = None, run_id: str | None = None):
+        from .operations import Journal
+
+        return Journal(settings).approvals(conversation_id, run_id)
+
+    @router.post("/approvals/{approval_id}/decision")
+    def approval_decision(approval_id: UUID, body: ApprovalDecision):
+        from .operations import Journal
+
+        return Journal(settings).decide(str(approval_id), body.decision)
+
+    @router.get("/approvals/{approval_id}/file")
+    def approval_file(approval_id: UUID, version: Literal["before", "after"] = "after"):
+        from .operations import Journal
+
+        name, data = Journal(settings).approval_file(str(approval_id), version)
+        return Response(data, media_type="application/octet-stream", headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename*=UTF-8''" + quote(name)})
+
+    @router.get("/runs/{run_id}/operations")
+    def operation_list(run_id: str):
+        from .operations import Journal
+
+        return Journal(settings).receipts(run_id)
+
+    @router.post("/runs/{run_id}/resume")
+    def resume_run(run_id: str):
+        return store.resume_run(run_id)
 
     @router.post("/conversations/{conversation_id}/resources")
     def capture_resource(conversation_id: str, body: ResourceInput):

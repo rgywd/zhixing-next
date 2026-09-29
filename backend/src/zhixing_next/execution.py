@@ -72,6 +72,7 @@ async def cleanup_orphans(settings: Settings) -> None:
                 "stopped": True,
                 "reason": "worker_restart",
             },
+            allow_terminal=True,
         )
         marker.unlink()
 

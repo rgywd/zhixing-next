@@ -36,6 +36,7 @@ timeout = 120
 enabled = false
 image = "zhixing-sandbox:1"
 network = "none" # bridge also allows Docker-reachable private networks.
+network_authorization = "ask" # bridge: once per task; allow means persistent authorization.
 memory_mb = 2048
 cpus = 2
 timeout_seconds = 120

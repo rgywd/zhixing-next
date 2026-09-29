@@ -26,6 +26,7 @@ import {
 import { useChat } from "./useChat";
 import { ModelPicker, reasoningLabel } from "./ModelPicker";
 import { Attachments } from "./Attachments";
+import { ApprovalCards } from "./ApprovalCards";
 import { FilesPanel } from "./FilesPanel";
 import { SearchPicker } from "./SearchPicker";
 import {
@@ -177,6 +178,7 @@ export function ChatPanel({
         <ActivityIndicator color={colors.accent} style={{ padding: 16 }} />
       ) : null}
       <FlatList
+        ListFooterComponent={<ApprovalCards connection={connection} conversationId={conversation.id} onChanged={() => refresh.current()} />}
         ref={list}
         data={messages}
         keyExtractor={(message) => message.id}
@@ -279,7 +281,7 @@ export function ChatPanel({
           <Text numberOfLines={1} style={[s.muted, s.grow]}>
             {running
               ? `正在${running.kind === "task" ? "处理委托" : "回复"} · ${pendingRuns.filter((run) => run.status === "queued").length} 条等待`
-              : `${pendingRuns.length} 条等待执行`}
+              : pendingRuns.some((run) => run.phase === "approval") ? "有操作需要你的决定" : `${pendingRuns.length} 条等待执行`}
           </Text>
           <Pressable accessibilityRole="button" accessibilityLabel="查看运行进度" onPress={() => setDetail(running?.id ?? pendingRuns[0].id)}>
             <Text style={chatStyles.link}>进度</Text>
@@ -504,7 +506,7 @@ function RunDetail({
           <>
             <Text style={s.title}>{run.prompt}</Text>
             <Text style={s.muted}>
-              {runLabels[run.status]} · {run.id.slice(0, 8)}
+              {run.status === "queued" && run.phase === "approval" ? "等待批准" : run.status === "queued" && run.phase === "recovering" ? "正在恢复任务" : runLabels[run.status]} · {run.id.slice(0, 8)}
             </Text>
             {run.model_id ? (
               <Text style={s.muted}>
@@ -518,6 +520,10 @@ function RunDetail({
                 </Text>
               </View>
             ) : null}
+            {run.status === "interrupted" && run.recovery_enabled ? <Button onPress={() => {
+              void request<Run>(connection, `/runs/${run.id}/resume`, { method: "POST" }).then(setRun).catch((e) => setError(humanError(e)));
+            }}>核对已有步骤并继续原任务</Button> : null}
+            <ApprovalCards connection={connection} runId={run.id} />
             {run.result ? (
               <View style={s.card}>
                 <Text style={s.label}>结果</Text>
@@ -570,6 +576,16 @@ function RunDetail({
   );
 }
 function eventSummary(event: RunEvent) {
+  if (event.type === "recovering") return "已保留进度，正在核对并继续原任务。";
+  if (event.type === "paused") return event.data.reason === "resume" ? "决定已保存，准备继续任务。" : "任务进度已保存，等待操作决定。";
+  if (event.type === "operation") {
+    const labels: Record<string, string> = { prepared: "准备就绪", started: "已开始", succeeded: "已核对完成", failed: "未完成", denied: "未获批准", unconfirmed: "结果待核对" };
+    return `${String(event.data.tool ?? "操作")} · ${labels[String(event.data.state)] ?? "状态已更新"}`;
+  }
+  if (event.type === "approval") {
+    const labels: Record<string, string> = { pending: "等待决定", approve: "已允许", deny: "已拒绝", retry: "允许重试", skip: "保留现状并核对", cancelled: "已撤销" };
+    return `操作授权 · ${labels[String(event.data.status)] ?? "状态已更新"}`;
+  }
   if (event.type === "execution") {
     const labels: Record<string, string> = { started: "开始执行", running: "执行中", completed: "执行完成", failed: "执行失败", cancelled: "已停止执行", timed_out: "执行超时，已停止", interrupted: "服务重启，已停止旧进程" };
     return `${labels[String(event.data.status)] ?? "执行进度"}${typeof event.data.exit_code === "number" ? ` · 退出码 ${event.data.exit_code}` : ""}${typeof event.data.output === "string" && event.data.output ? `\n${event.data.output}` : ""}`;

@@ -51,6 +51,9 @@ export type Conversation = {
   updated_at: string;
 };
 export type Run = {
+  phase?: "normal" | "approval" | "recovering";
+  recovery_enabled?: number;
+  recovery_count?: number;
   id: string;
   conversation_id: string;
   kind: "chat" | "task";
@@ -90,6 +93,13 @@ export type MessageInput = {
 };
 export type SearchProvider = { id: string; name: string; kind: "brave" | "tavily" | "serper" };
 export type Resource = { id: string; name: string; path: string; size: number; mime_type: string; conversation_id: string };
+export type Approval = {
+  id: string;
+  run_id: string;
+  kind: "overwrite" | "network" | "uncertain";
+  state: string;
+  details: { title: string; description?: string; path?: string; bytes?: number; preview?: string; task?: string; tool?: string; arguments?: Record<string, unknown> };
+};
 export type Draft = { text: string; attachments?: Resource[]; pending: MessageInput | null };
 export type Schedule = {
   id: string;

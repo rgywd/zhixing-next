@@ -1,6 +1,7 @@
 import { ActivityIndicator, FlatList, Modal, Pressable, Text, TextInput, View } from "react-native";
 import type { Connection, Conversation, FinanceSummary, Message } from "./api";
 import { Attachments } from "./Attachments";
+import { ApprovalCards } from "./ApprovalCards";
 import { FilesPanel } from "./FilesPanel";
 import { useChat } from "./useChat";
 import { Button, colors, humanError, s, timeLabel } from "./ui";
@@ -35,6 +36,7 @@ export function FinancePage({
       ) : null}
       {loading ? <ActivityIndicator color={colors.accent} /> : null}
       <FlatList
+        ListFooterComponent={<ApprovalCards connection={connection} conversationId={conversation.id} onChanged={() => refresh.current()} />}
         ref={list}
         data={messages}
         keyExtractor={(item) => item.id}
