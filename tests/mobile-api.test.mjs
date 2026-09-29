@@ -148,6 +148,17 @@ test("download names cannot escape their unique cache directory", () => {
   assert.equal(safeDownloadName(".."), "artifact");
   assert.equal(safeDownloadName(""), "artifact");
 });
+
+test("image-only drafts preserve attachment IDs in immutable retries", () => {
+  const image = { id: "image-one", name: "截图.png", path: "uploads/image-one/截图.png", mime_type: "image/png", size: 100, conversation_id: "chat" };
+  const draft = { text: "", attachments: [image], pending: null };
+  const payload = prepareMessage(draft, "queue", "chat", null, null, () => "message-with-image");
+  assert.equal(payload.content, "");
+  assert.deepEqual(payload.attachments, [image.id]);
+  const restored = JSON.parse(JSON.stringify({ ...draft, pending: payload }));
+  assert.deepEqual(prepareMessage(restored, "steer", "task", "other", "other", () => assert.fail("retry changed ID")), payload);
+  assert.throws(() => prepareMessage({ text: "", pending: null }, "queue", "chat", null, null, () => "empty"));
+});
 test("schedule retry after due time preserves persisted ID, time and original conversation", () => {
   const pending = {
     id: "plan-a",

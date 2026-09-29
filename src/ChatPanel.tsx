@@ -25,6 +25,7 @@ import {
 } from "./api";
 import { useChat } from "./useChat";
 import { ModelPicker, reasoningLabel } from "./ModelPicker";
+import { Attachments } from "./Attachments";
 import { FilesPanel } from "./FilesPanel";
 import { SearchPicker } from "./SearchPicker";
 import {
@@ -134,6 +135,7 @@ export function ChatPanel({
     resume,
     abandonPending,
     attach,
+    removeAttachment,
     speak,
     pendingRuns,
     updateDraft,
@@ -220,19 +222,19 @@ export function ChatPanel({
         renderItem={({ item }) => (
           <View
             style={{
-              alignSelf: item.role === "user" ? "flex-end" : "stretch",
-              maxWidth: item.role === "user" ? "88%" : "100%",
+              alignSelf: item.role === "user" && !item.origin ? "flex-end" : "stretch",
+              maxWidth: item.role === "user" && !item.origin ? "88%" : "100%",
               gap: 5,
             }}
           >
-            <Text style={[s.muted, item.role === "user" && chatStyles.userMeta]}>
-              {item.role === "assistant" ? assistantName : "你"} ·{" "}
+            <Text style={[s.muted, item.role === "user" && !item.origin && chatStyles.userMeta]}>
+              {item.origin === "assistant_task" ? "后台任务" : item.role === "assistant" ? assistantName : "你"} ·{" "}
               {timeLabel(item.created_at)}
               {item.intent === "steer"
                 ? ` · 引导${item.status === "applied" ? "已应用" : item.status === "rejected" ? "未应用" : "待应用"}`
                 : ""}
             </Text>
-            <View style={item.role === "user" ? chatStyles.userBubble : chatStyles.assistantContent}>
+            <View style={item.role === "user" && !item.origin ? chatStyles.userBubble : chatStyles.assistantContent}>
               <Markdown
                 style={markdownStyles}
                 textcomponent={SelectableText}
@@ -241,6 +243,7 @@ export function ChatPanel({
               >
                 {item.content}
               </Markdown>
+              <Attachments connection={connection} items={item.attachments} />
             </View>
             {item.role === "assistant" || item.run_id ? (
               <View style={chatStyles.messageActions}>
@@ -306,6 +309,7 @@ export function ChatPanel({
       ) : null}
       <View style={chatStyles.composerArea}>
         <View style={chatStyles.composer}>
+          <Attachments connection={connection} items={draft.attachments} remove={draft.pending ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
           <TextInput
             accessibilityLabel="消息或任务要求"
             multiline
@@ -316,7 +320,7 @@ export function ChatPanel({
             scrollEnabled
             editable={draftReady && !draft.pending && !busy}
             onChangeText={(text) => {
-              void updateDraft({ text, pending: null }).catch((e) => setError(humanError(e)));
+              void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e)));
             }}
             style={chatStyles.composerInput}
           />
@@ -354,7 +358,7 @@ export function ChatPanel({
             <Pressable accessibilityRole="button" accessibilityLabel="添加资料" onPress={() => setShowFiles(true)} style={chatStyles.tool}>
               <Text style={[chatStyles.toolText, { fontSize: 24, lineHeight: 25 }]}>＋</Text>
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel={draft.pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !draftReady || busy || modelBusy || !draft.text.trim() }} disabled={!draftReady || busy || modelBusy || !draft.text.trim()} onPress={() => { void send({ ...(kind === "task" && taskModelId ? { model_id: taskModelId } : {}), ...(kind === "task" && taskEffort ? { reasoning_effort: taskEffort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }} style={[chatStyles.send, (!draftReady || busy || modelBusy || !draft.text.trim()) && s.disabled]}>
+            <Pressable accessibilityRole="button" accessibilityLabel={draft.pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !draftReady || busy || modelBusy || (!draft.text.trim() && !draft.attachments?.length) }} disabled={!draftReady || busy || modelBusy || (!draft.text.trim() && !draft.attachments?.length)} onPress={() => { void send({ ...(kind === "task" && taskModelId ? { model_id: taskModelId } : {}), ...(kind === "task" && taskEffort ? { reasoning_effort: taskEffort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }} style={[chatStyles.send, (!draftReady || busy || modelBusy || (!draft.text.trim() && !draft.attachments?.length)) && s.disabled]}>
               <Text style={chatStyles.sendText}>{busy ? "…" : draft.pending ? "重试" : "↑"}</Text>
             </Pressable>
           </View>
@@ -566,6 +570,14 @@ function RunDetail({
   );
 }
 function eventSummary(event: RunEvent) {
+  if (event.type === "execution") {
+    const labels: Record<string, string> = { started: "开始执行", running: "执行中", completed: "执行完成", failed: "执行失败", cancelled: "已停止执行", timed_out: "执行超时，已停止", interrupted: "服务重启，已停止旧进程" };
+    return `${labels[String(event.data.status)] ?? "执行进度"}${typeof event.data.exit_code === "number" ? ` · 退出码 ${event.data.exit_code}` : ""}${typeof event.data.output === "string" && event.data.output ? `\n${event.data.output}` : ""}`;
+  }
+  if (event.type === "artifact") {
+    const resource = event.data.resource as { name?: string } | undefined;
+    return `已交付：${resource?.name ?? "文件"}`;
+  }
   const content =
     event.data.message ??
     event.data.content ??

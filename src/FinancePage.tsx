@@ -1,5 +1,7 @@
-import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, FlatList, Modal, Pressable, Text, TextInput, View } from "react-native";
 import type { Connection, Conversation, FinanceSummary, Message } from "./api";
+import { Attachments } from "./Attachments";
+import { FilesPanel } from "./FilesPanel";
 import { useChat } from "./useChat";
 import { Button, colors, humanError, s, timeLabel } from "./ui";
 
@@ -16,6 +18,7 @@ export function FinancePage({
     messages, running, pendingRuns, syncError, refresh, loading, list, nearBottomRef,
     previous, busy, loadOlder, intent, setIntent, setTarget, setKind, error, setError,
     draft, draftReady, updateDraft, send, cancel, resume, abandonPending,
+    showFiles, setShowFiles, attach, removeAttachment,
   } = useChat({ connection, conversation, onRefresh });
   const queued = pendingRuns.filter((run) => run.status === "queued").length;
   return (
@@ -82,6 +85,7 @@ export function FinancePage({
             </Text>
             <View style={{ backgroundColor: item.role === "user" ? colors.pale : colors.white, padding: 13, borderRadius: 15 }}>
               <Text selectable style={s.text}>{item.content}</Text>
+              <Attachments connection={connection} items={item.attachments} />
             </View>
           </View>
         )}
@@ -104,7 +108,9 @@ export function FinancePage({
           </View>
         ) : null}
         {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+        <Attachments connection={connection} items={draft.attachments} remove={draft.pending ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
         <View style={[s.row, { alignItems: "flex-end" }]}>
+          <Button secondary small disabled={!!draft.pending} onPress={() => setShowFiles(true)}>＋</Button>
           <TextInput
             accessibilityLabel="给财务助手发消息"
             multiline
@@ -113,10 +119,10 @@ export function FinancePage({
             value={draft.text}
             maxLength={20000}
             editable={draftReady && !draft.pending && !busy}
-            onChangeText={(text) => { void updateDraft({ text, pending: null }).catch((e) => setError(humanError(e))); }}
+            onChangeText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}
             style={[s.input, s.grow, { minHeight: 46, maxHeight: 105 }]}
           />
-          <Button disabled={!draftReady || busy || !draft.text.trim()} onPress={() => { void send(); }}>
+          <Button disabled={!draftReady || busy || (!draft.text.trim() && !draft.attachments?.length)} onPress={() => { void send(); }}>
             {draft.pending ? "重试" : "发送"}
           </Button>
         </View>
@@ -124,6 +130,9 @@ export function FinancePage({
           <Button secondary small onPress={abandonPending}>返回编辑草稿</Button>
         ) : null}
       </View>
+      <Modal visible={showFiles} onRequestClose={() => setShowFiles(false)}>
+        {showFiles ? <FilesPanel connection={connection} conversationId={conversation.id} attach={attach} close={() => setShowFiles(false)} canAttach={draftReady && !draft.pending && !busy} /> : null}
+      </Modal>
     </View>
   );
 }

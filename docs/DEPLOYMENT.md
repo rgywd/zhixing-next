@@ -3,6 +3,8 @@
 2026-09-23：本页维护 Linux/systemd 部署步骤；是否已上线及实际提交、模型调用结果由部署验收回执记录。
 新助手独立安装，复用现有 HTTPS Nginx 入口的 `/assistant` 路径。旧知行服务与它的数据目录保持独立。
 
+2026-09-29 的图片/隔离执行升级尚未应用到生产。DB v8、原件备份、Docker 镜像与启用步骤见[升级说明](HARNESS-UPGRADE.md)。本页默认 systemd 安装仍关闭 Shell；不要只修改一个 enabled 字段就将原部署视为已验收。
+
 ## 布局
 
 | 内容 | 路径或约定 |
@@ -84,7 +86,7 @@ systemctl is-active zhixing-next-api.service zhixing-next-worker.service
 两个服务独立重启，API 不因 worker 暂时离线而停止。服务使用 `UMask=0077`，写入仅开放给数据目录。
 若通过 `[[grants]]` 允许其他文件目录，仍需满足服务用户的 Unix 权限；可写目录还需要在两个 unit 的
 drop-in 中明确加入 `ReadWritePaths=`。默认禁止访问 home。应用授权和系统权限必须同时允许，
-不能把配置、数据库或密钥目录作为资料授权。这些限制不等于已接入 Shell 沙盒；当前仍无 Shell 工具。
+不能把配置、数据库或密钥目录作为资料授权。这些限制属于宿主文件权限；可选 Shell 另通过 Docker 隔离执行。启用时还需让服务用户可以调用目标 Docker Engine，并在真实 service 环境验收目录映射、UID、网络和清理，不能据宿主终端成功代替 systemd 验收。
 
 ## 接入现有 Nginx
 

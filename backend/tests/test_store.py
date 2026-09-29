@@ -23,7 +23,7 @@ def test_schema_and_persona_survive_reopen(store):
     reopened = Store(store.settings)
     assert reopened.get_assistant()["persona"] == "记得先核实出处"
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == safe_journal_mode().lower()
 
 
@@ -43,6 +43,9 @@ def test_existing_v1_database_gains_agents_without_losing_conversations(tmp_path
 
 def test_v2_finance_agent_customization_survives_tool_upgrade(store):
     with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE resources")
+        db.execute("ALTER TABLE messages DROP COLUMN attachments_json")
+        db.execute("ALTER TABLE runs DROP COLUMN attachments_json")
         db.execute("DROP TABLE memory_exposures")
         db.execute("ALTER TABLE conversations DROP COLUMN memory_reset_revision")
         db.execute("DROP TABLE memories")
@@ -70,6 +73,9 @@ def test_v4_upgrade_keeps_old_conversations_without_reprocessing_them(store):
     store.claim_next("chat")
     store.finish_run(run["id"], "completed", result="旧回复")
     with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE resources")
+        db.execute("ALTER TABLE messages DROP COLUMN attachments_json")
+        db.execute("ALTER TABLE runs DROP COLUMN attachments_json")
         db.execute("DROP TABLE memory_exposures")
         db.execute("ALTER TABLE conversations DROP COLUMN memory_reset_revision")
         db.execute("DROP TABLE memories")
@@ -86,6 +92,9 @@ def test_v4_upgrade_keeps_old_conversations_without_reprocessing_them(store):
 def test_v5_memory_database_gains_search_without_losing_memories(store):
     memory = store.add_memory("用户喜欢简洁回答")
     with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE resources")
+        db.execute("ALTER TABLE messages DROP COLUMN attachments_json")
+        db.execute("ALTER TABLE runs DROP COLUMN attachments_json")
         db.execute("DROP TABLE memory_exposures")
         db.execute("ALTER TABLE conversations DROP COLUMN memory_reset_revision")
         db.execute("DROP TABLE search_providers")
@@ -95,7 +104,7 @@ def test_v5_memory_database_gains_search_without_losing_memories(store):
     assert upgraded.list_memories()["items"][0]["id"] == memory["id"]
     assert upgraded.list_search_providers()["items"] == []
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 def test_duplicate_messages_and_competing_claims_are_atomic(store):

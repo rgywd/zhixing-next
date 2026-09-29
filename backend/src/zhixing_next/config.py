@@ -22,6 +22,7 @@ class ModelConfig(BaseModel):
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
     reasoning_levels: list[Literal["auto", "none", "low", "medium", "high", "xhigh"]] = Field(default_factory=list, max_length=6)
     timeout: float = Field(default=60, gt=0, le=300)
+    image_input: bool = False
 
     @field_validator("base_url")
     @classmethod
@@ -56,6 +57,17 @@ class PathGrant(BaseModel):
     writable: bool = False
 
 
+class ExecutionConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = False
+    image: str = Field(default="zhixing-sandbox:1", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._/:@-]+$")
+    memory_mb: int = Field(default=2048, ge=256, le=16384)
+    cpus: float = Field(default=2, gt=0, le=16)
+    timeout_seconds: int = Field(default=120, ge=1, le=1800)
+    # Explicit host-side network grant. 'none' remains useful with uploaded resources.
+    network: Literal["none", "bridge"] = "none"
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
     data_dir: Path = Field(default_factory=lambda: Path(".data").resolve())
@@ -66,6 +78,7 @@ class Settings(BaseModel):
         "chat": "chat", "task": "task", "memory": "memory",
     })
     grants: list[PathGrant] = Field(default_factory=list)
+    execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
     poll_interval: float = Field(default=0.25, ge=0.05, le=10)
     config_file: Path | None = None
 
@@ -95,7 +108,7 @@ def load_settings() -> Settings:
         with config_file.open("rb") as file:
             raw = tomllib.load(file)
     base = config_file.parent if config_file else Path.cwd()
-    allowed = {"data_dir", "workspace_root", "api_token_env", "models", "roles", "grants", "poll_interval"}
+    allowed = {"data_dir", "workspace_root", "api_token_env", "models", "roles", "grants", "poll_interval", "execution"}
     if unknown := raw.keys() - allowed:
         raise ValueError("Unknown configuration fields: " + ", ".join(sorted(unknown)))
     data_dir = Path(os.environ.get("ZHIXING_DATA_DIR", raw.pop("data_dir", ".data"))).expanduser()
