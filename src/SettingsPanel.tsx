@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, ScrollView, Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import {
   normalizeServerUrl,
   request,
@@ -8,7 +8,7 @@ import {
   type ServiceStatus,
 } from "./api";
 import { saveConnection } from "./storage";
-import { Button, Field, humanError, s } from "./ui";
+import { Button, CardHeader, Field, PageHeading, PageScrollView, humanError, s } from "./ui";
 
 export function ConnectionForm({
   initial,
@@ -41,7 +41,7 @@ export function ConnectionForm({
     }
   }
   return (
-    <View style={{ gap: 18 }}>
+    <View style={s.form}>
       <Field
         label="服务地址"
         placeholder="https://assistant.example.com"
@@ -121,13 +121,10 @@ export function SettingsPanel({
     }
   }
   return (
-    <ScrollView
-      keyboardShouldPersistTaps="handled"
-      contentContainerStyle={s.content}
-    >
-      <Text style={s.heading}>慢慢熟悉彼此</Text>
-      <Text style={s.muted}>称呼、表达方式和相处习惯，都可以随时调整。</Text>
+    <PageScrollView>
+      <PageHeading title="人格与连接设置" description="称呼、表达方式和相处习惯，都可以随时调整。" />
       <View style={s.card}>
+        <CardHeader icon="person-outline" title="慢慢熟悉彼此" />
         <Field
           label="助手的名字"
           value={name}
@@ -155,7 +152,7 @@ export function SettingsPanel({
         </Button>
       </View>
       <View style={s.card}>
-        <Text style={s.title}>认识运行环境</Text>
+        <CardHeader icon="desktop-outline" title="认识运行环境" />
         <Text style={s.muted}>
           创建一次可追踪的只读任务，了解实际可访问的目录和工具。结果保留在独立会话中。
         </Text>
@@ -164,7 +161,7 @@ export function SettingsPanel({
         </Button>
       </View>
       <View style={s.card}>
-        <Text style={s.title}>连接服务</Text>
+        <CardHeader icon="link-outline" title="连接服务" />
         <ConnectionForm initial={connection} onConnect={onConnect} />
         <Button
           secondary
@@ -183,6 +180,6 @@ export function SettingsPanel({
           断开并移除令牌
         </Button>
       </View>
-    </ScrollView>
+    </PageScrollView>
   );
 }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, ScrollView, Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import * as Crypto from "expo-crypto";
 import {
   prepareSchedule,
@@ -10,7 +10,7 @@ import {
   type PlanDraft,
 } from "./api";
 import { clearPlanDraft, readPlanDraft, savePlanDraft } from "./storage";
-import { Button, Field, humanError, s, timeLabel } from "./ui";
+import { Button, Empty, Field, PageHeading, PageScrollView, humanError, s, timeLabel } from "./ui";
 
 function nextHour() {
   const date = new Date(Date.now() + 3600000);
@@ -146,19 +146,12 @@ export function SchedulesPanel({
     }
   }
   return (
-    <ScrollView
-      keyboardShouldPersistTaps="handled"
-      contentContainerStyle={s.content}
-    >
-      <View style={s.spread}>
-        <View style={s.grow}>
-          <Text style={s.heading}>在合适的时候</Text>
-          <Text style={s.muted}>把需要惦记的事，交给知行。</Text>
-        </View>
+    <PageScrollView>
+      <PageHeading title="定时计划" description="把需要惦记的事，交给知行。" action={
         <Button secondary onPress={() => setCreating(!creating)}>
           {creating ? "收起" : "＋ 新计划"}
         </Button>
-      </View>
+      } />
       {error ? (
         <Text accessibilityRole="alert" style={s.error}>
           {error}
@@ -222,11 +215,10 @@ export function SchedulesPanel({
         </View>
       ) : null}
       {!schedules.length ? (
-        <View style={[s.card, { paddingVertical: 32 }]}>
-          <Text style={s.title}>还没有安排</Text>
-          <Text style={s.muted}>
+        <View style={s.card}>
+          <Empty compact icon="calendar-outline" title="还没有安排">
             先从一件小事开始：定时整理资料，或者继续一项研究。
-          </Text>
+          </Empty>
         </View>
       ) : (
         [...schedules].reverse().map((schedule) => (
@@ -266,6 +258,6 @@ export function SchedulesPanel({
           加载更多计划
         </Button>
       ) : null}
-    </ScrollView>
+    </PageScrollView>
   );
 }

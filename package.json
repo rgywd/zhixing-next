@@ -31,7 +31,7 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint . --max-warnings 0",
-    "test:mobile": "node --experimental-strip-types --test tests/mobile-api.test.mjs",
+    "test:mobile": "node --experimental-strip-types --test tests/mobile-*.test.mjs",
     "bundle:android": "expo export --platform android --output-dir dist/android",
     "bundle:ios": "expo export --platform ios --output-dir dist/ios"
   },

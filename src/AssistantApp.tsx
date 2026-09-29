@@ -9,7 +9,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   Text,
   View,
 } from "react-native";
@@ -52,7 +51,7 @@ import {
   removeConnection,
   saveDraft,
 } from "./storage";
-import { Button, colors, Field, humanError, s, timeLabel } from "./ui";
+import { BackLink, Button, CardHeader, colors, Field, humanError, PageHeading, PageScrollView, SheetHeader, s, timeLabel } from "./ui";
 
 type Tab = "home" | "life" | "chat" | "work" | "toolbox";
 
@@ -187,12 +186,12 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
         lifeView === "overview" ? (
           <LifePanel onFinance={() => setLifeView("finance")} onChat={() => setTab("chat")} />
         ) : (
-          <ScrollView contentContainerStyle={s.content}>
+          <PageScrollView>
             <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
             <Text style={s.heading}>财务</Text>
             <Text style={s.muted}>连接服务后，可以在这里和财务助手聊。</Text>
             <Button onPress={() => setTab("chat")}>连接知行</Button>
-          </ScrollView>
+          </PageScrollView>
         )
       ) : tab === "work" ? (
         <WorkPanel conversations={[]} projects={[]} schedules={[]}
@@ -206,13 +205,13 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
         <View style={s.body}>
           <View style={[s.header, s.spread]}>
             <Text style={s.heading}>连接知行</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel="返回首页" onPress={() => setTab("home")} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}><Ionicons name="close" size={26} color={colors.ink} /></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="返回首页" onPress={() => setTab("home")} style={s.iconButton}><Ionicons name="close" size={26} color={colors.ink} /></Pressable>
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
+          <PageScrollView>
             <Text style={s.muted}>连接后可以聊天、运行任务，并看到自己的真实资料。</Text>
             {error ? <Text style={s.error}>{error}</Text> : null}
             <ConnectionForm onConnect={onConnect} />
-          </ScrollView>
+          </PageScrollView>
         </View>
       )}
       {showTabs ? <BottomTabs value={tab} onChange={setTab} /> : null}
@@ -680,9 +679,7 @@ function Connected({
           />
         ) : (
           <>
-            <Pressable accessibilityRole="button" onPress={() => setWorkView("overview")} style={s.backLink}>
-              <Text style={s.backLinkText}>‹ 返回工作</Text>
-            </Pressable>
+            <BackLink label="工作" onPress={() => setWorkView("overview")} />
             <SchedulesPanel
               connection={connection}
               schedules={schedules}
@@ -706,9 +703,7 @@ function Connected({
         <ToolboxPanel onResources={() => setToolView("resources")} onSettings={() => setToolView("settings")} onAgents={() => setToolView("agents")} onModels={() => setToolView("models")} />
       ) : (
         <>
-          <Pressable accessibilityRole="button" onPress={() => setToolView("overview")} style={s.backLink}>
-            <Text style={s.backLinkText}>‹ 返回工具箱</Text>
-          </Pressable>
+          <BackLink label="工具箱" onPress={() => setToolView("overview")} />
           {toolView === "agents" ? (
             <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />
           ) : toolView === "models" ? (
@@ -727,13 +722,12 @@ function Connected({
               }}
             />
           ) : (
-            <ScrollView contentContainerStyle={s.content}>
-              <Text style={s.title}>连接设置</Text>
-              <Text style={s.muted}>服务连接恢复后，可以编辑人格设定。</Text>
+            <PageScrollView>
+              <PageHeading title="连接设置" description="服务连接恢复后，可以编辑人格设定。" />
               <Button secondary onPress={onDisconnect}>
                 移除当前连接，重新设置
               </Button>
-            </ScrollView>
+            </PageScrollView>
           )}
         </>
       )}
@@ -758,18 +752,15 @@ function Connected({
         onRequestClose={() => setShowProjectCreator(false)}
       >
         <SafeAreaView style={s.root}>
-          <View style={s.header}>
-            <Text style={[s.heading, s.grow]}>创建项目</Text>
-            <Button secondary onPress={() => setShowProjectCreator(false)}>关闭</Button>
-          </View>
-          <View style={s.content}>
+          <SheetHeader title="创建项目" onClose={() => setShowProjectCreator(false)} />
+          <PageScrollView>
             <Text style={s.muted}>为相关对话、文件和任务留一个持久工作目录。</Text>
             <Field label="项目名称" placeholder="例如：我的项目" value={projectName} onChangeText={setProjectName} maxLength={100} />
             <Button disabled={busy || !projectName.trim()} onPress={() => { void newProject(true); }}>
               {busy ? "正在创建…" : "创建项目"}
             </Button>
             {error ? <Text style={s.error}>{error}</Text> : null}
-          </View>
+          </PageScrollView>
         </SafeAreaView>
       </Modal>
       <Modal
@@ -779,18 +770,10 @@ function Connected({
         onRequestClose={() => setShowConversations(false)}
       >
         <SafeAreaView style={s.root}>
-          <View style={s.header}>
-            <Text style={[s.heading, s.grow]}>你的对话</Text>
-            <Button secondary onPress={() => setShowConversations(false)}>
-              关闭
-            </Button>
-          </View>
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={s.content}
-          >
+          <SheetHeader title="你的对话" onClose={() => setShowConversations(false)} />
+          <PageScrollView>
             <View style={s.card}>
-              <Text style={s.title}>留一个新的话题</Text>
+              <CardHeader icon="chatbubble-outline" title="留一个新的话题" />
               <Field
                 label="对话名称"
                 placeholder="例如：周末计划、游戏攻略"
@@ -894,7 +877,7 @@ function Connected({
                 更早的对话
               </Button>
             ) : null}
-          </ScrollView>
+          </PageScrollView>
         </SafeAreaView>
       </Modal>
     </View>

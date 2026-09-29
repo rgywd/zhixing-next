@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { Alert, Pressable, ScrollView, Text, View } from "react-native";
+import { Alert, Pressable, Text, View } from "react-native";
 import { request, type Agent, type AgentTool, type Connection } from "./api";
-import { Button, Field, humanError, s } from "./ui";
+import { Button, CardHeader, Field, PageHeading, PageScrollView, humanError, s } from "./ui";
 
 const TOOL_LABELS: { id: AgentTool; label: string }[] = [
   { id: "inspect_environment", label: "查看运行环境" },
@@ -70,18 +70,17 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
     }
   }
   return (
-    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
-      <Text style={s.heading}>子智能体</Text>
-      <Text style={s.muted}>主知行可以按需委托它们；你也可以直接聊。工具权限由服务端限制。</Text>
+    <PageScrollView>
+      <PageHeading title="子智能体" description="主知行可以按需委托它们；你也可以直接聊。工具权限由服务端限制。" />
       {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
       {editing ? (
         <View style={s.card}>
-          <Text style={s.title}>{editing === "new" ? "创建助手" : `设置 ${editing.name}`}</Text>
+          <CardHeader icon="person-outline" title={editing === "new" ? "创建助手" : `设置 ${editing.name}`} />
           <Field label="名称" value={form.name} onChangeText={(name) => setForm({ ...form, name })} maxLength={200} />
           <Field label="擅长什么" value={form.description} onChangeText={(description) => setForm({ ...form, description })} maxLength={1000} multiline />
           <Field label="具体要求" value={form.instructions} onChangeText={(instructions) => setForm({ ...form, instructions })} maxLength={20000} multiline />
           {editing === "new" || editing.kind === "custom" ? (
-            <View style={{ gap: 8 }}>
+            <View style={s.stack}>
               <Text style={s.label}>可用工具</Text>
               <Text style={s.muted}>仅选择确实需要的工具。宿主目录仍受服务器授权范围约束。</Text>
               {TOOL_LABELS.map((tool) => (
@@ -109,8 +108,7 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
         <>
           {agents.filter((agent) => agent.visible).map((agent) => (
             <View key={agent.id} style={s.card}>
-              <Text style={s.title}>{agent.name}{agent.kind === "service" ? " · 服务助手" : ""}</Text>
-              <Text style={s.muted}>{agent.description}</Text>
+              <CardHeader icon="person-outline" title={`${agent.name}${agent.kind === "service" ? " · 服务助手" : ""}`} description={agent.description} />
               <Text style={s.muted}>工具：{agent.tools.length ? agent.tools.map((id) => TOOL_LABELS.find((tool) => tool.id === id)?.label ?? SERVICE_TOOL_LABELS[id] ?? id).join("、") : "暂无专用工具"}</Text>
               <Button onPress={() => onChat(agent.id)}>继续对话</Button>
               <Button secondary onPress={() => onNewChat(agent.id)}>新对话</Button>
@@ -128,6 +126,6 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
           <Button secondary onPress={() => edit("new")}>创建自定义助手</Button>
         </>
       )}
-    </ScrollView>
+    </PageScrollView>
   );
 }

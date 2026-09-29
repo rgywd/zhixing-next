@@ -11,6 +11,7 @@
 ## 入口与边界
 
 - 先读 [README.md](README.md) 和 [文档入口](docs/README.md)。
+- 客户端视觉修改遵循 [共享 UI](docs/UI.md)，优先复用 `src/theme.ts` 的尺度与 `src/ui.tsx` 的组件，页面只保留专有布局。
 - 后端实现、启动与已验证边界见 [backend/README.md](backend/README.md)，接口由 [docs/API.md](docs/API.md) 维护。
 - [架构讨论稿](docs/ARCHITECTURE.md) 区分用户已确认方向与待讨论建议；建议不能当作已实现能力。
 - 不自动移植旧仓的模块、协议、数据格式或部署配置；复用需有当前需求和代码证据。

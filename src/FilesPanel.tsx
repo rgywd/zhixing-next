@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
 import * as Crypto from "expo-crypto";
@@ -14,7 +14,7 @@ import {
   type Connection,
   type Resource,
 } from "./api";
-import { Button, humanError, s } from "./ui";
+import { Button, CardHeader, Empty, PageScrollView, SheetHeader, humanError, s } from "./ui";
 
 type WorkspaceFile = { path: string; name: string; size: number };
 export function FilesPanel({
@@ -181,18 +181,13 @@ export function FilesPanel({
   }
   return (
     <SafeAreaView style={s.root}>
-      <View style={s.header}>
-        <Text style={[s.heading, s.grow]}>资料与产物</Text>
-        <Button secondary onPress={close}>
-          关闭
-        </Button>
-      </View>
-      <ScrollView contentContainerStyle={s.content}>
+      <SheetHeader title="资料与产物" onClose={close} />
+      <PageScrollView>
         <Text style={s.muted}>
           当前会话的持久工作目录。上传资料后，在消息里说明要做什么；处理结果也会出现在这里。
         </Text>
         <View style={s.card}>
-          <Text style={s.title}>交给知行一份资料</Text>
+          <CardHeader icon="cloud-upload-outline" title="交给知行一份资料" />
           <Text style={s.muted}>
             每个文件最多 20 MiB。图片可直接交给支持视觉的模型；PDF 和 Word 可提取文字。
           </Text>
@@ -247,9 +242,9 @@ export function FilesPanel({
           </Button>
         </View>
         {!files.length ? (
-          <Text style={s.muted}>
-            暂时没有文件。上传资料或让知行生成一份文件后，再来这里查看。
-          </Text>
+          <Empty compact icon="documents-outline" title="暂时没有文件">
+            上传资料或让知行生成一份文件后，再来这里查看。
+          </Empty>
         ) : (
           files.map((file) => (
             <View key={file.path} style={s.card}>
@@ -290,7 +285,7 @@ export function FilesPanel({
             文件较多，当前只展示服务器返回的部分文件；可让知行按路径查找。
           </Text>
         ) : null}
-      </ScrollView>
+      </PageScrollView>
     </SafeAreaView>
   );
 }
