@@ -7,6 +7,7 @@
 - [共享 UI](UI.md)：生活页视觉基准、共享组件和主页面／子页面的接入方式。
 - [后端实现与运行](../backend/README.md)：当前可运行能力、配置、恢复行为与未实现边界。
 - [通用执行能力升级](HARNESS-UPGRADE.md)：图片输入、Docker 执行、浏览器、产物交付的启用步骤与本地验收。
+- [中断恢复与授权](RECOVERY-AND-AUTHORIZATION.md)：按步骤续做、文件版本核对、操作批准、真实回执及 v9 迁移。
 - [myVPS 部署与恢复](DEPLOYMENT.md)：独立目录、systemd、HTTPS 路由、运行观察、备份与回滚。
 - [接口契约](API.md)：HTTP、持久队列和运行时接口。
 - [首条链路验收](VERIFICATION.md)：已执行检查、未通过的环境验收与真实模型接入步骤。

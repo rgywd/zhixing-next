@@ -5,6 +5,7 @@ Only the cloud model is substituted; no service credentials or network are used.
 
 import asyncio
 import threading
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
@@ -247,7 +248,7 @@ async def test_cancel_during_file_write_reports_actual_receipt_and_never_replays
     settings = settings_for(tmp_path)
     app = create_app(settings)
     entered, release = threading.Event(), threading.Event()
-    original = FileAccess.write_text
+    original = FileAccess.write_bytes
     writes = []
 
     def delayed_write(self, path, content, **kwargs):
@@ -256,7 +257,7 @@ async def test_cancel_during_file_write_reports_actual_receipt_and_never_replays
         writes.append(path)
         return original(self, path, content, **kwargs)
 
-    monkeypatch.setattr(FileAccess, "write_text", delayed_write)
+    monkeypatch.setattr(FileAccess, "write_bytes", delayed_write)
     first = ScriptedModel(
         replies=[
             AIMessage(
@@ -328,7 +329,7 @@ async def test_cancel_during_file_write_reports_actual_receipt_and_never_replays
             assert (await client.get(f"/v1/runs/{queued}")).json()["status"] == "queued"
             await client.post(f"/v1/conversations/{conversation}/resume")
             await wait_status(client, queued, "completed")
-            assert writes == ["settled.txt"]
+            assert len(writes) == 1 and Path(writes[0]).name == "settled.txt"
             assert any(
                 getattr(message, "tool_call_id", None) == "slow-file"
                 for message in following.seen[0]

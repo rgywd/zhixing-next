@@ -75,7 +75,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 8:
+            if version > 9:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -121,6 +121,14 @@ class Store:
                 if finance:
                     db.execute("UPDATE agents SET tools_json=? WHERE id='finance'", (_json(sorted(set(json.loads(finance[0])) | {"view_image"})),))
                 db.execute("PRAGMA user_version=8")
+            if version < 9:
+                db.execute("ALTER TABLE runs ADD COLUMN recovery_enabled INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE runs ADD COLUMN recovery_count INTEGER NOT NULL DEFAULT 0")
+                db.execute("ALTER TABLE runs ADD COLUMN phase TEXT NOT NULL DEFAULT 'normal'")
+                db.execute("CREATE TABLE operations(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),call_id TEXT NOT NULL,tool TEXT NOT NULL,args_json TEXT NOT NULL,plan_json TEXT NOT NULL,state TEXT NOT NULL,result_json TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(run_id,call_id))")
+                db.execute("CREATE TABLE approvals(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),operation_id TEXT,kind TEXT NOT NULL,details_json TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',created_at TEXT NOT NULL,decided_at TEXT)")
+                db.execute("CREATE INDEX approvals_pending ON approvals(run_id,state)")
+                db.execute("PRAGMA user_version=9")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)
@@ -795,7 +803,7 @@ class Store:
         with self._connection(write=True) as db:
             row = db.execute(
                 """SELECT r.*,c.workspace_path,c.agent_id FROM runs r JOIN conversations c ON c.id=r.conversation_id
-                WHERE r.kind=? AND r.status='queued' AND c.blocked=0
+                WHERE r.kind=? AND r.status='queued' AND r.phase!='approval' AND c.blocked=0
                   AND NOT EXISTS(SELECT 1 FROM runs active WHERE active.conversation_id=r.conversation_id AND active.status='running')
                   AND NOT EXISTS(SELECT 1 FROM runs earlier WHERE earlier.conversation_id=r.conversation_id AND earlier.status='queued' AND earlier.seq<r.seq)
                 ORDER BY r.seq LIMIT 1""",
@@ -840,10 +848,10 @@ class Store:
             if applied:
                 self._event(db, run_id, "steer_applied", {"message_ids": applied})
 
-    def add_event(self, run_id, type, data):
+    def add_event(self, run_id, type, data, *, allow_terminal=False):
         with self._connection(write=True) as db:
             run = self._require(db, "runs", run_id)
-            if run["status"] == "running":
+            if run["status"] == "running" or allow_terminal:
                 self._event(db, run_id, type, data)
 
     def list_events(self, run_id, after=0, limit=100):
@@ -868,13 +876,15 @@ class Store:
             "UPDATE runs SET status=?,result=?,error=?,finished_at=? WHERE id=?",
             (status, result, error, now, run["id"]),
         )
+        if status in {"cancelled", "completed", "failed"}:
+            db.execute("UPDATE approvals SET state='cancelled',decided_at=? WHERE run_id=? AND state='pending'", (now, run["id"]))
         db.execute(
             "UPDATE messages SET status='rejected' WHERE run_id=? AND status='accepted'",
             (run["id"],),
         )
         # Withdrawing a queued follow-up changes no active execution or prior failure block.
         should_block = status != "completed" and not (
-            status == "cancelled" and run["status"] == "queued"
+            status == "cancelled" and run["status"] == "queued" and run["started_at"] is None
         )
         db.execute(
             "UPDATE conversations SET blocked=MAX(blocked,?),updated_at=? WHERE id=?",
@@ -898,6 +908,51 @@ class Store:
             run = self._require(db, "runs", run_id)
             self._finish(db, run, status, result, error)
 
+    def enable_recovery(self, run_id):
+        with self._connection(write=True) as db:
+            db.execute("UPDATE runs SET recovery_enabled=1 WHERE id=? AND status='running'", (run_id,))
+
+    def pause_run(self, run_id):
+        with self._connection(write=True) as db:
+            run = self._require(db, "runs", run_id)
+            if run["cancel_requested"]:
+                self._finish(db, run, "cancelled")
+                return
+            pending = db.execute("SELECT 1 FROM approvals WHERE run_id=? AND state='pending'", (run_id,)).fetchone()
+            db.execute("UPDATE runs SET status='queued',phase=? WHERE id=?", ("approval" if pending else "recovering", run_id))
+            self._event(db, run_id, "paused", {"reason": "approval" if pending else "resume"})
+
+    def interrupt_run(self, run_id):
+        with self._connection(write=True) as db:
+            self._recover_run(db, self._require(db, "runs", run_id))
+
+    def _recover_run(self, db, run):
+        if run["cancel_requested"]:
+            self._finish(db, run, "cancelled")
+        elif run["recovery_enabled"] and run["recovery_count"] < 3:
+            pending = db.execute("SELECT 1 FROM approvals WHERE run_id=? AND state='pending'", (run["id"],)).fetchone()
+            db.execute("UPDATE runs SET status='queued',phase=?,recovery_count=recovery_count+1,finished_at=NULL WHERE id=?", ("approval" if pending else "recovering", run["id"]))
+            self._event(db, run["id"], "recovering", {"attempt": run["recovery_count"] + 1})
+        else:
+            self._finish(db, run, "interrupted", error="运行未能安全自动恢复，已保留步骤回执。请检查后继续原任务。")
+
+    def resume_run(self, run_id):
+        with self._connection(write=True) as db:
+            run = self._require(db, "runs", run_id)
+            if run["status"] == "queued" and run["phase"] == "recovering":
+                return _record(run)
+            if run["status"] != "interrupted" or not run["recovery_enabled"] or run["cancel_requested"]:
+                raise StoreError("cannot_resume", "只有带恢复记录的中断任务可以继续", 422)
+            if db.execute("SELECT 1 FROM runs WHERE conversation_id=? AND seq>? AND started_at IS NOT NULL", (run["conversation_id"], run["seq"])).fetchone():
+                raise StoreError("context_advanced", "该会话已执行后续任务，请发送新要求核对结果", 409)
+            db.execute("UPDATE runs SET status='queued',phase='recovering',finished_at=NULL,error=NULL,recovery_count=0 WHERE id=?", (run_id,))
+            # Resuming this exact run also restores its unconsumed instructions.
+            # Terminal interruption rejected them for UI clarity; they must not be lost.
+            db.execute("UPDATE messages SET status='accepted' WHERE run_id=? AND intent='steer' AND status='rejected'", (run_id,))
+            db.execute("UPDATE conversations SET blocked=0 WHERE id=?", (run["conversation_id"],))
+            self._event(db, run_id, "recovering", {"requested": True})
+            return _record(self._require(db, "runs", run_id))
+
     def cancel_run(self, run_id):
         with self._connection(write=True) as db:
             run = self._require(db, "runs", run_id)
@@ -919,12 +974,7 @@ class Store:
     def recover_interrupted(self):
         with self._connection(write=True) as db:
             for row in db.execute("SELECT * FROM runs WHERE status='running'").fetchall():
-                self._finish(
-                    db,
-                    row,
-                    "interrupted",
-                    error="Worker stopped before completion; inspect prior tool receipts before retrying",
-                )
+                self._recover_run(db, row)
 
     def create_schedule(self, *, id, conversation_id, prompt, next_run_at, interval_seconds=None):
         due = (

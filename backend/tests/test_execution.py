@@ -7,6 +7,7 @@ from pathlib import Path
 import httpx
 import pytest
 from langchain_core.messages import AIMessage
+from test_operations import Crash
 from test_runtime import ScriptedModel, ignore, no_controls
 
 from zhixing_next.api import create_app
@@ -14,6 +15,7 @@ from zhixing_next.artifacts import create_artifact_tool
 from zhixing_next.browser import create_browser_tool
 from zhixing_next.config import ExecutionConfig, Settings
 from zhixing_next.execution import DockerSandbox, cleanup_orphans, docker
+from zhixing_next.operations import Journal, RunPaused
 from zhixing_next.resources import resource_bytes
 from zhixing_next.runtime import run_agent
 from zhixing_next.store import Store
@@ -267,3 +269,169 @@ async def test_invalid_artifact_cannot_be_published(execution):
         assert not any(kind == "artifact" for kind, _ in events)
     finally:
         await sandbox.close()
+
+
+async def test_bridge_execution_waits_for_authenticated_run_authorization(execution):
+    settings, store, run, events, emit = execution
+    settings.execution.network = "bridge"
+    model = ScriptedModel(
+        replies=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute",
+                        "args": {"command": "touch authorized"},
+                        "id": "network-step",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="执行完成"),
+        ]
+    )
+    with pytest.raises(RunPaused):
+        await run_agent(
+            settings,
+            run,
+            persona="",
+            emit=emit,
+            controls=no_controls,
+            acknowledge=ignore,
+            model_override=model,
+        )
+    store.pause_run(run["id"])
+    assert not (Path(run["workspace_path"]) / "authorized").exists()
+    journal = Journal(settings)
+    approval = journal.approvals()["items"][0]
+    assert approval["kind"] == "network"
+    journal.decide(approval["id"], "approve")
+    resumed = store.claim_next("task")
+    await run_agent(
+        settings,
+        resumed,
+        persona="",
+        emit=emit,
+        controls=no_controls,
+        acknowledge=ignore,
+        model_override=model,
+    )
+    assert (Path(run["workspace_path"]) / "authorized").exists()
+    assert journal.approvals()["items"] == []
+
+
+@pytest.mark.parametrize("retry_once", [False, True])
+async def test_unknown_shell_effect_is_not_replayed_after_restart(
+    execution, monkeypatch, retry_once
+):
+    settings, store, run, events, emit = execution
+    command = "printf 'once\\n' >> counter.txt"
+    first = ScriptedModel(
+        replies=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute",
+                        "args": {"command": command},
+                        "id": "append",
+                        "type": "tool_call",
+                    }
+                ],
+            )
+        ]
+    )
+    original = Journal.set_state
+
+    def crash_before_receipt(self, identifier, state, result=None):
+        if state == "succeeded":
+            raise Crash()
+        return original(self, identifier, state, result)
+
+    monkeypatch.setattr(Journal, "set_state", crash_before_receipt)
+    with pytest.raises(Crash):
+        await run_agent(
+            settings,
+            run,
+            persona="",
+            emit=emit,
+            controls=no_controls,
+            acknowledge=ignore,
+            model_override=first,
+        )
+    monkeypatch.setattr(Journal, "set_state", original)
+    store.recover_interrupted()
+    resumed = store.claim_next("task")
+    next_model = ScriptedModel(
+        replies=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "execute",
+                        "args": {"command": "cat counter.txt"},
+                        "id": "inspect",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="已核对实际写入次数"),
+        ]
+    )
+    with pytest.raises(RunPaused):
+        await run_agent(
+            settings,
+            resumed,
+            persona="",
+            emit=emit,
+            controls=no_controls,
+            acknowledge=ignore,
+            model_override=next_model,
+        )
+    store.pause_run(run["id"])
+    approval = Journal(settings).approvals()["items"][0]
+    assert approval["kind"] == "uncertain" and next_model.seen == []
+    if retry_once:
+        Journal(settings).decide(approval["id"], "retry")
+        monkeypatch.setattr(Journal, "set_state", crash_before_receipt)
+        with pytest.raises(Crash):
+            await run_agent(
+                settings,
+                store.claim_next("task"),
+                persona="",
+                emit=emit,
+                controls=no_controls,
+                acknowledge=ignore,
+                model_override=next_model,
+            )
+        monkeypatch.setattr(Journal, "set_state", original)
+        assert (Path(run["workspace_path"]) / "counter.txt").read_text() == "once\nonce\n"
+        store.recover_interrupted()
+        with pytest.raises(RunPaused):
+            await run_agent(
+                settings,
+                store.claim_next("task"),
+                persona="",
+                emit=emit,
+                controls=no_controls,
+                acknowledge=ignore,
+                model_override=next_model,
+            )
+        store.pause_run(run["id"])
+        renewed = Journal(settings).approvals()["items"][0]
+        assert renewed["id"] != approval["id"] and next_model.seen == []
+        approval = renewed
+    Journal(settings).decide(approval["id"], "skip")
+    result = await run_agent(
+        settings,
+        store.claim_next("task"),
+        persona="",
+        emit=emit,
+        controls=no_controls,
+        acknowledge=ignore,
+        model_override=next_model,
+    )
+    assert result == "已核对实际写入次数"
+    assert (Path(run["workspace_path"]) / "counter.txt").read_text() == "once\n" * (
+        2 if retry_once else 1
+    )

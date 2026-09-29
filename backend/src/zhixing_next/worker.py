@@ -50,6 +50,8 @@ class Worker:
             return self.store.get_run(run["id"])["memory_processed"] == 1
 
     async def _execute(self, run: dict) -> None:
+        from .operations import RunPaused
+
         run_id = run["id"]
 
         async def emit(event_type: str, data: dict) -> None:
@@ -75,12 +77,14 @@ class Worker:
             current_input = "\n".join(item["content"] for item in self.store.memory_context(run_id))
             if explicit_memory_request(current_input) and not await self._organize(run):
                 self.store.add_memory_failure_notice(run_id)
+        except RunPaused:
+            self.store.pause_run(run_id)
         except asyncio.CancelledError:
             requested = self.store.get_controls(run_id)["cancel_requested"]
-            self.store.finish_run(
-                run_id, "cancelled" if requested else "interrupted",
-                error=None if requested else "服务停止，运行已保存。请检查已完成步骤后继续会话。",
-            )
+            if requested:
+                self.store.finish_run(run_id, "cancelled")
+            else:
+                self.store.interrupt_run(run_id)
         except Exception as exc:
             # Vendor exception strings can contain request payloads and credentials.
             # Keep user-facing diagnostics bounded to known configuration errors.

@@ -55,6 +55,7 @@ class PathGrant(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: Path
     writable: bool = False
+    overwrite: Literal["ask", "allow"] = "ask"
 
 
 class ExecutionConfig(BaseModel):
@@ -66,6 +67,7 @@ class ExecutionConfig(BaseModel):
     timeout_seconds: int = Field(default=120, ge=1, le=1800)
     # Explicit host-side network grant. 'none' remains useful with uploaded resources.
     network: Literal["none", "bridge"] = "none"
+    network_authorization: Literal["ask", "allow"] = "ask"
 
 
 class Settings(BaseModel):

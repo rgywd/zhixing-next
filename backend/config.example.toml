@@ -34,12 +34,14 @@ api_key_env = "ZHIXING_GEMINI_API_KEY"
 # [[grants]]
 # path = "/absolute/path/to/reference-materials"
 # writable = false
+# overwrite = "ask" # allow only for explicitly authorized persistent replacements.
 
 # Build sandbox/Dockerfile and verify the target host before enabling execution.
 [execution]
 enabled = false
 image = "zhixing-sandbox:1"
 network = "none" # bridge also allows Docker-reachable private networks.
+network_authorization = "ask" # bridge: once per task; allow means persistent authorization.
 memory_mb = 2048
 cpus = 2
 timeout_seconds = 120

@@ -116,3 +116,7 @@ class ScheduleInput(Input):
 
 class ScheduleUpdate(Input):
     enabled: bool = Field(strict=True)
+
+
+class ApprovalDecision(Input):
+    decision: Literal["approve", "deny", "retry", "skip"]
