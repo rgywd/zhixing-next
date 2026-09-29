@@ -65,6 +65,54 @@ def test_persona_project_and_conversation_flow(client):
     )
 
 
+def test_conversation_search_finds_full_history_and_message_text(client):
+    store = client.app.state.store
+    first = store.create_conversation("旅行计划")
+    second = store.create_conversation("普通聊天")
+    store.create_conversation("其他话题")
+    client.post(f"/v1/conversations/{second['id']}/messages", json={
+        "id": "search-message", "content": "下周去京都看红叶，预订车票", "kind": "chat",
+    })
+    client.post(f"/v1/conversations/{first['id']}/messages", json={
+        "id": "unrelated", "content": "别的内容", "kind": "chat",
+    })
+    result = client.get("/v1/conversations/search", params={"q": "旅行"})
+    assert result.status_code == 200
+    assert result.json()["items"][0]["conversation_id"] == first["id"]
+    assert result.json()["items"][0]["message_id"] is None
+    result = client.get("/v1/conversations/search", params={"q": "京都 车票"})
+    assert len(result.json()["items"]) == 1
+    match = result.json()["items"][0]
+    assert match["conversation_id"] == second["id"]
+    assert match["message_id"] == "search-message"
+    assert "京都" in match["snippet"]
+    for index in range(105):
+        store.create_conversation(f"其他对话 {index}")
+    assert client.get("/v1/conversations?latest=true&limit=100").json()["items"][0]["id"] != first["id"]
+    assert client.get("/v1/conversations/search", params={"q": "旅行"}).json()["items"][0]["conversation_id"] == first["id"]
+    later = store.create_conversation("最近聊天")
+    client.post(f"/v1/conversations/{later['id']}/messages", json={
+        "id": "later-message", "content": "京都行程已经更新",
+    })
+    assert client.get("/v1/conversations/search", params={"q": "京都", "sort": "oldest"}).json()["items"][0]["conversation_id"] == second["id"]
+    assert client.get("/v1/conversations/search", params={"q": "京都", "sort": "newest"}).json()["items"][0]["conversation_id"] == later["id"]
+    window = client.get(f"/v1/conversations/{second['id']}/messages", params={"before": match["message_seq"] + 1}).json()
+    assert any(item["id"] == match["message_id"] for item in window["items"])
+    rejected = store.create_conversation("隐藏消息")
+    client.post(f"/v1/conversations/{rejected['id']}/messages", json={
+        "id": "rejected-message", "content": "不应检索到这条孤立文本",
+    })
+    with store._connection(write=True) as db:
+        db.execute("UPDATE messages SET status='rejected' WHERE id='rejected-message'")
+    assert client.get("/v1/conversations/search", params={"q": "孤立文本"}).json()["items"] == []
+    assert client.get("/v1/conversations/search", params={"q": "%"}).json()["items"] == []
+    assert client.get("/v1/conversations/search", params={"q": " "}).json()["items"] == []
+    assert client.get("/v1/conversations/search", params={"q": "京" * 101}).status_code == 422
+    assert client.get("/v1/conversations/search", params={"q": "京都"}, headers={
+        "Authorization": "Bearer wrong",
+    }).status_code == 401
+
+
 def test_memory_management_is_authenticated_and_has_no_mobile_dependency(client):
     created = client.post("/v1/memories", json={"content": "用户喜欢简洁回答"})
     assert created.status_code == 201

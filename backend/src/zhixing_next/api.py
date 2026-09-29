@@ -256,6 +256,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         check_window(cursor, before, latest)
         return store.list_conversations(cursor, limit, before=before, latest=latest)
 
+    @router.get("/conversations/search")
+    def conversation_search(
+        q: Annotated[str, Query(min_length=1, max_length=100)],
+        sort: Literal["relevance", "newest", "oldest"] = "relevance",
+        limit: Limit = 50,
+    ):
+        return store.search_conversations(q, sort=sort, limit=limit)
+
     @router.post("/conversations", status_code=201)
     def create_conversation(body: ConversationInput):
         return store.create_conversation(**body.model_dump())

@@ -251,6 +251,7 @@ function ConnectedSession({
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [financeId, setFinanceId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number } | null>(null);
   const selectedRef = useRef(selectedId);
   const [conversationCursor, setConversationCursor] = useState<string | null>(
     null,
@@ -315,8 +316,16 @@ function ConnectedSession({
     if (next === "work") setWorkView("overview");
     if (next === "toolbox") setToolView("overview");
   }
-  function openConversation(id: string) {
-    if (conversations.find((item) => item.id === id)?.agent_id === "finance") {
+  async function openConversation(id: string, messageSeq?: number) {
+    let target = conversations.find((item) => item.id === id);
+    if (!target) {
+      try {
+        const fetched = await request<Conversation>(connection, `/conversations/${id}`);
+        target = fetched;
+        setConversations((old) => mergeById(old, [fetched]));
+      } catch (e) { setError(humanError(e)); return; }
+    }
+    if (target.agent_id === "finance") {
       setFinanceId(id);
       setLifeView("finance");
       setShowConversations(false);
@@ -325,6 +334,7 @@ function ConnectedSession({
       return;
     }
     setSelectedId(id);
+    setFocusMessage(messageSeq ? { conversationId: id, seq: messageSeq } : null);
     selectedRef.current = id;
     setShowConversations(false);
     setShowAiDrawer(false);
@@ -650,9 +660,10 @@ function ConnectedSession({
             <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />
           ) : selected ? (
             <ChatPanel
-              key={selected.id}
+              key={`${selected.id}:${focusMessage?.conversationId === selected.id ? focusMessage.seq : ""}`}
               connection={connection}
               conversation={selected}
+              focusMessageSeq={focusMessage?.conversationId === selected.id ? focusMessage.seq : null}
               assistantName={agents.find((item) => item.id === selected.agent_id)?.name ?? assistant?.name ?? "知行"}
               catalog={catalog}
               initialKind={chatStart?.id === selected.id ? chatStart.kind : "chat"}
@@ -735,6 +746,7 @@ function ConnectedSession({
       {showTabs && !keyboardVisible ? <BottomTabs value={tab} onChange={selectTab} /> : null}
       <AiDrawer
         visible={showAiDrawer}
+        connection={connection}
         name={assistant?.name ?? "知行"}
         conversations={conversations}
         selectedId={showWelcome ? null : selectedId}

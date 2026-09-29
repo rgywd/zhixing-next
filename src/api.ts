@@ -50,6 +50,15 @@ export type Conversation = {
   blocked: boolean;
   updated_at: string;
 };
+export type ConversationSearchResult = {
+  conversation_id: string;
+  title: string;
+  agent_id: string | null;
+  updated_at: string;
+  message_id: string | null;
+  message_seq: number | null;
+  snippet: string;
+};
 export type Run = {
   phase?: "normal" | "approval" | "recovering";
   recovery_enabled?: number;
