@@ -35,11 +35,11 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 - `GET /v1/conversations`, `POST /v1/conversations {title,project_id?: string|null,agent_id?: string|null}`:
   会话 `{id,title,project_id,agent_id,blocked: bool,created_at,updated_at}`；`agent_id=null` 为主知行。
 - `GET /v1/conversations/{id}`：单个会话及当前 blocked 状态。
-- `PUT /v1/conversations/{id}/model {model_id:string|null,reasoning_effort:auto|none|low|medium|high|xhigh|null}`：仅主知行会话可设置聊天模型和思考档位；null 表示继承默认。档位必须在模型声明的 `reasoning_levels` 内。设置只影响之后入队的聊天，已提交的运行保留入队时的模型快照。
+- `PUT /v1/conversations/{id}/model {model_id:string|null,reasoning_effort:auto|none|low|medium|high|xhigh|null}`：主知行与绑定专用助手的会话均可设置聊天模型和思考档位；null 表示继承默认。档位必须在模型声明的 `reasoning_levels` 内。设置只影响之后入队的聊天，已提交的运行保留入队时的模型快照。
 - `GET /v1/conversations/{id}/messages?cursor=&limit=`: 按序号升序，消息
   `{id,conversation_id,role: user|assistant,content,intent: queue|steer,run_id,status: accepted|applied|rejected,created_at,seq}`。
 - `POST /v1/conversations/{id}/messages {id,content,intent: queue|steer,kind: chat|task,target_run_id?: string,model_id?: string,reasoning_effort?: auto|none|low|medium|high|xhigh,search_provider_id?: string}`:
-  回执 `{message,run}`；queue 创建 queued 运行，可为单条聊天或任务覆盖模型与思考档位并选择联网搜索服务；steer 必须绑定实际 running 运行，不接受这些覆盖字段，也不创建新运行。同一消息 ID 重试必须保持所有字段一致。
+  回执 `{message,run}`；queue 创建 queued 运行，主知行与专用助手均可为单条聊天或任务覆盖模型与思考档位并选择联网搜索服务，保持原会话的助手身份与工具范围（选中的搜索工具仅对该次运行开放）；steer 必须绑定实际 running 运行，不接受这些覆盖字段，也不创建新运行。同一消息 ID 重试必须保持所有字段一致。
 - `POST /v1/conversations/{id}/resume`: 清除失败/取消后的队列阻塞，允许尚未开始的排队消息继续。
 - `GET /v1/runs?conversation_id=&cursor=&limit=`: 运行列表；`GET /v1/runs/{id}`: 单个运行。
   运行 `{id,conversation_id,message_id,kind: chat|task,model_id,reasoning_effort,search_provider_id,status: queued|running|completed|failed|cancelled|interrupted,

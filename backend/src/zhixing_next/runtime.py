@@ -259,7 +259,7 @@ async def run_agent(
     workspace.mkdir(parents=True, exist_ok=True)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     config = {"configurable": {"thread_id": run["conversation_id"]}, "recursion_limit": 100}
-    search_enabled = run.get("search_provider") is not None and not run.get("agent_id")
+    search_enabled = run.get("search_provider") is not None
     store = Store(settings)
     forgetting = forget_memory_request(run["prompt"])
     reset_revision = store.memory_reset_revision(run["conversation_id"])
@@ -275,6 +275,14 @@ async def run_agent(
     subagent_names = {"finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}" for item in agents}
     middleware = RunControls(controls, emit, subagent_names)
     assigned_tools = [by_name[name] for name in direct_agent["tools"]] if direct_agent else physical_tools
+    if direct_agent and direct_agent["id"] == "finance":
+        # Finance attachments are readable only inside this conversation's workspace.
+        assigned_tools.extend(
+            tool for tool in create_file_tools(settings.model_copy(update={"grants": []}), workspace)
+            if tool.name in {"list_directory", "read_text_file", "read_document"}
+        )
+    if direct_agent and search_enabled:
+        assigned_tools.append(by_name["search_web"])
     system_prompt = (
         "You are the user's personal assistant. Be truthful about tool results and capability limits. "
         "The built-in ls/read_file/write_file/edit_file/glob/grep tools are a separate virtual scratch filesystem; do not claim virtual files are host artifacts. "
@@ -298,7 +306,7 @@ async def run_agent(
     if direct_agent:
         system_prompt += (
             f"\n\nYou are the dedicated {direct_agent['name']} agent. {direct_agent['description']} "
-            f"Only use your assigned physical tools: {', '.join(direct_agent['tools']) or 'none'}. "
+            f"Only use your assigned physical tools: {', '.join(tool.name for tool in assigned_tools) or 'none'}. "
             f"Cite sources when relevant.\nInstructions:\n{direct_agent['instructions']}"
         )
     else:

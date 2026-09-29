@@ -1,129 +1,130 @@
-import { ActivityIndicator, FlatList, Pressable, Text, TextInput, View } from "react-native";
-import type { Connection, Conversation, FinanceSummary, Message } from "./api";
-import { useChat } from "./useChat";
-import { Button, colors, humanError, s, timeLabel } from "./ui";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
+import type { Connection, Conversation, FinanceSummary, ModelCatalog } from "./api";
+import { ChatPanel } from "./ChatPanel";
+import { colors, s } from "./ui";
 
 export function FinancePage({
-  connection, conversation, finance, onBack, onRefresh,
+  connection, conversation, finance, catalog, onBack, onRefresh, onConversationChanged,
 }: {
   connection: Connection;
   conversation: Conversation;
   finance: FinanceSummary;
+  catalog: ModelCatalog | null;
   onBack: () => void;
   onRefresh: () => void;
+  onConversationChanged: (conversation: Conversation) => void;
 }) {
-  const {
-    messages, running, pendingRuns, syncError, refresh, loading, list, nearBottomRef,
-    previous, busy, loadOlder, intent, setIntent, setTarget, setKind, error, setError,
-    draft, draftReady, updateDraft, send, cancel, resume, abandonPending,
-  } = useChat({ connection, conversation, onRefresh });
-  const queued = pendingRuns.filter((run) => run.status === "queued").length;
   return (
     <View style={s.body}>
-      <View style={[s.header, { paddingBottom: 6 }]}>
-        <Button secondary small onPress={onBack}>‹ 生活</Button>
-        <Text style={[s.heading, s.grow]}>财务</Text>
-      </View>
-      <Text style={[s.muted, { marginHorizontal: 22, marginBottom: 8 }]}>账户、收支和扣费问题，直接和财务助手聊。</Text>
-      {syncError ? (
-        <Pressable accessibilityRole="button" onPress={() => refresh.current()} style={[s.notice, { marginHorizontal: 18 }]}>
-          <Text style={s.noticeText}>{syncError} · 点击重试，草稿仍在。</Text>
+      <View style={styles.hero}>
+        <Image source={require("../assets/life-header-red.png")} resizeMode="contain" style={styles.heroArt} accessible={false} />
+        <Pressable accessibilityRole="button" accessibilityLabel="返回生活" onPress={onBack} style={({ pressed }) => [styles.back, pressed && s.pressed]}>
+          <Ionicons name="chevron-back" size={18} color={colors.accent} />
+          <Text style={styles.backText}>生活</Text>
         </Pressable>
-      ) : null}
-      {loading ? <ActivityIndicator color={colors.accent} /> : null}
-      <FlatList
-        ref={list}
-        data={messages}
-        keyExtractor={(item) => item.id}
-        keyboardShouldPersistTaps="handled"
-        contentContainerStyle={{ paddingHorizontal: 18, paddingBottom: 14, gap: 12, flexGrow: 1 }}
-        onScroll={(event) => {
-          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-          nearBottomRef.current = contentSize.height - contentOffset.y - layoutMeasurement.height < 140;
-        }}
-        scrollEventThrottle={100}
-        onContentSizeChange={() => {
-          if (nearBottomRef.current) list.current?.scrollToEnd({ animated: false });
-        }}
-        ListHeaderComponent={
-          <View style={{ gap: 10, paddingTop: 6, paddingBottom: 8 }}>
-            <View style={s.card}>
-              <Text style={s.title}>账户一览</Text>
-              {finance.balances.length ? finance.balances.map((item) => (
-                <View key={item.id} style={s.spread}>
-                  <Text style={s.text}>{item.platform}</Text>
-                  <Text style={s.text}>¥{item.amount}</Text>
-                </View>
-              )) : <Text style={s.muted}>还没有你提供的余额。</Text>}
-            </View>
-            <View style={s.card}>
-              <Text style={s.title}>最近收支</Text>
-              {finance.recent.length ? finance.recent.slice(0, 5).map((item) => (
-                <Text key={item.id} style={s.text}>
-                  {item.kind === "income" ? "收入" : "支出"} · {item.platform} · ¥{item.amount}
-                </Text>
-              )) : <Text style={s.muted}>还没有你提供的收支。</Text>}
-            </View>
-            {previous ? (
-              <Button secondary small disabled={busy} onPress={() => { void loadOlder(); }}>
-                查看更早的消息
-              </Button>
-            ) : null}
-            {!messages.length && !loading ? (
-              <Text style={s.muted}>可以直接说一个账户余额、消费，或问一笔扣费是怎么发生的。</Text>
-            ) : null}
-          </View>
-        }
-        renderItem={({ item }: { item: Message }) => (
-          <View style={{ alignSelf: item.role === "user" ? "flex-end" : "stretch", maxWidth: "92%", gap: 5 }}>
-            <Text style={s.muted}>
-              {item.role === "user" ? "你" : "财务助手"} · {timeLabel(item.created_at)}
-              {item.intent === "steer" ? ` · 引导${item.status === "applied" ? "已应用" : item.status === "rejected" ? "未应用" : "待应用"}` : ""}
-            </Text>
-            <View style={{ backgroundColor: item.role === "user" ? colors.pale : colors.white, padding: 13, borderRadius: 15 }}>
-              <Text selectable style={s.text}>{item.content}</Text>
-            </View>
-          </View>
-        )}
+        <Text accessibilityRole="header" style={styles.title}>财务</Text>
+        <Text style={styles.intro}>账户、收支和扣费问题，直接和财务助手聊。</Text>
+      </View>
+      <ChatPanel
+        connection={connection}
+        conversation={conversation}
+        assistantName="财务助手"
+        catalog={catalog}
+        onConversationChanged={onConversationChanged}
+        onRefresh={onRefresh}
+        intro={<FinanceOverview finance={finance} />}
+        stretchIntro={!finance.balances.length && !finance.recent.length}
       />
-      <View style={{ backgroundColor: colors.white, borderTopColor: colors.line, borderTopWidth: 1, padding: 12, gap: 8 }}>
-        {running || queued ? (
-          <View style={s.spread}>
-            <Text style={s.muted}>{running ? `正在回复 · ${queued} 条等待` : `${queued} 条等待`}</Text>
-            {running ? <Button secondary danger small disabled={running.cancel_requested} onPress={() => { void cancel(running).catch(() => undefined); }}>取消</Button> : null}
+    </View>
+  );
+}
+
+function FinanceOverview({ finance }: { finance: FinanceSummary }) {
+  const emptyOverview = !finance.balances.length && !finance.recent.length;
+  return (
+    <View style={[styles.overview, emptyOverview && styles.fill]}>
+      <View style={[styles.summaryCard, emptyOverview && styles.fill]}>
+        <View style={styles.sectionHeading}>
+          <View style={styles.sectionIcon}><Ionicons name="wallet-outline" size={26} color={colors.accent} /></View>
+          <View style={styles.sectionCopy}>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>账户一览</Text>
+            <Text style={styles.sectionSubtitle}>{finance.balances.length ? "你提供的各平台余额" : "还没有你提供的余额。"}</Text>
           </View>
-        ) : null}
-        {conversation.blocked ? <Button secondary small onPress={() => { void resume(); }}>继续处理队列</Button> : null}
-        {running || intent === "steer" ? (
-          <View style={s.row}>
-            {(["queue", "steer"] as const).map((value) => (
-              <Pressable key={value} accessibilityRole="button" accessibilityState={{ selected: intent === value, disabled: !!draft.pending || (value === "steer" && !running) }} disabled={!!draft.pending || (value === "steer" && !running)} onPress={() => { setIntent(value); setTarget(value === "steer" ? running?.id ?? null : null); if (value === "steer" && running) setKind(running.kind); }} style={[s.chip, intent === value && s.chipActive]}>
-                <Text style={[s.chipText, intent === value && s.chipActiveText]}>{value === "queue" ? "排队" : "引导当前回复"}</Text>
-              </Pressable>
+        </View>
+        {finance.balances.length ? (
+          <View style={styles.records}>
+            {finance.balances.map((item) => (
+              <View key={item.id} style={styles.recordRow}>
+                <Text style={[styles.recordLabel, s.grow]}>{item.platform}</Text>
+                <Text style={styles.amount}>¥{item.amount}</Text>
+              </View>
             ))}
           </View>
-        ) : null}
-        {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-        <View style={[s.row, { alignItems: "flex-end" }]}>
-          <TextInput
-            accessibilityLabel="给财务助手发消息"
-            multiline
-            placeholder="直接说说你的财务问题…"
-            placeholderTextColor={colors.muted}
-            value={draft.text}
-            maxLength={20000}
-            editable={draftReady && !draft.pending && !busy}
-            onChangeText={(text) => { void updateDraft({ text, pending: null }).catch((e) => setError(humanError(e))); }}
-            style={[s.input, s.grow, { minHeight: 46, maxHeight: 105 }]}
-          />
-          <Button disabled={!draftReady || busy || !draft.text.trim()} onPress={() => { void send(); }}>
-            {draft.pending ? "重试" : "发送"}
-          </Button>
+        ) : <FinanceEmpty icon="wallet-outline">{"告诉我账户名称和余额，\n我来帮你整理。"}</FinanceEmpty>}
+      </View>
+      <View style={[styles.summaryCard, emptyOverview && styles.fill]}>
+        <View style={styles.sectionHeading}>
+          <View style={styles.sectionIcon}><Ionicons name="bar-chart-outline" size={26} color={colors.accent} /></View>
+          <View style={styles.sectionCopy}>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>最近收支</Text>
+            <Text style={styles.sectionSubtitle}>{finance.recent.length ? "最近提供的收入与支出" : "还没有你提供的收支。"}</Text>
+          </View>
         </View>
-        {draft.pending && !busy ? (
-          <Button secondary small onPress={abandonPending}>返回编辑草稿</Button>
-        ) : null}
+        {finance.recent.length ? (
+          <View style={styles.records}>
+            {finance.recent.slice(0, 5).map((item) => (
+              <View key={item.id} style={styles.recordRow}>
+                <View style={s.grow}>
+                  <Text style={styles.recordLabel}>{item.platform}</Text>
+                  <Text style={s.muted}>{item.kind === "income" ? "收入" : "支出"}</Text>
+                </View>
+                <Text style={styles.amount}>¥{item.amount}</Text>
+              </View>
+            ))}
+          </View>
+        ) : <FinanceEmpty icon="receipt-outline">{"可以直接说一笔收入或消费，\n也可以聊聊扣费问题。"}</FinanceEmpty>}
       </View>
     </View>
   );
 }
+
+function FinanceEmpty({ icon, children }: { icon: "wallet-outline" | "receipt-outline"; children: string }) {
+  return (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyArtwork} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+        <Image source={require("../assets/life-footer-red.png")} resizeMode="contain" style={styles.hills} />
+        <Ionicons name="leaf-outline" size={27} color={colors.accent} style={styles.sprout} />
+        <View style={styles.emptyObject}><Ionicons name={icon} size={40} color={colors.accent} /></View>
+      </View>
+      <Text style={styles.emptyText}>{children}</Text>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  hero: { paddingHorizontal: 22, paddingTop: 6, paddingBottom: 14, gap: 8, minHeight: 166 },
+  heroArt: { position: "absolute", width: 286, height: 190, right: -30, top: -9 },
+  back: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, minHeight: 40, paddingHorizontal: 14, borderRadius: 24, backgroundColor: colors.pale },
+  backText: { color: colors.accent, fontSize: 15, fontWeight: "600" },
+  title: { color: colors.ink, fontSize: 38, lineHeight: 48, fontWeight: "700" },
+  intro: { color: colors.muted, fontSize: 13, lineHeight: 21, maxWidth: "76%" },
+  overview: { gap: 14 },
+  fill: { flexGrow: 1 },
+  summaryCard: { padding: 16, gap: 14, borderRadius: 24, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, shadowColor: colors.ink, shadowOpacity: 0.04, shadowOffset: { width: 0, height: 3 }, shadowRadius: 10, elevation: 1 },
+  sectionHeading: { flexDirection: "row", alignItems: "center", gap: 14 },
+  sectionIcon: { width: 46, height: 46, borderRadius: 17, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center" },
+  sectionCopy: { flex: 1, gap: 3 },
+  sectionTitle: { fontSize: 19, lineHeight: 27, fontWeight: "700", color: colors.ink },
+  sectionSubtitle: { fontSize: 13, lineHeight: 21, color: colors.muted },
+  emptyState: { flexGrow: 1, alignItems: "center", justifyContent: "center", gap: 9, paddingBottom: 5 },
+  emptyArtwork: { width: "100%", maxWidth: 280, height: 96, alignItems: "center", justifyContent: "center" },
+  hills: { position: "absolute", width: "100%", height: 90, bottom: -3, opacity: 0.5 },
+  sprout: { position: "absolute", left: "24%", bottom: 13, opacity: 0.24, transform: [{ rotate: "-25deg" }] },
+  emptyObject: { width: 64, height: 66, borderRadius: 19, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center", opacity: 0.8, transform: [{ rotate: "-5deg" }] },
+  emptyText: { color: colors.muted, fontSize: 13, lineHeight: 21, textAlign: "center" },
+  records: { gap: 8 },
+  recordRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.line },
+  recordLabel: { color: colors.ink, fontSize: 15, lineHeight: 23 },
+  amount: { color: colors.ink, fontSize: 16, lineHeight: 24, fontWeight: "600", flexShrink: 1 },
+});

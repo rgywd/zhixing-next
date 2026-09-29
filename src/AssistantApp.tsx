@@ -619,7 +619,7 @@ function Connected({
             openMainChat();
           }} />
         ) : financeConversation ? (
-          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
+          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} catalog={catalog} onBack={() => setLifeView("overview")} onRefresh={refresh} onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))} />
         ) : (
           <View style={[s.body, { padding: 22, gap: 18 }]}>
             <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
