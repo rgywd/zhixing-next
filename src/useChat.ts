@@ -12,6 +12,7 @@ import {
   type MessageInput,
   type Page,
   type Run,
+  type Resource,
 } from "./api";
 import {
   clearDraft,
@@ -211,7 +212,7 @@ export function useChat({
   }
 
   async function send(options: Pick<MessageInput, "model_id" | "reasoning_effort" | "search_provider_id"> = {}) {
-    if (busy || !draftReady || !draft.text.trim()) return;
+    if (busy || !draftReady || (!draft.text.trim() && !draft.attachments?.length)) return;
     let payload: MessageInput;
     try {
       payload = prepareMessage(
@@ -231,7 +232,7 @@ export function useChat({
     setError("");
     try {
       // Persist the immutable request before any network I/O; retries after app restart reuse it.
-      await updateDraft({ text: draft.text, pending: payload });
+      await updateDraft({ ...draft, pending: payload });
       const receipt = await request<{ message: Message; run: Run }>(
         connection,
         `/conversations/${conversation.id}/messages`,
@@ -291,7 +292,7 @@ export function useChat({
         {
           text: "确认并编辑",
           onPress: () => {
-            void updateDraft({ text: draft.text, pending: null }).catch((e) =>
+            void updateDraft({ ...draft, pending: null }).catch((e) =>
               setError(humanError(e)),
             );
             setIntent("queue");
@@ -301,16 +302,16 @@ export function useChat({
       ],
     );
   }
-  async function attach(path: string) {
+  async function attach(resource: Resource) {
     if (draftRef.current.pending)
       throw new Error("先处理待确认消息，再添加文件。");
-    const marker = `资料路径：${path}`;
-    const current = draftRef.current.text.trim();
-    const text = current.split("\n").includes(marker)
-      ? current
-      : `${current}\n\n${marker}`.trim();
-    await updateDraft({ text, pending: null });
-    setKind("task");
+    const attachments = mergeById(draftRef.current.attachments ?? [], [resource]);
+    if (attachments.length > 8) throw new Error("每条消息最多 8 份资料。");
+    await updateDraft({ ...draftRef.current, attachments, pending: null });
+  }
+  async function removeAttachment(id: string) {
+    if (draftRef.current.pending) return;
+    await updateDraft({ ...draftRef.current, attachments: draftRef.current.attachments?.filter((item) => item.id !== id) });
   }
   async function speak(message: Message) {
     await Speech.stop();
@@ -374,6 +375,7 @@ export function useChat({
     resume,
     abandonPending,
     attach,
+    removeAttachment,
     speak,
     pendingRuns,
     updateDraft,

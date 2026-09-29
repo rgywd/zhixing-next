@@ -8,6 +8,7 @@ const TOOL_LABELS: { id: AgentTool; label: string }[] = [
   { id: "list_directory", label: "列目录" },
   { id: "read_text_file", label: "读取文本" },
   { id: "read_document", label: "读取文档" },
+  { id: "view_image", label: "查看图片" },
   { id: "write_text_file", label: "写入文本" },
   { id: "fetch_public_page", label: "读取公开网页" },
 ];
@@ -91,7 +92,7 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
                 </Pressable>
               ))}
             </View>
-          ) : <Text style={s.muted}>服务专用工具由服务绑定；目前可根据文字记录金额，不能读取真实账户或理解截图。</Text>}
+          ) : <Text style={s.muted}>服务专用工具由服务绑定；可根据文字和清晰截图记录金额；截图需要支持视觉的模型，不能读取真实账户。</Text>}
           <Pressable accessibilityRole="switch" accessibilityState={{ checked: form.visible }} onPress={() => setForm({ ...form, visible: !form.visible })}>
             <Text style={s.text}>{form.visible ? "☑" : "□"} 在助手列表中显示</Text>
           </Pressable>

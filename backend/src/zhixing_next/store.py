@@ -39,7 +39,9 @@ def _record(row):
     if row is None:
         return None
     result = dict(row)
-    result.pop("request_json", None)
+    request_json = result.pop("request_json", None)
+    if "role" in result and request_json and json.loads(request_json).get("source_run_id"):
+        result["origin"] = "assistant_task"
     result.pop("workspace_path", None)
     result.pop("content_key", None)
     for key in ("blocked", "cancel_requested", "enabled", "visible"):
@@ -47,6 +49,8 @@ def _record(row):
             result[key] = bool(result[key])
     if "tools_json" in result:
         result["tools"] = json.loads(result.pop("tools_json"))
+    if "attachments_json" in result:
+        result["attachments"] = json.loads(result.pop("attachments_json"))
     return result
 
 
@@ -71,7 +75,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 7:
+            if version > 8:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -108,6 +112,15 @@ class Store:
                 db.execute("ALTER TABLE conversations ADD COLUMN memory_reset_revision INTEGER NOT NULL DEFAULT 0")
                 db.execute("CREATE TABLE memory_exposures(memory_id TEXT NOT NULL,conversation_id TEXT NOT NULL REFERENCES conversations(id),PRIMARY KEY(memory_id,conversation_id))")
                 db.execute("PRAGMA user_version=7")
+            if version < 8:
+                db.execute("CREATE TABLE resources(id TEXT PRIMARY KEY,conversation_id TEXT NOT NULL REFERENCES conversations(id),path TEXT NOT NULL,name TEXT NOT NULL,mime_type TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,created_at TEXT NOT NULL)")
+                db.execute("ALTER TABLE messages ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'")
+                db.execute("ALTER TABLE runs ADD COLUMN attachments_json TEXT NOT NULL DEFAULT '[]'")
+                db.execute("UPDATE agents SET instructions=replace(instructions,'；截图识别尚未接入。','。截图中清楚可见的金额也属于用户提供的信息；看不清时只追问必要的问题。') WHERE id='finance'")
+                finance = db.execute("SELECT tools_json FROM agents WHERE id='finance'").fetchone()
+                if finance:
+                    db.execute("UPDATE agents SET tools_json=? WHERE id='finance'", (_json(sorted(set(json.loads(finance[0])) | {"view_image"})),))
+                db.execute("PRAGMA user_version=8")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)
@@ -294,6 +307,7 @@ class Store:
             run = self._require(db, "runs", run_id)
             rows = db.execute(
                 "SELECT role,content FROM messages WHERE run_id=? AND role='user' "
+                "AND json_extract(request_json,'$.source_run_id') IS NULL "
                 "AND status='applied' ORDER BY seq",
                 (run_id,),
             ).fetchall()
@@ -387,7 +401,7 @@ class Store:
             return _record(self._require(db, "agents", agent_id))
 
     def create_agent(self, *, name, description, instructions, tools, visible):
-        if set(tools) - {"inspect_environment", "list_directory", "read_text_file", "read_document", "write_text_file", "fetch_public_page"}:
+        if set(tools) - {"inspect_environment", "list_directory", "read_text_file", "read_document", "view_image", "write_text_file", "fetch_public_page"}:
             raise StoreError("tool_not_allowed", "This tool belongs to a fixed service agent", 422)
         identifier, now = str(uuid4()), timestamp()
         with self._connection(write=True) as db:
@@ -558,6 +572,40 @@ class Store:
         with self._connection() as db:
             return Path(self._require(db, "conversations", conversation_id)["workspace_path"])
 
+    def register_resource(self, identifier, conversation_id, *, path, name, mime_type, size, sha256):
+        with self._connection(write=True) as db:
+            self._require(db, "conversations", conversation_id)
+            previous = db.execute("SELECT * FROM resources WHERE id=?", (identifier,)).fetchone()
+            if previous and any(previous[key] != value for key, value in {
+                "conversation_id": conversation_id, "path": path, "sha256": sha256,
+            }.items()):
+                raise StoreError("upload_conflict", "Resource ID belongs to another upload")
+            db.execute("INSERT OR IGNORE INTO resources VALUES(?,?,?,?,?,?,?,?)",
+                       (identifier, conversation_id, path, name, mime_type, size, sha256, timestamp()))
+            return dict(self._require(db, "resources", identifier))
+
+    def get_resource(self, identifier, conversation_id=None):
+        with self._connection() as db:
+            resource = self._require(db, "resources", identifier)
+            if conversation_id:
+                self._check_resource_scope(db, resource, conversation_id)
+            return dict(resource)
+
+    def list_resources(self, conversation_id=None, cursor=0, limit=50):
+        with self._connection() as db:
+            if conversation_id:
+                workspace = self._require(db, "conversations", conversation_id)["workspace_path"]
+            else:
+                workspace = None
+            rows = db.execute("SELECT r.rowid AS seq,r.* FROM resources r JOIN conversations c ON c.id=r.conversation_id WHERE r.rowid>? AND (? IS NULL OR c.workspace_path=?) ORDER BY r.rowid LIMIT ?", (cursor, workspace, workspace, limit + 1)).fetchall()
+            return self._page(rows, limit)
+
+    def _check_resource_scope(self, db, resource, conversation_id):
+        owner = self._require(db, "conversations", resource["conversation_id"])
+        target = self._require(db, "conversations", conversation_id)
+        if owner["workspace_path"] != target["workspace_path"]:
+            raise StoreError("attachment_scope", "Choose an attachment from this conversation or project", 403)
+
     def list_conversations(self, cursor=0, limit=50, *, before=None, latest=False):
         with self._connection() as db:
             if latest or before is not None:
@@ -602,8 +650,13 @@ class Store:
 
     def submit_message(
         self, conversation_id, *, id, content, intent="queue", kind="chat", target_run_id=None,
-        model_id=None, reasoning_effort=None, search_provider_id=None,
+        model_id=None, reasoning_effort=None, search_provider_id=None, attachments=None, source_run_id=None,
     ):
+        attachments = attachments or []
+        if (source_run_id is None and len(attachments) > 8) or len(set(attachments)) != len(attachments):
+            raise StoreError("invalid_attachments", "Choose at most eight distinct attachments", 422)
+        if not content.strip() and not attachments:
+            raise StoreError("empty_message", "Provide text or attachments", 422)
         request_json = _json(
             {
                 "conversation_id": conversation_id,
@@ -614,6 +667,8 @@ class Store:
                 **({"model_id": model_id} if model_id is not None else {}),
                 **({"reasoning_effort": reasoning_effort} if reasoning_effort is not None else {}),
                 **({"search_provider_id": search_provider_id} if search_provider_id is not None else {}),
+                **({"attachments": attachments} if attachments else {}),
+                **({"source_run_id": source_run_id} if source_run_id else {}),
             }
         )
         with self._connection(write=True) as db:
@@ -628,6 +683,15 @@ class Store:
                     "message": _record(previous),
                     "run": _record(self._require(db, "runs", previous["run_id"])),
                 }
+            if source_run_id:
+                source = self._require(db, "runs", source_run_id)
+                if source["conversation_id"] != conversation_id or source["kind"] != "chat" or source["status"] != "running" or kind != "task" or intent != "queue":
+                    raise StoreError("invalid_task_source", "Background tasks must originate in this active chat", 422)
+            resources = []
+            for identifier in attachments:
+                resource = self._require(db, "resources", identifier)
+                self._check_resource_scope(db, resource, conversation_id)
+                resources.append(dict(resource))
             if intent == "steer":
                 run = self._require(db, "runs", target_run_id)
                 if (
@@ -662,6 +726,14 @@ class Store:
                         raise StoreError("agent_search", "Search controls belong to main assistant chats", 422)
                     self._require(db, "search_providers", search_provider_id)
                 run_id = self._enqueue(db, conversation_id, id, content, kind, request_json, model_id, reasoning_effort, search_provider_id)
+            selected = self._require(db, "runs", run_id)["model_id"]
+            if any(item["mime_type"].startswith("image/") for item in resources):
+                config = self.settings.models.get(selected)
+                if config is not None and not config.image_input:
+                    raise StoreError("image_not_supported", "当前模型未启用图片输入，请选择支持图片的模型。", 422)
+            db.execute("UPDATE messages SET attachments_json=? WHERE id=?", (_json(resources), id))
+            if intent != "steer":
+                db.execute("UPDATE runs SET attachments_json=? WHERE id=?", (_json(resources), run_id))
             return {
                 "message": _record(self._require(db, "messages", id)),
                 "run": _record(self._require(db, "runs", run_id)),
@@ -690,6 +762,11 @@ class Store:
     def get_run(self, run_id):
         with self._connection() as db:
             return _record(self._require(db, "runs", run_id))
+
+    def run_attachments(self, run_id):
+        with self._connection() as db:
+            rows = db.execute("SELECT attachments_json FROM messages WHERE run_id=? AND role='user' AND status!='rejected' ORDER BY seq", (run_id,)).fetchall()
+            return list({item["id"]: item for row in rows for item in json.loads(row[0])}.values())
 
     def list_runs(
         self, conversation_id=None, cursor=0, limit=50, *, before=None, latest=False, status=None
@@ -804,9 +881,13 @@ class Store:
             (int(should_block), now, run["conversation_id"]),
         )
         if status == "completed" and result is not None:
+            artifacts = [json.loads(row[0])["resource"] for row in db.execute(
+                "SELECT data FROM events WHERE run_id=? AND type='artifact' ORDER BY seq", (run["id"],)
+            )]
+            attachments = list({item["id"]: item for item in artifacts}.values())
             db.execute(
-                "INSERT INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at) VALUES(?,?,'assistant',?,'queue',?,'applied',?)",
-                (str(uuid4()), run["conversation_id"], result, run["id"], now),
+                "INSERT INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at,attachments_json) VALUES(?,?,'assistant',?,'queue',?,'applied',?,?)",
+                (str(uuid4()), run["conversation_id"], result, run["id"], now, _json(attachments)),
             )
         self._event(db, run["id"], status, {"result": result, "error": error})
 

@@ -12,6 +12,7 @@ import {
   request,
   safeDownloadName,
   type Connection,
+  type Resource,
 } from "./api";
 import { Button, humanError, s } from "./ui";
 
@@ -25,7 +26,7 @@ export function FilesPanel({
 }: {
   connection: Connection;
   conversationId: string;
-  attach: (path: string) => Promise<void>;
+  attach: (resource: Resource) => Promise<void>;
   close: () => void;
   canAttach: boolean;
 }) {
@@ -122,7 +123,7 @@ export function FilesPanel({
       if (!response.ok)
         throw new Error(data.error?.message ?? "上传失败，请重试。");
       if (!alive.current) return;
-      await attach(data.path);
+      await attach(data);
       setUpload(null);
       setNotice("已上传并加入消息草稿。回到对话告诉我怎样处理它。");
       await refresh();
@@ -193,8 +194,7 @@ export function FilesPanel({
         <View style={s.card}>
           <Text style={s.title}>交给知行一份资料</Text>
           <Text style={s.muted}>
-            每个文件最多 20 MiB。支持格式取决于服务器工具，PDF 和 Word
-            先从文本提取开始。
+            每个文件最多 20 MiB。图片可直接交给支持视觉的模型；PDF 和 Word 可提取文字。
           </Text>
           {upload ? (
             <>
@@ -273,8 +273,9 @@ export function FilesPanel({
                   small
                   disabled={busy || !canAttach}
                   onPress={() => {
-                    void attach(file.path)
-                      .then(() => setNotice("文件路径已加入草稿。"))
+                    void request<Resource>(connection, `/conversations/${conversationId}/resources`, { method: "POST", body: { path: file.path } })
+                      .then(attach)
+                      .then(() => setNotice("资料已加入草稿。"))
                       .catch((e) => setError(humanError(e)));
                   }}
                 >

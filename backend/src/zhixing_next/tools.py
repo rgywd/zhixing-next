@@ -49,10 +49,11 @@ _PRIVATE_NAMES = {
 
 
 def capability_status(settings: Settings) -> dict[str, Any]:
+    from .execution import execution_status
+
     return {
-        "execution_available": False,
+        **execution_status(settings),
         "file_tools_available": True,
-        "execution_reason": "Shell is disabled until an operating-system sandbox is configured and verified.",
     }
 
 
@@ -414,7 +415,13 @@ def create_file_tools(settings: Settings, workspace: Path) -> list[Any]:
         """Extract bounded text from PDF pages or DOCX paragraphs, with 1-based start and at most 20 units; no OCR or image interpretation."""
         return access.read_document(path, start=start, count=count)
 
-    return [inspect_environment, list_directory, read_text_file, write_text_file, read_document]
+    @tool
+    def copy_file(source: str, destination: str, overwrite: bool = False) -> dict[str, Any]:
+        """Copy up to 20 MiB between the workspace and explicitly granted host directories. Use this to import binary documents for sandbox processing or export a finished artifact. Parent directory must exist; originals are preserved."""
+        _, data = access.read_bytes(source, limit=20 * 1024 * 1024)
+        return access.write_bytes(destination, data, limit=20 * 1024 * 1024, overwrite=overwrite)
+
+    return [inspect_environment, list_directory, read_text_file, write_text_file, read_document, copy_file]
 
 
 def create_finance_tools(settings: Settings, conversation_id: str) -> list[Any]:

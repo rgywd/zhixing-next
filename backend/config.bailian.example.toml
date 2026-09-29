@@ -10,6 +10,7 @@ memory = "bailian_chat"
 [models.bailian_chat]
 protocol = "chat_completions"
 model = "qwen3.8-flash"
+image_input = true
 provider = "阿里云百炼"
 display_name = "Qwen3.8 Flash · 聊天"
 api_key_env = "ZHIXING_BAILIAN_API_KEY"
@@ -21,6 +22,7 @@ timeout = 60
 [models.bailian_task]
 protocol = "chat_completions"
 model = "qwen3.8-flash"
+image_input = true
 provider = "阿里云百炼"
 display_name = "Qwen3.8 Flash · 执行"
 api_key_env = "ZHIXING_BAILIAN_API_KEY"
@@ -28,3 +30,12 @@ base_url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 reasoning_effort = "medium"
 reasoning_levels = ["auto", "none", "low", "medium", "xhigh"]
 timeout = 120
+
+# Build sandbox/Dockerfile on the execution host, then explicitly enable.
+[execution]
+enabled = false
+image = "zhixing-sandbox:1"
+network = "none" # bridge also allows Docker-reachable private networks.
+memory_mb = 2048
+cpus = 2
+timeout_seconds = 120

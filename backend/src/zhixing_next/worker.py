@@ -103,6 +103,11 @@ class Worker:
                 del self.active[kind]
             elif self.store.get_controls(run_id)["cancel_requested"] and not task.cancelling():
                 task.cancel()
+        if "task" not in self.active and any((self.settings.data_dir / "executions").glob("zhixing-*.json")):
+            # A failed Docker stop must be reconciled before admitting more work.
+            from .execution import cleanup_orphans
+
+            await cleanup_orphans(self.settings)
         now = time.monotonic()
         if now - self._last_maintenance >= 1:
             self.store.heartbeat()
@@ -124,6 +129,9 @@ class Worker:
         lock = FileLock(self.settings.data_dir / "worker.lock")
         try:
             with lock.acquire(timeout=0):
+                from .execution import cleanup_orphans
+
+                await cleanup_orphans(self.settings)
                 self.store.recover_interrupted()
                 logger.info("worker started; one chat slot and one execution slot")
                 try:
