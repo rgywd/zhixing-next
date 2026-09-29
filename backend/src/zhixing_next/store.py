@@ -633,6 +633,52 @@ class Store:
             ).fetchall()
             return self._page(rows, limit)
 
+    def search_conversations(self, query, *, sort="relevance", limit=50):
+        """Search titles and message text across the complete local history."""
+        terms = query.strip().split()
+        if not terms:
+            return {"items": []}
+        # LIKE is sufficient for a single person's local history. Escape wildcards so
+        # a typed percent or underscore cannot turn into a broad history query.
+        escaped = [term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") for term in terms]
+        title_filter = " AND ".join("c.title LIKE ? ESCAPE '\\'" for _ in escaped)
+        message_filter = " AND ".join("content LIKE ? ESCAPE '\\'" for _ in escaped)
+        patterns = [f"%{term}%" for term in escaped]
+        if sort == "relevance":
+            order = f"CASE WHEN {title_filter} THEN 1 ELSE 0 END DESC, c.updated_at DESC"
+            rank_args = patterns
+        else:
+            order = f"c.updated_at {'ASC' if sort == 'oldest' else 'DESC'}"
+            rank_args = []
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT c.id,c.title,c.agent_id,c.updated_at,m.id AS message_id,"
+                "m.seq AS message_seq,m.content FROM conversations c "
+                "LEFT JOIN messages m ON m.seq=(SELECT matching.seq FROM messages matching "
+                "WHERE matching.conversation_id=c.id AND matching.status!='rejected' "
+                f"AND {message_filter} ORDER BY matching.seq DESC LIMIT 1) "
+                f"WHERE ({title_filter}) OR EXISTS (SELECT 1 FROM messages "
+                "WHERE conversation_id=c.id AND status!='rejected' "
+                f"AND {message_filter}) "
+                f" ORDER BY {order} LIMIT ?",
+                (*patterns, *patterns, *patterns, *rank_args, limit),
+            ).fetchall()
+        lowered = [term.casefold() for term in terms]
+        results = []
+        for row in rows:
+            title = row["title"]
+            content = row["content"] or ""
+            text = " ".join(content.split())
+            first = min((text.casefold().find(term) for term in lowered if term in text.casefold()), default=0)
+            start = max(0, first - 32)
+            snippet = ("…" if start else "") + text[start:start + 150] + ("…" if len(text) > start + 150 else "")
+            results.append({
+                "conversation_id": row["id"], "title": title, "agent_id": row["agent_id"],
+                "updated_at": row["updated_at"], "message_id": row["message_id"],
+                "message_seq": row["message_seq"], "snippet": snippet,
+            })
+        return {"items": results}
+
     def _enqueue(self, db, conversation_id, message_id, content, kind, request_json, model_override=None, reasoning_override=None, search_provider_id=None):
         run_id, now = str(uuid4()), timestamp()
         conversation = self._require(db, "conversations", conversation_id)

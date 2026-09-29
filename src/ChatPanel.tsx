@@ -51,6 +51,7 @@ export function ChatPanel({
   initialTaskModelId = null,
   initialTaskEffort = null,
   initialSearchId = null,
+  focusMessageSeq = null,
   startWithFiles = false,
   onFilesOpened,
   onConversationChanged,
@@ -65,6 +66,7 @@ export function ChatPanel({
   initialTaskModelId?: string | null;
   initialTaskEffort?: ReasoningEffort | null;
   initialSearchId?: string | null;
+  focusMessageSeq?: number | null;
   startWithFiles?: boolean;
   onFilesOpened?: () => void;
   onConversationChanged: (conversation: Conversation) => void;
@@ -112,7 +114,19 @@ export function ChatPanel({
     speak,
     pendingRuns,
     updateDraft,
-  } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles });
+  } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles, focusMessageSeq });
+  const focused = useRef(false);
+  const focusAttempts = useRef(0);
+  useEffect(() => {
+    if (focused.current || loading || focusMessageSeq === null) return;
+    const index = messages.findIndex((message) => message.seq === focusMessageSeq);
+    if (index < 0) return;
+    const timer = setTimeout(() => {
+      list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 });
+      focused.current = true;
+    }, 180);
+    return () => clearTimeout(timer);
+  }, [focusMessageSeq, list, loading, messages]);
   useEffect(() => { if (startWithFiles) onFilesOpened?.(); }, [startWithFiles, onFilesOpened]);
   const chatModelId = conversation.model_id ?? catalog?.roles.chat ?? null;
   const modelId = kind === "task" ? taskModelId ?? catalog?.roles.task ?? null : chatModelId;
@@ -146,6 +160,11 @@ export function ChatPanel({
         ref={list}
         data={messages}
         keyExtractor={(message) => message.id}
+        onScrollToIndexFailed={({ index, averageItemLength }) => {
+          if (focusAttempts.current++ > 3) return;
+          list.current?.scrollToOffset({ offset: averageItemLength * Math.max(0, index - 1), animated: false });
+          setTimeout(() => list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 }), 250);
+        }}
         contentContainerStyle={{
           paddingHorizontal: 18,
           paddingVertical: 16,
@@ -191,6 +210,8 @@ export function ChatPanel({
               alignSelf: item.role === "user" && !item.origin ? "flex-end" : "stretch",
               maxWidth: item.role === "user" && !item.origin ? "88%" : "100%",
               gap: 5,
+              backgroundColor: item.seq === focusMessageSeq ? colors.pale : "transparent",
+              borderRadius: 14,
             }}
           >
             <View style={[chatStyles.messageIdentity, item.role === "user" && !item.origin && { justifyContent: "flex-end" }]}>
