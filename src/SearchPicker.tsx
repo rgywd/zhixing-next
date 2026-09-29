@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Alert, Modal, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Modal, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ApiError, request, type Connection, type SearchProvider } from "./api";
-import { Button, colors, humanError, s } from "./ui";
+import { Button, PageScrollView, SheetHeader, colors, humanError, s } from "./ui";
 
 const kinds = { brave: "Brave", tavily: "Tavily", serper: "Serper" } as const;
 
@@ -65,13 +65,13 @@ export function SearchPicker({ visible, connection, selectedId, onSelect, onClos
   return (
     <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={s.root}>
-        <View style={s.header}><Text style={[s.heading, s.grow]}>联网搜索</Text><Button secondary onPress={onClose}>关闭</Button></View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
+        <SheetHeader title="联网搜索" onClose={onClose} />
+        <PageScrollView>
           <Text style={s.muted}>选中的服务只用于接下来发送的聊天或任务。密钥保存在你的知行服务端，列表不会返回密钥。</Text>
           {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
           <Button secondary={selectedId !== null} onPress={() => { onSelect(null); onClose(); }}>关闭联网搜索{selectedId === null ? " · 当前" : ""}</Button>
           {items.map((item) => (
-            <View key={item.id} style={[s.card, { gap: 8 }]}>
+            <View key={item.id} style={s.card}>
               <View style={s.row}>
                 <View style={s.grow}><Text style={s.title}>{item.name}</Text><Text style={s.muted}>{kinds[item.kind]}{selectedId === item.id ? " · 当前" : ""}</Text></View>
                 <Button small secondary={selectedId !== item.id} onPress={() => { onSelect(item.id); onClose(); }}>使用</Button>
@@ -84,7 +84,7 @@ export function SearchPicker({ visible, connection, selectedId, onSelect, onClos
           <TextInput accessibilityLabel="搜索服务名称" placeholder="名称（可选）" placeholderTextColor={colors.muted} value={name} onChangeText={setName} maxLength={100} style={s.input} />
           <TextInput accessibilityLabel="搜索服务 API 密钥" placeholder={`${kinds[kind]} API 密钥`} placeholderTextColor={colors.muted} value={key} onChangeText={setKey} secureTextEntry autoCapitalize="none" autoCorrect={false} style={s.input} />
           <Button disabled={busy || !key.trim() || !supported} onPress={() => { void add(); }}>{busy ? "保存中…" : "保存并使用"}</Button>
-        </ScrollView>
+        </PageScrollView>
       </SafeAreaView>
     </Modal>
   );

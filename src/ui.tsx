@@ -1,25 +1,90 @@
-import type { ReactNode } from "react";
+import type { ComponentProps, ReactNode } from "react";
 import {
+  Image,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
+  type ImageSourcePropType,
+  type ImageStyle,
+  type ScrollViewProps,
+  type StyleProp,
   type TextInputProps,
+  type ViewStyle,
 } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
+import { colors, layout, radius, space, typography } from "./theme";
 
-export const colors = {
-  paper: "#FBF7F1",
-  white: "#FFFFFF",
-  ink: "#25252D",
-  accent: "#A6322C",
-  muted: "#77777F",
-  line: "#EBE6E2",
-  pale: "#F8E9E6",
-  red: "#B3261E",
-  amber: "#8A5A28",
-};
+export { colors } from "./theme";
+type IconName = ComponentProps<typeof Ionicons>["name"];
+
+export function PageScrollView({ tabs = false, contentContainerStyle, ...props }: ScrollViewProps & { tabs?: boolean }) {
+  return <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" {...props} contentContainerStyle={[s.content, tabs && s.mainPage, tabs && s.tabContent, contentContainerStyle]} />;
+}
+
+export function PageHero({ eyebrow, title, description, art, artStyle }: {
+  eyebrow: string; title: string; description: string; art?: ImageSourcePropType; artStyle?: StyleProp<ImageStyle>;
+}) {
+  const narrow = useWindowDimensions().width < layout.compactWidth;
+  return (
+    <View style={s.hero}>
+      {art ? <Image source={art} resizeMode="contain" style={[s.heroArt, artStyle]} accessible={false} /> : null}
+      <Text style={s.kicker}>{eyebrow}</Text>
+      <Text accessibilityRole="header" style={s.heroTitle}>{title}</Text>
+      <Text style={[s.description, art ? s.heroDescription : null, art && narrow ? s.heroDescriptionNarrow : null]}>{description}</Text>
+    </View>
+  );
+}
+
+export function PageHeading({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
+  return (
+    <View style={s.row}>
+      <View style={s.headingCopy}>
+        <Text accessibilityRole="header" style={s.heading}>{title}</Text>
+        {description ? <Text style={s.description}>{description}</Text> : null}
+      </View>
+      {action}
+    </View>
+  );
+}
+
+export function SheetHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  return <View style={s.header}><Text accessibilityRole="header" style={[s.heading, s.grow]}>{title}</Text><Button secondary small onPress={onClose}>关闭</Button></View>;
+}
+
+export function BackLink({ label, onPress }: { label: string; onPress: () => void }) {
+  return <Pressable accessibilityRole="button" accessibilityLabel={`返回${label}`} onPress={onPress} style={({ pressed }) => [s.backLink, pressed && s.pressed]}><Ionicons name="chevron-back" size={20} color={colors.accent} /><Text style={s.backLinkText}>{label}</Text></Pressable>;
+}
+
+export function IconBadge({ name, small = false }: { name: IconName; small?: boolean }) {
+  return <View accessible={false} style={[s.iconBadge, small && s.iconBadgeSmall]}><Ionicons name={name} size={small ? 22 : 28} color={colors.accent} /></View>;
+}
+
+export function CardHeader({ icon, title, description, action }: { icon: IconName; title: string; description?: string; action?: ReactNode }) {
+  return <View style={s.row}><IconBadge name={icon} /><View style={s.headingCopy}><Text accessibilityRole="header" style={s.title}>{title}</Text>{description ? <Text style={s.muted}>{description}</Text> : null}</View>{action}</View>;
+}
+
+export function ServiceTile({ icon, title, description, onPress, accessibilityLabel = title }: {
+  icon: IconName; title: string; description: string; onPress: () => void; accessibilityLabel?: string;
+}) {
+  const narrow = useWindowDimensions().width < layout.compactWidth;
+  return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} onPress={onPress} style={({ pressed }) => [s.serviceTile, narrow && s.serviceTileNarrow, pressed && s.pressed]}><IconBadge name={icon} small /><View style={s.headingCopy}><Text style={s.itemTitle}>{title}</Text><Text style={s.small}>{description}</Text></View><Ionicons name="chevron-forward" size={16} color={colors.muted} /></Pressable>;
+}
+
+export function ActionRow({ icon, title, description, onPress, last = false, compact = false }: {
+  icon: IconName; title: string; description?: string; onPress: () => void; last?: boolean; compact?: boolean;
+}) {
+  return (
+    <Pressable accessibilityRole="button" accessibilityLabel={title} onPress={onPress} style={({ pressed }) => [s.actionRow, !last && s.rowDivider, pressed && s.pressed]}>
+      <IconBadge name={icon} small={compact} />
+      <View style={s.headingCopy}><Text numberOfLines={1} style={compact ? s.listTitle : s.itemTitle}>{title}</Text>{description ? <Text style={s.muted}>{description}</Text> : null}</View>
+      <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+    </Pressable>
+  );
+}
 export function Button({
   children,
   onPress,
@@ -27,6 +92,8 @@ export function Button({
   secondary = false,
   danger = false,
   small = false,
+  icon,
+  style,
 }: {
   children: ReactNode;
   onPress: () => void;
@@ -34,6 +101,8 @@ export function Button({
   secondary?: boolean;
   danger?: boolean;
   small?: boolean;
+  icon?: IconName;
+  style?: StyleProp<ViewStyle>;
 }) {
   return (
     <Pressable
@@ -47,8 +116,10 @@ export function Button({
         small && s.smallButton,
         disabled && s.disabled,
         pressed && s.pressed,
+        style,
       ]}
     >
+      {icon ? <Ionicons name={icon} size={20} color={danger ? colors.red : secondary ? colors.accent : colors.white} /> : null}
       <Text
         style={[s.buttonText, secondary && s.secondaryText, danger && s.danger]}
       >
@@ -73,17 +144,21 @@ export function Field({ label, ...props }: TextInputProps & { label: string }) {
 export function Empty({
   title,
   children,
+  icon = "leaf-outline",
+  compact = false,
 }: {
   title: string;
-  children: ReactNode;
+  children?: ReactNode;
+  icon?: IconName;
+  compact?: boolean;
 }) {
   return (
-    <View style={s.empty}>
-      <View style={s.brand}><Ionicons name="leaf-outline" size={24} color={colors.accent} /></View>
+    <View style={[s.empty, compact && s.compactEmpty]}>
+      <IconBadge name={icon} />
       <Text accessibilityRole="header" style={s.emptyTitle}>
         {title}
       </Text>
-      <Text style={s.emptyBody}>{children}</Text>
+      {children ? <Text style={s.emptyBody}>{children}</Text> : null}
     </View>
   );
 }
@@ -107,23 +182,53 @@ export const runLabels = {
 export const s = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.paper },
   body: { flex: 1 },
-  content: { padding: 22, gap: 18, paddingBottom: 36 },
-  tabContent: { paddingBottom: 132 },
-  row: { flexDirection: "row", alignItems: "center", gap: 10 },
+  content: { padding: layout.gutter, gap: layout.pageGap, paddingBottom: 36 },
+  mainPage: { paddingTop: 0 },
+  tabContent: { paddingBottom: layout.tabClearance },
+  row: { flexDirection: "row", alignItems: "center", gap: space.md },
+  stack: { gap: space.sm },
+  form: { gap: layout.pageGap },
+  headingCopy: { flex: 1, minWidth: 0, gap: space.xs },
+  hero: { minHeight: layout.heroHeight, justifyContent: "center", gap: 6, paddingHorizontal: 6, paddingTop: 9 },
+  heroArt: { position: "absolute", width: 226, height: 130, right: -26, top: -4 },
+  kicker: { ...typography.kicker, color: colors.accent },
+  heroTitle: { ...typography.hero, color: colors.ink },
+  heroDescription: { maxWidth: "76%" },
+  heroDescriptionNarrow: { maxWidth: "62%" },
+  description: { ...typography.body, color: colors.muted },
+  itemTitle: { ...typography.item, color: colors.ink },
+  listTitle: { ...typography.body, color: colors.ink, fontWeight: "500" },
+  iconBadge: { width: 46, height: 46, borderRadius: 17, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center", flexShrink: 0 },
+  iconBadgeSmall: { width: 36, height: 36, borderRadius: 13 },
+  actionRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 64, paddingVertical: space.sm },
+  rowDivider: { borderBottomWidth: 1, borderBottomColor: colors.line },
+  serviceGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+  serviceTile: { width: "47%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 72, paddingHorizontal: space.md, paddingVertical: 10, borderRadius: radius.item, backgroundColor: colors.white },
+  serviceTileNarrow: { width: "100%" },
+  caption: { ...typography.caption, color: colors.muted },
+  small: { ...typography.small, color: colors.muted },
+  sectionHeading: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm, paddingHorizontal: 3, marginTop: space.xs, marginBottom: -7 },
+  link: { ...typography.body, color: colors.accent, fontWeight: "600" },
+  linkButton: { minHeight: layout.touchTarget, paddingHorizontal: space.sm, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: space.xs },
+  badge: { ...typography.caption, color: colors.accent, backgroundColor: colors.pale, overflow: "hidden", borderRadius: radius.small, paddingHorizontal: space.sm, paddingVertical: space.xs, fontWeight: "600" },
+  centeredAction: { minWidth: 176, maxWidth: "100%", alignSelf: "center", borderRadius: radius.pill },
+  cardRow: { flexDirection: "row", alignItems: "center", gap: space.sm },
+  iconButton: { minWidth: layout.touchTarget, minHeight: layout.touchTarget, alignItems: "center", justifyContent: "center" },
+  accentText: { color: colors.accent },
   spread: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    gap: 10,
+    gap: space.md,
   },
   grow: { flex: 1 },
   header: {
-    paddingHorizontal: 22,
-    paddingTop: 16,
-    paddingBottom: 12,
+    paddingHorizontal: layout.gutter,
+    paddingTop: space.md,
+    paddingBottom: space.md,
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
+    gap: space.md,
   },
   brand: { width: 48, height: 48, borderRadius: 17, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center" },
   eyebrow: {
@@ -132,50 +237,57 @@ export const s = StyleSheet.create({
     color: colors.muted,
     marginBottom: 3,
   },
-  heading: { fontSize: 25, fontWeight: "600", color: colors.ink },
-  title: { fontSize: 18, lineHeight: 27, fontWeight: "600", color: colors.ink },
-  text: { fontSize: 15, lineHeight: 24, color: colors.ink },
-  muted: { fontSize: 12, lineHeight: 19, color: colors.muted },
-  label: { fontSize: 13, fontWeight: "500", color: colors.ink },
-  field: { gap: 8 },
+  heading: { ...typography.title, color: colors.ink },
+  title: { ...typography.section, color: colors.ink },
+  text: { ...typography.reading, color: colors.ink },
+  muted: { ...typography.caption, color: colors.muted },
+  label: { ...typography.body, fontWeight: "600", color: colors.ink },
+  field: { gap: space.sm },
   input: {
     borderWidth: 1,
     borderColor: colors.line,
     backgroundColor: colors.white,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 15,
+    borderRadius: radius.control,
+    paddingHorizontal: layout.cardPadding,
+    paddingVertical: space.md,
+    ...typography.reading,
     color: colors.ink,
     minHeight: 48,
   },
   multiline: { minHeight: 120, textAlignVertical: "top", lineHeight: 23 },
   button: {
     minHeight: 46,
-    paddingHorizontal: 17,
-    paddingVertical: 12,
-    borderRadius: 14,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.md,
+    borderRadius: radius.control,
     backgroundColor: colors.accent,
     alignItems: "center",
     justifyContent: "center",
+    flexDirection: "row",
+    gap: space.sm,
   },
-  smallButton: { paddingHorizontal: 12, paddingVertical: 8, minHeight: 40 },
-  buttonText: { color: colors.white, fontWeight: "600", fontSize: 14 },
+  smallButton: { paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: layout.touchTarget },
+  buttonText: { ...typography.button, color: colors.white, flexShrink: 1, textAlign: "center" },
   secondary: { backgroundColor: colors.pale },
   secondaryText: { color: colors.accent },
   disabled: { opacity: 0.4 },
   pressed: { opacity: 0.72 },
   danger: { color: colors.red },
-  error: { color: colors.red, fontSize: 13, lineHeight: 20 },
-  notice: { padding: 13, borderRadius: 12, backgroundColor: colors.pale, gap: 6 },
-  noticeText: { color: colors.amber, fontSize: 12, lineHeight: 19 },
+  error: { color: colors.red, ...typography.body },
+  notice: { padding: space.md, borderRadius: radius.small, backgroundColor: colors.pale, gap: 6 },
+  noticeText: { color: colors.amber, ...typography.detail },
   card: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: colors.line,
-    borderRadius: 18,
-    padding: 17,
-    gap: 12,
+    borderColor: colors.white,
+    borderRadius: radius.card,
+    padding: layout.cardPadding,
+    gap: 10,
+    shadowColor: colors.ink,
+    shadowOpacity: 0.05,
+    shadowOffset: { width: 0, height: 4 },
+    shadowRadius: 12,
+    elevation: 2,
   },
   divider: { height: 1, backgroundColor: colors.line },
   floatingTabs: {
@@ -254,39 +366,38 @@ export const s = StyleSheet.create({
   activeTab: { backgroundColor: colors.pale },
   tabText: { color: colors.muted, fontSize: 11, fontWeight: "600" },
   activeTabText: { color: colors.accent, fontWeight: "700" },
-  backLink: { minHeight: 44, paddingHorizontal: 22, justifyContent: "center" },
-  backLinkText: { color: colors.accent, fontSize: 14, fontWeight: "600" },
+  backLink: { minHeight: layout.touchTarget, paddingHorizontal: layout.gutter, flexDirection: "row", alignItems: "center", gap: space.xs },
+  backLinkText: { ...typography.button, color: colors.accent },
   empty: {
     flex: 1,
-    padding: 32,
-    gap: 18,
+    padding: space.xl,
+    gap: space.md,
     alignItems: "center",
     justifyContent: "center",
-    minHeight: 280,
+    minHeight: 180,
   },
   emptyTitle: {
-    fontSize: 23,
+    ...typography.section,
     color: colors.ink,
-    fontWeight: "500",
     textAlign: "center",
   },
   emptyBody: {
     color: colors.muted,
-    fontSize: 14,
-    lineHeight: 24,
+    ...typography.body,
     textAlign: "center",
   },
+  compactEmpty: { flex: 0, minHeight: 0, paddingVertical: space.sm, gap: space.sm },
   chip: {
     paddingVertical: 9,
     paddingHorizontal: 13,
-    borderRadius: 12,
+    borderRadius: radius.small,
     backgroundColor: colors.pale,
-    minHeight: 40,
+    minHeight: layout.touchTarget,
     alignItems: "center",
     justifyContent: "center",
   },
   chipActive: { backgroundColor: colors.accent },
-  chipText: { color: colors.muted, fontSize: 12 },
+  chipText: { color: colors.muted, ...typography.detail },
   chipActiveText: { color: colors.white },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
 });

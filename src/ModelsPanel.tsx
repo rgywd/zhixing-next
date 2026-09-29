@@ -1,13 +1,13 @@
 import { useState } from "react";
-import { ScrollView, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { request, type Connection, type ModelCatalog } from "./api";
 import { ModelPicker } from "./ModelPicker";
-import { Button, colors, humanError, s } from "./ui";
+import { Button, CardHeader, PageHeading, PageScrollView, humanError, s } from "./ui";
 
 const roles = [
-  { id: "chat", label: "聊天", hint: "主知行新对话的默认模型" },
-  { id: "task", label: "执行", hint: "任务与委托的默认模型" },
-  { id: "memory", label: "记忆整理", hint: "用于后台整理长期记忆" },
+  { id: "chat", label: "聊天", hint: "主知行新对话的默认模型", icon: "chatbubbles-outline" },
+  { id: "task", label: "执行", hint: "任务与委托的默认模型", icon: "checkmark-circle-outline" },
+  { id: "memory", label: "记忆整理", hint: "用于后台整理长期记忆", icon: "library-outline" },
 ] as const;
 
 export function ModelsPanel({
@@ -30,9 +30,8 @@ export function ModelsPanel({
   const providers = [...new Set(catalog?.items.map((item) => item.provider) ?? [])];
   return (
     <>
-      <ScrollView contentContainerStyle={s.content}>
-        <Text style={s.heading}>供应商与模型</Text>
-        <Text style={s.muted}>供应商地址和密钥留在服务器配置，手机只选择已接入的模型。</Text>
+      <PageScrollView>
+        <PageHeading title="供应商与模型" description="供应商地址和密钥留在服务器配置，手机只选择已接入的模型。" />
         {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
         {!catalog ? (
           <View style={s.card}>
@@ -46,9 +45,8 @@ export function ModelsPanel({
               const model = catalog.items.find((item) => item.id === catalog.roles[role.id]);
               return (
                 <View key={role.id} style={s.card}>
-                  <Text style={s.label}>{role.label}</Text>
+                  <CardHeader icon={role.icon} title={role.label} description={role.hint} />
                   <Text style={s.text}>{model ? `${model.name} · ${model.provider}` : "尚未配置"}</Text>
-                  <Text style={s.muted}>{role.hint}</Text>
                   <Button secondary onPress={() => setSelectedRole(role.id)}>选择模型</Button>
                 </View>
               );
@@ -56,11 +54,11 @@ export function ModelsPanel({
             <Text style={s.title}>已接入的供应商</Text>
             {providers.length ? providers.map((provider) => (
               <View key={provider} style={s.card}>
-                <Text style={s.title}>{provider}</Text>
+                <CardHeader icon="server-outline" title={provider} />
                 {catalog.items.filter((item) => item.provider === provider).map((item) => (
                   <View key={item.id} style={s.spread}>
                     <Text numberOfLines={1} style={[s.text, s.grow]}>{item.name}</Text>
-                    <Text style={{ color: item.ready ? colors.accent : colors.red, fontSize: 12 }}>
+                    <Text style={[s.caption, item.ready ? s.accentText : s.danger]}>
                       {item.ready ? "密钥已配置" : "密钥未就绪"}
                     </Text>
                   </View>
@@ -70,7 +68,7 @@ export function ModelsPanel({
             <Button secondary onPress={() => { void refresh(); }}>刷新目录</Button>
           </>
         )}
-      </ScrollView>
+      </PageScrollView>
       <ModelPicker
         visible={selectedRole !== null}
         title={`选择${roles.find((item) => item.id === selectedRole)?.label ?? ""}模型`}

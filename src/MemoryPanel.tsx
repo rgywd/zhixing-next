@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import { Alert, Modal, ScrollView, Text, View } from "react-native";
+import { Alert, Modal, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { request, type Connection, type Page } from "./api";
-import { Button, colors, humanError, s } from "./ui";
+import { Button, Empty, PageScrollView, SheetHeader, humanError, s } from "./ui";
 
 type Memory = { id: string; content: string; seq: number };
 
@@ -47,14 +47,14 @@ export function MemoryPanel({ connection, onClose }: {
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <SafeAreaView style={s.root}>
-        <View style={s.header}><Text style={[s.heading, s.grow]}>知行记得</Text><Button secondary onPress={onClose}>关闭</Button></View>
-        <ScrollView contentContainerStyle={s.content}>
+        <SheetHeader title="知行记得" onClose={onClose} />
+        <PageScrollView>
           <Text style={s.muted}>你可以直接在对话里告诉知行要记住、纠正或忘记什么。</Text>
           {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-          {!busy && !items.length && !error ? <Text style={s.muted}>还没有整理出记忆。</Text> : null}
-          {items.map((item) => <View key={item.id} style={[s.card, { gap: 12 }]}><Text selectable style={{ color: colors.ink, fontSize: 15, lineHeight: 23 }}>{item.content}</Text><Button small secondary danger disabled={busy} onPress={() => forget(item)}>忘记</Button></View>)}
+          {!busy && !items.length && !error ? <Empty compact icon="library-outline" title="还没有整理出记忆" /> : null}
+          {items.map((item) => <View key={item.id} style={s.card}><Text selectable style={s.text}>{item.content}</Text><Button small secondary danger disabled={busy} onPress={() => forget(item)}>忘记</Button></View>)}
           {cursor ? <Button secondary disabled={busy} onPress={() => { void more(); }}>{busy ? "加载中…" : "查看更多"}</Button> : null}
-        </ScrollView>
+        </PageScrollView>
       </SafeAreaView>
     </Modal>
   );
