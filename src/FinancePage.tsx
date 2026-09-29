@@ -6,7 +6,7 @@ import { Attachments } from "./Attachments";
 import { ApprovalCards } from "./ApprovalCards";
 import { FilesPanel } from "./FilesPanel";
 import { useChat } from "./useChat";
-import { BackLink, Button, colors, humanError, s, timeLabel } from "./ui";
+import { ActionLink, BackLink, CardHeader, colors, humanError, s, timeLabel } from "./ui";
 
 export function FinancePage({
   connection, conversation, finance, onBack, onRefresh,
@@ -26,7 +26,7 @@ export function FinancePage({
   const queued = pendingRuns.filter((run) => run.status === "queued").length;
   return (
     <View style={s.body}>
-      <View style={[s.header, { paddingBottom: 6 }]}>
+      <View style={[s.row, { paddingRight: 16, paddingBottom: 4 }]}>
         <BackLink label="生活" onPress={onBack} />
         <Text style={[s.heading, s.grow]}>财务</Text>
       </View>
@@ -50,7 +50,7 @@ export function FinancePage({
         ListHeaderComponent={
           <View style={{ gap: 10, paddingTop: 6, paddingBottom: 8 }}>
             <View style={s.card}>
-              <Text style={s.title}>账户一览</Text>
+              <CardHeader icon="wallet-outline" title="账户一览" tone="green" />
               {finance.balances.length ? finance.balances.map((item) => (
                 <View key={item.id} style={s.spread}>
                   <Text style={s.text}>{item.platform}</Text>
@@ -59,7 +59,7 @@ export function FinancePage({
               )) : <Text style={s.muted}>还没有你提供的余额。</Text>}
             </View>
             <View style={s.card}>
-              <Text style={s.title}>最近收支</Text>
+              <CardHeader icon="bar-chart-outline" title="最近收支" tone="green" />
               {finance.recent.length ? finance.recent.slice(0, 5).map((item) => (
                 <Text key={item.id} style={s.text}>
                   {item.kind === "income" ? "收入" : "支出"} · {item.platform} · ¥{item.amount}
@@ -67,9 +67,7 @@ export function FinancePage({
               )) : <Text style={s.muted}>还没有你提供的收支。</Text>}
             </View>
             {previous ? (
-              <Button secondary small disabled={busy} onPress={() => { void loadOlder(); }}>
-                查看更早的消息
-              </Button>
+              <ActionLink icon="chevron-up" tone="green" disabled={busy} onPress={() => { void loadOlder(); }}>查看更早的消息</ActionLink>
             ) : null}
             {!messages.length && !loading ? (
               <Text style={s.muted}>可以直接说一个账户余额、消费，或问一笔扣费是怎么发生的。</Text>
@@ -93,10 +91,10 @@ export function FinancePage({
         {running || queued ? (
           <View style={s.spread}>
             <Text style={s.muted}>{running ? `正在回复 · ${queued} 条等待` : `${queued} 条等待`}</Text>
-            {running ? <Button secondary danger small disabled={running.cancel_requested} onPress={() => { void cancel(running).catch(() => undefined); }}>取消</Button> : null}
+            {running ? <ActionLink disabled={running.cancel_requested} onPress={() => { void cancel(running).catch(() => undefined); }}>取消</ActionLink> : null}
           </View>
         ) : null}
-        {conversation.blocked ? <Button secondary small onPress={() => { void resume(); }}>继续处理队列</Button> : null}
+        {conversation.blocked ? <ActionLink icon="play-outline" tone="green" onPress={() => { void resume(); }}>继续处理队列</ActionLink> : null}
         {running || intent === "steer" ? (
           <View style={s.row}>
             {(["queue", "steer"] as const).map((value) => (
@@ -111,7 +109,7 @@ export function FinancePage({
           <Attachments connection={connection} items={draft.attachments} remove={draft.pending ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
         </ConversationComposer>
         {draft.pending && !busy ? (
-          <Button secondary small onPress={abandonPending}>返回编辑草稿</Button>
+          <ActionLink icon="create-outline" tone="green" onPress={abandonPending}>返回编辑草稿</ActionLink>
         ) : null}
       </View>
       <Modal visible={showFiles} onRequestClose={() => setShowFiles(false)}>

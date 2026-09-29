@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 import { ApiError, request, type Approval, type Connection, type Page } from "./api";
 import { useSyncStatus } from "./ConnectionStatus";
 import { shareDownload } from "./resources";
-import { Button, humanError, s } from "./ui";
+import { Button, CardHeader, humanError, s } from "./ui";
 
 export function ApprovalCards({ connection, conversationId, runId, onChanged }: {
   connection: Connection;
@@ -57,8 +57,7 @@ export function ApprovalCards({ connection, conversationId, runId, onChanged }: 
   }
   return <View style={{ gap: 12 }}>
     {items.map((item) => <View key={item.id} style={s.card}>
-      <Text style={s.title}>{item.details.title}</Text>
-      {item.details.description ? <Text style={s.description}>{item.details.description}</Text> : null}
+      <CardHeader icon={item.kind === "uncertain" ? "help-circle-outline" : "shield-checkmark-outline"} title={item.details.title} description={item.details.description} tone={item.kind === "uncertain" ? "gold" : "blue"} />
       {item.details.task ? <Text style={s.text}>{item.details.task}</Text> : null}
       {item.details.path ? <Text selectable style={s.text}>{item.details.path}</Text> : null}
       {item.details.bytes !== undefined ? <Text style={s.muted}>拟写入 {item.details.bytes} 字节；批准只适用于当前文件版本。</Text> : null}

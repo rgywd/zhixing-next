@@ -5,7 +5,7 @@ import { BrandIcon } from "./BrandIcon";
 import { colors, radius, space } from "./theme";
 import { request, type Connection, type ModelCatalog } from "./api";
 import { ModelPicker } from "./ModelPicker";
-import { Button, PageHeading, PageScrollView, humanError, s } from "./ui";
+import { ActionLink, PageHeading, PageScrollView, StatusPill, humanError, s } from "./ui";
 
 const roles = [
   { id: "chat", label: "聊天", hint: "主知行新对话的默认模型", icon: "chatbubbles-outline" },
@@ -39,7 +39,7 @@ export function ModelsPanel({
         {!catalog ? (
           <View style={s.card}>
             <Text style={s.text}>服务尚未提供模型目录。请更新服务后重试。</Text>
-            <Button secondary onPress={() => { void refresh(); }}>重试</Button>
+            <ActionLink icon="refresh-outline" onPress={() => { void refresh(); }}>重试</ActionLink>
           </View>
         ) : (
           <>
@@ -48,26 +48,24 @@ export function ModelsPanel({
               const model = catalog.items.find((item) => item.id === catalog.roles[role.id]);
               return (
                 <Pressable key={role.id} accessibilityRole="button" accessibilityLabel={`选择${role.label}模型`} onPress={() => setSelectedRole(role.id)} style={[styles.role, role.id !== "memory" && styles.divider]}>
-                  <View style={styles.roleIcon}><Ionicons name={role.icon} size={20} color={colors.muted} /></View>
+                  <View style={[styles.roleIcon, { backgroundColor: role.id === "chat" ? colors.purpleSoft : role.id === "task" ? colors.greenSoft : colors.goldSoft }]}><Ionicons name={role.icon} size={20} color={role.id === "chat" ? colors.purple : role.id === "task" ? colors.green : colors.gold} /></View>
                   <View style={s.headingCopy}><Text style={s.itemTitle}>{role.label}</Text><Text numberOfLines={1} style={s.muted}>{model?.name ?? "尚未配置"}</Text></View>
                   <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={23} /><Ionicons name="chevron-forward" size={16} color={colors.muted} />
                 </Pressable>
               );
             })}</View>
             <Text style={s.title}>已接入的供应商</Text>
-            {providers.length ? providers.map((provider) => (
-              <View key={provider} style={[s.card, { gap: 8 }]}>
-                <Text style={s.label}>{provider}</Text>
+            {providers.length ? <View style={s.card}>{providers.map((provider, index) => (
+              <View key={provider} style={[styles.providerGroup, index > 0 && styles.providerDivider]}>
+                <Text style={s.caption}>{provider}</Text>
                 {catalog.items.filter((item) => item.provider === provider).map((item) => (
-                  <View key={item.id} style={[s.spread, { minHeight: 40 }]}>
-                    <Text numberOfLines={1} style={[s.text, s.grow]}>{item.name}</Text>
-                    <Text style={[s.caption, item.ready ? { color: colors.green } : s.danger]}>
-                      {item.ready ? "已配置" : "未就绪"}
-                    </Text>
+                  <View key={item.id} style={[s.spread, { minHeight: 46 }]}>
+                    <View style={[s.row, s.grow]}><BrandIcon name={`${item.model} ${item.provider}`} size={22} /><Text numberOfLines={1} style={[s.itemTitle, s.grow]}>{item.name}</Text></View>
+                    <StatusPill tone={item.ready ? "green" : "neutral"}>{item.ready ? "就绪" : "未就绪"}</StatusPill>
                   </View>
                 ))}
               </View>
-            )) : <Text style={s.muted}>服务器尚未配置模型。</Text>}
+            ))}</View> : <Text style={s.muted}>服务器尚未配置模型。</Text>}
             <Pressable accessibilityRole="button" onPress={() => { void refresh(); }} style={styles.refresh}><Ionicons name="refresh-outline" size={16} color={colors.muted} /><Text style={s.description}>刷新目录</Text></Pressable>
           </>
         )}
@@ -91,8 +89,10 @@ export function ModelsPanel({
 
 const styles = StyleSheet.create({
   roles: { backgroundColor: colors.white, borderRadius: radius.item, paddingHorizontal: space.md },
-  role: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 76 },
+  role: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 65 },
   roleIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.neutral, alignItems: "center", justifyContent: "center" },
   divider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
+  providerGroup: { gap: 3, paddingVertical: space.sm },
+  providerDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
   refresh: { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 6, minHeight: 44 },
 });

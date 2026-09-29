@@ -1,8 +1,8 @@
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { FinanceSummary } from "./api";
-import { Button, IconBadge, PageHero, PageScrollView, ServiceTile, colors, s } from "./ui";
-import { radius, space, typography } from "./theme";
+import { ActionLink, IconBadge, PageHero, PageScrollView, ServiceTile, colors, s } from "./ui";
+import { layout, radius, space, typography } from "./theme";
 
 const financeShortcuts = [
   { title: "账户一览", subtitle: "余额速览", icon: "business-outline" },
@@ -23,29 +23,26 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
   onChat: (prompt: string) => void;
   finance?: FinanceSummary;
 }) {
+  const narrow = useWindowDimensions().width < layout.compactWidth;
   return (
     <PageScrollView tabs>
       <PageHero eyebrow="LIFE" title="生活" description="生活里的琐碎，从真正用得上的一项开始。" art={require("../assets/life-header-red.png")} />
 
       <View style={s.card}>
         <View style={s.row}>
-          <IconBadge name="wallet-outline" />
+          <IconBadge name="wallet-outline" tone="green" />
           <Pressable accessibilityRole="button" accessibilityLabel="打开财务" onPress={onFinance} style={styles.financeTitleLink}>
             <Text style={s.heading}>财务</Text>
             <Ionicons name="chevron-forward" size={21} color={colors.ink} />
           </Pressable>
-          <View style={styles.assistantBadge}>
-            <Ionicons name="sparkles" size={13} color={colors.accent} />
-            <Text style={styles.assistantBadgeText}>财务助手</Text>
-          </View>
+          {!narrow ? <View style={styles.assistantBadge}><Ionicons name="sparkles" size={13} color={colors.green} /><Text style={styles.assistantBadgeText}>财务助手</Text></View> : null}
         </View>
         <Text style={s.description}>和财务助手聊账户、收支与财务问题。</Text>
         <View style={styles.shortcuts}>
           {financeShortcuts.map((item) => (
-            <Pressable key={item.title} accessibilityRole="button" accessibilityLabel={`打开财务助手，${item.title}`} onPress={onFinance} style={({ pressed }) => [styles.shortcut, pressed && s.pressed]}>
-              <View style={styles.shortcutIcon}><Ionicons name={item.icon} size={24} color={colors.accent} /></View>
+            <Pressable key={item.title} accessibilityRole="button" accessibilityLabel={`打开财务助手，${item.title}`} onPress={onFinance} style={({ pressed }) => [styles.shortcut, narrow && styles.shortcutNarrow, pressed && s.pressed]}>
+              <View style={styles.shortcutIcon}><Ionicons name={item.icon} size={20} color={colors.green} /></View>
               <Text style={styles.shortcutTitle}>{item.title}</Text>
-              <Text style={styles.shortcutSubtitle}>{item.subtitle}</Text>
             </Pressable>
           ))}
         </View>
@@ -61,7 +58,7 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
             </View> : null}
           </View>
         ) : null}
-        <Button secondary icon="chatbubble-ellipses-outline" onPress={onFinance}>和财务助手聊一聊 ›</Button>
+        <ActionLink icon="chatbubble-ellipses-outline" tone="green" onPress={onFinance}>和财务助手聊聊</ActionLink>
         <View style={styles.privacy}>
           <Ionicons name="shield-checkmark-outline" size={17} color={colors.muted} />
           <Text style={styles.privacyText}>只显示你提供的财务信息，不会自动读取账户。</Text>
@@ -77,7 +74,7 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
       </View>
       <View style={s.serviceGrid}>
         {services.map((item) => (
-          <ServiceTile key={item.title} accessibilityLabel={`和知行聊${item.title}`} title={item.title} description={item.subtitle} icon={item.icon} onPress={() => onChat(item.prompt)} />
+          <ServiceTile key={item.title} accessibilityLabel={`和知行聊${item.title}`} title={item.title} description={item.subtitle} icon={item.icon} onPress={() => onChat(item.prompt)} tone="green" />
         ))}
       </View>
 
@@ -95,13 +92,13 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
 
 const styles = StyleSheet.create({
   financeTitleLink: { flex: 1, flexDirection: "row", alignItems: "center", gap: 3, minHeight: 44 },
-  assistantBadge: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: colors.pale, borderRadius: 15, paddingHorizontal: 9, paddingVertical: 7 },
-  assistantBadgeText: { ...typography.caption, color: colors.accent, fontWeight: "600" },
-  shortcuts: { flexDirection: "row", gap: space.sm },
-  shortcut: { flex: 1, alignItems: "center", backgroundColor: colors.white, borderRadius: radius.control, paddingVertical: 10, gap: space.xs },
-  shortcutIcon: { width: 32, height: 32, borderRadius: radius.small, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center", marginBottom: 2 },
+  assistantBadge: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: colors.greenSoft, borderRadius: 15, paddingHorizontal: 9, paddingVertical: 7 },
+  assistantBadgeText: { ...typography.caption, color: colors.green, fontWeight: "600" },
+  shortcuts: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
+  shortcut: { flexGrow: 1, flexBasis: "21%", alignItems: "center", backgroundColor: colors.white, borderRadius: radius.control, paddingVertical: 8, gap: space.xs, borderWidth: 1, borderColor: colors.line },
+  shortcutNarrow: { flexBasis: "43%" },
+  shortcutIcon: { width: 30, height: 30, borderRadius: radius.small, backgroundColor: colors.greenSoft, alignItems: "center", justifyContent: "center" },
   shortcutTitle: { ...typography.detail, color: colors.ink, fontWeight: "600", textAlign: "center" },
-  shortcutSubtitle: { ...typography.small, color: colors.muted, textAlign: "center" },
   records: { flexDirection: "row", gap: space.md, paddingHorizontal: 2 },
   recordColumn: { flex: 1, gap: space.xs },
   recordLabel: { ...typography.caption, color: colors.accent, fontWeight: "600" },

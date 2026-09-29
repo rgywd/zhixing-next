@@ -9,24 +9,25 @@
 - 首页、生活、工作、工具箱使用 `PageScrollView tabs` 与 `PageHero`。`tabs` 负责浮动底栏留白，
   页头插画通过 `art` 和 `artStyle` 接入；插画位置等专有排版留在所属页面。
 - 管理子页使用普通 `PageScrollView`、`PageHeading`，由外层提供 `BackLink`。子页不预留底栏空白。
-- 模型、思考、搜索等即时选择使用 `BottomSheet`，保留当前页面背景。支持淡入遮罩、滑入／滑出、下拉手柄、点击遮罩和系统返回；尊重系统减少动态效果设置。文件浏览、任务记录等完整内容页仍使用 `SheetHeader`。
+- 模型、思考、搜索等即时选择与创建项目等短表单使用 `BottomSheet`，保留当前页面背景。支持淡入遮罩、滑入／滑出、下拉手柄、点击遮罩和系统返回；尊重系统减少动态效果设置。文件浏览、任务记录、完整对话列表等长内容页仍使用 `SheetHeader`。
 - 卡片使用 `s.card` 和 `CardHeader`；双列入口使用 `ServiceTile`，纵向入口使用 `ActionRow`。
   `ActionRow compact` 用于最近对话等较密的列表，末行传 `last` 去掉分隔线。窄屏时 `ServiceTile`
-  自动变为单列，带插画的 `PageHero` 自动收窄文字区域。
-- 按钮、输入和空状态使用 `Button`、`Field`、`Empty`。`Empty compact` 用于卡片内部；
+  自动变为单列，`PageHero` 隐藏装饰插画，为大字号文字保留整行宽度。
+- 主要提交动作使用 `Button`，次要动作使用 `ActionLink`，单图标操作使用 `IconAction`。状态使用 `StatusPill`，入口图标可通过 `UiTone` 对应语义色。输入和空状态使用 `Field`、`Empty`。`Empty compact` 用于卡片内部；
   正文阅读使用 `s.text`，说明使用 `s.description`，辅助信息使用 `s.muted`。
 
 ```tsx
 <PageScrollView tabs>
   <PageHero eyebrow="WORK" title="工作" description="对话、项目与计划。" />
   <View style={s.card}>
-    <CardHeader icon="folder-outline" title="项目" />
-    <Button icon="add" onPress={onCreateProject}>创建项目</Button>
+    <CardHeader icon="folder-outline" title="项目" tone="blue"
+      action={<IconAction icon="add" label="创建项目" tone="blue" onPress={onCreateProject} />} />
+    <ActionLink icon="add" tone="blue" onPress={onCreateProject}>创建项目</ActionLink>
   </View>
 </PageScrollView>
 ```
 
-共享组件负责外观、触摸区域和无障碍语义，不请求数据或决定业务跳转。页面传入文字与回调，
+共享组件负责外观、触摸区域和无障碍语义，不请求数据或决定业务跳转。语义色只说明入口类型或状态，不表示未经验证的模型能力。页面传入文字与回调，
 保留原有加载、错误和禁用条件。沉浸式聊天可以保留消息气泡和输入区的专有布局，通用文字与控件仍复用全局基础。
 
 新增页面先选以上组合；只有插画、专有网格、消息等内容布局需要局部 `StyleSheet`。

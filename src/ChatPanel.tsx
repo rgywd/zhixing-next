@@ -37,6 +37,7 @@ import {
   Empty,
   humanError,
   runLabels,
+  SheetHeader,
   s,
   timeLabel,
 } from "./ui";
@@ -396,12 +397,7 @@ function RunDetail({
   }, [connection, id, reportSync]);
   return (
     <SafeAreaView style={s.root}>
-      <View style={s.header}>
-        <Text style={[s.heading, s.grow]}>任务记录</Text>
-        <Button secondary onPress={close}>
-          关闭
-        </Button>
-      </View>
+      <SheetHeader title="任务记录" onClose={close} />
       <ScrollView contentContainerStyle={s.content}>
         {error ? <Text style={s.error}>{error}</Text> : null}
         {run ? (
