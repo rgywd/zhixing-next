@@ -1,0 +1,22 @@
+name: PR policy
+
+on:
+  pull_request:
+    branches:
+      - main
+      - "release/**"
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    name: PR policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Validate source branch name
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: bash .github/scripts/check-branch-name.sh "${HEAD_REF}"

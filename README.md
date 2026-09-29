@@ -48,4 +48,4 @@ npx expo-doctor
 - [HTTP 与运行接口](docs/API.md)
 - [myVPS 部署与恢复](docs/DEPLOYMENT.md)
 
-本仓库的 Git 历史独立维护；远程仓库、发布渠道和数据迁移方案尚未配置。
+本仓库的 Git 历史独立维护；[GitHub 仓库](https://github.com/rgywd/zhixing-next) 为代码远端。发布渠道和数据迁移方案尚未配置。
