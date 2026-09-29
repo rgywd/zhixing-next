@@ -1,3 +1,4 @@
+import { useUi, ActionLink, Button, Empty, Field, IconAction, PageHeading, PageScrollView, StatusPill, humanError, timeLabel } from "./ui";
 import { useEffect, useRef, useState } from "react";
 import { Alert, Text, View } from "react-native";
 import * as Crypto from "expo-crypto";
@@ -10,7 +11,6 @@ import {
   type PlanDraft,
 } from "./api";
 import { clearPlanDraft, readPlanDraft, savePlanDraft } from "./storage";
-import { ActionLink, Button, Empty, Field, IconAction, PageHeading, PageScrollView, StatusPill, humanError, s, timeLabel } from "./ui";
 
 function nextHour() {
   const date = new Date(Date.now() + 3600000);
@@ -35,6 +35,7 @@ export function SchedulesPanel({
   hasMore: boolean;
   loadMore: () => void;
 }) {
+  const { s } = useUi();
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<PlanDraft>({
     prompt: "",

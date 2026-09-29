@@ -1,3 +1,6 @@
+import { ThemeProvider } from "./ThemeProvider";
+import { AppearanceControl } from "./AppearanceControl";
+import { useUi, ActionLink, ActionRow, BackLink, Button, CardHeader, Field, humanError, PageHeading, PageScrollView, SheetHeader, timeLabel } from "./ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -53,11 +56,15 @@ import {
   removeConnection,
   saveDraft,
 } from "./storage";
-import { ActionLink, ActionRow, BackLink, Button, CardHeader, colors, Field, humanError, PageHeading, PageScrollView, SheetHeader, s, timeLabel } from "./ui";
 
 type Tab = "home" | "life" | "chat" | "work" | "toolbox";
 
 export default function AssistantApp() {
+  return <ThemeProvider><ThemedApp /></ThemeProvider>;
+}
+
+function ThemedApp() {
+  const { s, colors, mode, ready: themeReady } = useUi();
   const [connection, setConnection] = useState<Connection | null>(null);
   const [generation, setGeneration] = useState(0);
   const [ready, setReady] = useState(false);
@@ -98,12 +105,12 @@ export default function AssistantApp() {
   return (
     <SafeAreaProvider>
       <SafeAreaView style={s.root}>
-        <StatusBar style="dark" />
+        <StatusBar style={mode === "dark" ? "light" : "dark"} animated />
         <KeyboardAvoidingView
           style={s.body}
           behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
-          {!ready ? (
+          {!ready || !themeReady ? (
             <ActivityIndicator style={s.body} color={colors.accent} />
           ) : connection ? (
             <Connected
@@ -125,6 +132,7 @@ export default function AssistantApp() {
 }
 
 function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => void }) {
+  const { s, colors } = useUi();
   return (
     <View pointerEvents="box-none" style={s.floatingTabs}>
       <View pointerEvents="none" style={s.tabs}>
@@ -166,6 +174,7 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
 }
 
 function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection) => void; error: string }) {
+  const { s, colors } = useUi();
   const [tab, setTab] = useState<Tab>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
   const showTabs = tab !== "chat" && (tab !== "life" || lifeView === "overview");
@@ -236,6 +245,7 @@ function ConnectedSession({
   onDisconnect: () => void;
   connectionError: string;
 }) {
+  const { s, colors } = useUi();
   const [tab, setTab] = useState<Tab>("home");
   const [returnTab, setReturnTab] = useState<Exclude<Tab, "chat">>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
@@ -649,6 +659,7 @@ function ConnectedSession({
                 {showWelcome ? "随时聊聊，把事情做成" : `${currentComposer?.kind === "task" ? "任务 · " : ""}${selectedModel?.name ?? "知行"}`}
               </Text>
             </Pressable>
+            <AppearanceControl />
             <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => setShowWelcome(true)} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
               <Ionicons name="create-outline" size={23} color={colors.ink} />
             </Pressable>
@@ -777,7 +788,7 @@ function ConnectedSession({
           <SheetHeader title="你的对话" onClose={() => setShowConversations(false)} />
           <PageScrollView>
             <View style={s.card}>
-              <CardHeader icon="chatbubble-outline" title="留一个新的话题" tone="purple" />
+              <CardHeader icon="chatbubble-outline" title="留一个新的话题" tone="red" />
               <Field
                 label="对话名称"
                 placeholder="例如：周末计划、游戏攻略"
@@ -845,7 +856,7 @@ function ConnectedSession({
                 <ActionRow
                   key={conversation.id}
                   icon={conversation.agent_id === "finance" ? "wallet-outline" : "chatbubble-outline"}
-                  tone={conversation.agent_id === "finance" ? "green" : "purple"}
+                  tone={conversation.agent_id === "finance" ? "gold" : "red"}
                   title={conversation.title}
                   description={`${timeLabel(conversation.updated_at)}${conversation.blocked ? " · 队列等待继续" : ""}`}
                   compact

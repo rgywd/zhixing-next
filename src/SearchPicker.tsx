@@ -1,3 +1,6 @@
+import type { ThemeColors } from "./theme";
+import { useUi, Button, Field, humanError } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
@@ -5,7 +8,6 @@ import { BottomSheet } from "./BottomSheet";
 import { BrandIcon } from "./BrandIcon";
 import { radius, space, typography } from "./theme";
 import { ApiError, request, type Connection, type SearchProvider } from "./api";
-import { Button, Field, colors, humanError, s } from "./ui";
 
 const kinds = { brave: "Brave", tavily: "Tavily", serper: "Serper" } as const;
 
@@ -16,6 +18,8 @@ export function SearchPicker({ visible, connection, selectedId, onSelect, onClos
   onSelect: (id: string | null) => void;
   onClose: () => void;
 }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [adding, setAdding] = useState(false);
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState<SearchProvider[]>([]);
@@ -83,7 +87,7 @@ export function SearchPicker({ visible, connection, selectedId, onSelect, onClos
         <View style={styles.toggle}>
           <View style={styles.globe}><Ionicons name="globe-outline" size={24} color={selectedId ? colors.blue : colors.muted} /></View>
           <View style={s.headingCopy}><Text style={s.itemTitle}>网络搜索</Text><Text style={s.muted}>{selectedId ? selected?.name ?? "已开启" : "已关闭"}</Text></View>
-          <Switch accessibilityLabel="网络搜索" disabled={busy || loading || !supported || (!items.length && !selectedId)} value={!!selectedId} onValueChange={(value) => { onSelect(value ? items[0]?.id ?? null : null); }} trackColor={{ false: "#D9D4CE", true: colors.blue }} thumbColor={colors.white} />
+          <Switch accessibilityLabel="网络搜索" disabled={busy || loading || !supported || (!items.length && !selectedId)} value={!!selectedId} onValueChange={(value) => { onSelect(value ? items[0]?.id ?? null : null); }} trackColor={{ false: colors.strongLine, true: colors.blue }} thumbColor={colors.switchThumb} />
         </View>
         {loading ? <ActivityIndicator color={colors.blue} /> : null}
         <View style={styles.grid}>{items.map((item) => <View key={item.id} style={[styles.provider, selectedId === item.id && styles.selected]}>
@@ -98,13 +102,13 @@ export function SearchPicker({ visible, connection, selectedId, onSelect, onClos
     </ScrollView>
   </BottomSheet>;
 }
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { paddingHorizontal: 20, paddingBottom: 18, gap: space.md },
   toggle: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.neutral, borderRadius: radius.item, padding: 13 },
   globe: { width: 36, height: 36, justifyContent: "center", alignItems: "center" },
   grid: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", gap: 10 },
-  provider: { width: "48%", backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, borderRadius: radius.item },
-  selected: { backgroundColor: colors.blueSoft, borderColor: "#BBD8E2" },
+  provider: { width: "48%", backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.line, borderRadius: radius.item },
+  selected: { backgroundColor: colors.blueSoft, borderColor: colors.blueLine },
   providerChoice: { flexDirection: "row", alignItems: "center", gap: 7, padding: 12, minHeight: 52 },
   providerFoot: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingLeft: 12 },
   delete: { height: 44, width: 44, alignItems: "center", justifyContent: "center" },

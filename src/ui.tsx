@@ -1,3 +1,6 @@
+import { AppearanceControl } from "./AppearanceControl";
+import type { ThemeColors } from "./theme";
+import { useTheme, useThemedStyles } from "./ThemeProvider";
 import type { ComponentProps, ReactNode } from "react";
 import {
   Image,
@@ -16,36 +19,39 @@ import {
   type ViewStyle,
 } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import { colors, layout, radius, space, typography } from "./theme";
+import { layout, radius, space, typography } from "./theme";
 
-export { colors } from "./theme";
 type IconName = ComponentProps<typeof Ionicons>["name"];
-export type UiTone = "red" | "purple" | "blue" | "gold" | "green" | "neutral";
-const toneColors = {
-  red: [colors.accent, colors.pale], purple: [colors.purple, colors.purpleSoft],
+export type UiTone = "red" | "blue" | "gold" | "green" | "neutral";
+const getToneColors = (colors: ThemeColors) => ({
+  red: [colors.accent, colors.pale],
   blue: [colors.blue, colors.blueSoft], gold: [colors.gold, colors.goldSoft],
   green: [colors.green, colors.greenSoft], neutral: [colors.ink, colors.neutral],
-} as const;
+} as const);
 
 export function PageScrollView({ tabs = false, contentContainerStyle, ...props }: ScrollViewProps & { tabs?: boolean }) {
+  const { s } = useUi();
   return <ScrollView showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled" {...props} contentContainerStyle={[s.content, tabs && s.mainPage, tabs && s.tabContent, contentContainerStyle]} />;
 }
 
 export function PageHero({ eyebrow, title, description, art, artStyle }: {
   eyebrow: string; title: string; description: string; art?: ImageSourcePropType; artStyle?: StyleProp<ImageStyle>;
 }) {
+  const { s, mode } = useUi();
   const narrow = useWindowDimensions().width < layout.compactWidth;
   return (
     <View style={s.hero}>
-      {art && !narrow ? <Image source={art} resizeMode="contain" style={[s.heroArt, artStyle]} accessible={false} /> : null}
+      {art && !narrow && mode === "light" ? <Image source={art} resizeMode="contain" style={[s.heroArt, artStyle]} accessible={false} /> : null}
+      <View style={s.heroAppearance}><AppearanceControl /></View>
       <Text style={s.kicker}>{eyebrow}</Text>
       <Text accessibilityRole="header" style={s.heroTitle}>{title}</Text>
-      <Text style={[s.description, art && !narrow ? s.heroDescription : null]}>{description}</Text>
+      <Text style={[s.description, art && !narrow && mode === "light" ? s.heroDescription : null]}>{description}</Text>
     </View>
   );
 }
 
 export function PageHeading({ title, description, action }: { title: string; description?: string; action?: ReactNode }) {
+  const { s } = useUi();
   return (
     <View style={s.row}>
       <View style={s.headingCopy}>
@@ -58,24 +64,29 @@ export function PageHeading({ title, description, action }: { title: string; des
 }
 
 export function SheetHeader({ title, onClose }: { title: string; onClose: () => void }) {
+  const { s } = useUi();
   return <View style={s.header}><Text accessibilityRole="header" style={[s.heading, s.grow]}>{title}</Text><IconAction icon="close" label="关闭" onPress={onClose} /></View>;
 }
 
 export function BackLink({ label, onPress }: { label: string; onPress: () => void }) {
+  const { s, colors } = useUi();
   return <Pressable accessibilityRole="button" accessibilityLabel={`返回${label}`} onPress={onPress} style={({ pressed }) => [s.backLink, pressed && s.pressed]}><Ionicons name="chevron-back" size={20} color={colors.accent} /><Text style={s.backLinkText}>{label}</Text></Pressable>;
 }
 
 export function IconBadge({ name, small = false, tone = "red" }: { name: IconName; small?: boolean; tone?: UiTone }) {
+  const { s, toneColors } = useUi();
   return <View accessible={false} style={[s.iconBadge, small && s.iconBadgeSmall, { backgroundColor: toneColors[tone][1] }]}><Ionicons name={name} size={small ? 19 : 23} color={toneColors[tone][0]} /></View>;
 }
 
 export function CardHeader({ icon, title, description, action, tone = "red" }: { icon: IconName; title: string; description?: string; action?: ReactNode; tone?: UiTone }) {
+  const { s } = useUi();
   return <View style={s.row}><IconBadge name={icon} tone={tone} /><View style={s.headingCopy}><Text accessibilityRole="header" style={s.title}>{title}</Text>{description ? <Text style={s.muted}>{description}</Text> : null}</View>{action}</View>;
 }
 
 export function ServiceTile({ icon, title, description, onPress, accessibilityLabel = title, tone = "red" }: {
   icon: IconName; title: string; description: string; onPress: () => void; accessibilityLabel?: string; tone?: UiTone;
 }) {
+  const { s, colors } = useUi();
   const narrow = useWindowDimensions().width < layout.compactWidth;
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} onPress={onPress} style={({ pressed }) => [s.serviceTile, narrow && s.serviceTileNarrow, pressed && s.pressed]}><IconBadge name={icon} small tone={tone} /><View style={s.headingCopy}><Text style={s.itemTitle}>{title}</Text><Text numberOfLines={1} style={s.small}>{description}</Text></View><Ionicons name="chevron-forward" size={16} color={colors.muted} /></Pressable>;
 }
@@ -83,6 +94,7 @@ export function ServiceTile({ icon, title, description, onPress, accessibilityLa
 export function ActionRow({ icon, title, description, onPress, last = false, compact = false, tone = "red" }: {
   icon: IconName; title: string; description?: string; onPress: () => void; last?: boolean; compact?: boolean; tone?: UiTone;
 }) {
+  const { s, colors } = useUi();
   return (
     <Pressable accessibilityRole="button" accessibilityLabel={title} onPress={onPress} style={({ pressed }) => [s.actionRow, !last && s.rowDivider, pressed && s.pressed]}>
       <IconBadge name={icon} small={compact} tone={tone} />
@@ -92,12 +104,15 @@ export function ActionRow({ icon, title, description, onPress, last = false, com
   );
 }
 export function IconAction({ icon, label, onPress, tone = "neutral", disabled = false }: { icon: IconName; label: string; onPress: () => void; tone?: UiTone; disabled?: boolean }) {
+  const { s, toneColors } = useUi();
   return <Pressable accessibilityRole="button" accessibilityLabel={label} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.iconAction, disabled && s.disabled, pressed && s.pressed]}><Ionicons name={icon} size={20} color={toneColors[tone][0]} /></Pressable>;
 }
 export function ActionLink({ icon, children, onPress, tone = "red", disabled = false }: { icon?: IconName; children: string; onPress: () => void; tone?: UiTone; disabled?: boolean }) {
+  const { s, toneColors } = useUi();
   return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.actionLink, disabled && s.disabled, pressed && s.pressed]}>{icon ? <Ionicons name={icon} size={17} color={toneColors[tone][0]} /> : null}<Text style={[s.actionLinkText, { color: toneColors[tone][0] }]}>{children}</Text></Pressable>;
 }
 export function StatusPill({ children, tone = "neutral" }: { children: string; tone?: UiTone }) {
+  const { s, toneColors } = useUi();
   return <View style={[s.statusPill, { backgroundColor: toneColors[tone][1] }]}><Text style={[s.statusPillText, { color: toneColors[tone][0] }]}>{children}</Text></View>;
 }
 export function Button({
@@ -119,6 +134,7 @@ export function Button({
   icon?: IconName;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { s, colors } = useUi();
   return (
     <Pressable
       accessibilityRole="button"
@@ -134,7 +150,7 @@ export function Button({
         style,
       ]}
     >
-      {icon ? <Ionicons name={icon} size={20} color={danger ? colors.red : secondary ? colors.ink : colors.white} /> : null}
+      {icon ? <Ionicons name={icon} size={20} color={danger ? colors.red : secondary ? colors.ink : colors.onPrimary} /> : null}
       <Text
         style={[s.buttonText, secondary && s.secondaryText, danger && s.danger]}
       >
@@ -144,12 +160,14 @@ export function Button({
   );
 }
 export function Field({ label, ...props }: TextInputProps & { label: string }) {
+  const { s, colors } = useUi();
   return (
     <View style={s.field}>
       <Text style={s.label}>{label}</Text>
       <TextInput
         accessibilityLabel={label}
         placeholderTextColor={colors.muted}
+        selectionColor={colors.accent}
         {...props}
         style={[s.input, props.multiline && s.multiline, props.style]}
       />
@@ -167,6 +185,7 @@ export function Empty({
   icon?: IconName;
   compact?: boolean;
 }) {
+  const { s } = useUi();
   return (
     <View style={[s.empty, compact && s.compactEmpty]}>
       <IconBadge name={icon} />
@@ -194,7 +213,7 @@ export const runLabels = {
   cancelled: "已取消",
   interrupted: "执行中断",
 };
-export const s = StyleSheet.create({
+export const createSharedStyles = (colors: ThemeColors) => StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.paper },
   body: { flex: 1 },
   content: { padding: layout.gutter, gap: layout.pageGap, paddingBottom: 36 },
@@ -205,9 +224,10 @@ export const s = StyleSheet.create({
   form: { gap: layout.pageGap },
   headingCopy: { flex: 1, minWidth: 0, gap: space.xs },
   hero: { minHeight: layout.heroHeight, justifyContent: "center", gap: 6, paddingHorizontal: 6, paddingTop: 9 },
+  heroAppearance: { position: "absolute", top: 4, right: 0, zIndex: 1, backgroundColor: colors.paper, borderRadius: radius.pill },
   heroArt: { position: "absolute", width: 226, height: 130, right: -26, top: -4 },
   kicker: { ...typography.kicker, color: colors.accent },
-  heroTitle: { ...typography.hero, color: colors.ink },
+  heroTitle: { ...typography.hero, color: colors.ink, paddingRight: 44 },
   heroDescription: { maxWidth: "76%" },
   description: { ...typography.body, color: colors.muted },
   itemTitle: { ...typography.item, color: colors.ink },
@@ -217,7 +237,7 @@ export const s = StyleSheet.create({
   actionRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 56, paddingVertical: space.sm },
   rowDivider: { borderBottomWidth: 1, borderBottomColor: colors.line },
   serviceGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  serviceTile: { width: "47%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 66, paddingHorizontal: space.sm, paddingVertical: space.sm, borderRadius: radius.item, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line },
+  serviceTile: { width: "47%", flexGrow: 1, flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: 66, paddingHorizontal: space.sm, paddingVertical: space.sm, borderRadius: radius.item, backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.line },
   serviceTileNarrow: { width: "100%" },
   caption: { ...typography.caption, color: colors.muted },
   small: { ...typography.small, color: colors.muted },
@@ -265,7 +285,7 @@ export const s = StyleSheet.create({
   input: {
     borderWidth: 1,
     borderColor: colors.line,
-    backgroundColor: colors.white,
+    backgroundColor: colors.surfaceRaised,
     borderRadius: radius.control,
     paddingHorizontal: layout.cardPadding,
     paddingVertical: space.md,
@@ -279,14 +299,14 @@ export const s = StyleSheet.create({
     paddingHorizontal: space.lg,
     paddingVertical: space.md,
     borderRadius: radius.control,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.primary,
     alignItems: "center",
     justifyContent: "center",
     flexDirection: "row",
     gap: space.sm,
   },
   smallButton: { paddingHorizontal: space.md, paddingVertical: space.sm, minHeight: layout.touchTarget },
-  buttonText: { ...typography.button, color: colors.white, flexShrink: 1, textAlign: "center" },
+  buttonText: { ...typography.button, color: colors.onPrimary, flexShrink: 1, textAlign: "center" },
   secondary: { backgroundColor: colors.neutral },
   secondaryText: { color: colors.ink },
   disabled: { opacity: 0.4 },
@@ -302,7 +322,7 @@ export const s = StyleSheet.create({
     borderRadius: radius.card,
     padding: layout.cardPadding,
     gap: 9,
-    shadowColor: colors.ink,
+    shadowColor: colors.shadow,
     shadowOpacity: 0.025,
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 12,
@@ -325,8 +345,8 @@ export const s = StyleSheet.create({
     right: 0,
     height: 72,
     borderRadius: 36,
-    backgroundColor: colors.white,
-    shadowColor: "#5F2B25",
+    backgroundColor: colors.surfaceRaised,
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.14,
     shadowRadius: 16,
@@ -370,18 +390,18 @@ export const s = StyleSheet.create({
     width: 66,
     height: 66,
     borderRadius: 26,
-    backgroundColor: colors.accent,
+    backgroundColor: colors.primary,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 3,
-    borderColor: colors.white,
+    borderColor: colors.surfaceRaised,
     shadowColor: colors.accent,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.18,
     shadowRadius: 7,
     elevation: 3,
   },
-  aiButtonIcon: { width: 40, height: 40, tintColor: colors.white },
+  aiButtonIcon: { width: 40, height: 40, tintColor: colors.onPrimary },
   activeTab: { backgroundColor: colors.pale },
   tabText: { color: colors.muted, fontSize: 11, fontWeight: "600" },
   activeTabText: { color: colors.accent, fontWeight: "700" },
@@ -415,8 +435,14 @@ export const s = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  chipActive: { backgroundColor: colors.accent },
+  chipActive: { backgroundColor: colors.primary },
   chipText: { color: colors.muted, ...typography.detail },
-  chipActiveText: { color: colors.white },
+  chipActiveText: { color: colors.onPrimary },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
 });
+
+export function useUi() {
+  const theme = useTheme();
+  const s = useThemedStyles(createSharedStyles);
+  return { ...theme, s, toneColors: getToneColors(theme.colors) };
+}

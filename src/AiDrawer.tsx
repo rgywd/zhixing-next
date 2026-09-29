@@ -1,15 +1,19 @@
+import type { ThemeColors } from "./theme";
+import { useUi, humanError, timeLabel } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Animated, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { request, type Connection, type Conversation, type ConversationSearchResult } from "./api";
 import { MemoryPanel } from "./MemoryPanel";
-import { colors, humanError, s, timeLabel } from "./ui";
+
 import { layout, radius, space, typography } from "./theme";
 
 type SearchSort = "relevance" | "newest" | "oldest";
 
 function SearchSnippet({ text, query }: { text: string; query: string }) {
+  const styles = useThemedStyles(createStyles);
   const term = query.trim().split(/\s+/).find((part) => text.toLocaleLowerCase().includes(part.toLocaleLowerCase()));
   if (!term) return <Text numberOfLines={2} style={styles.snippet}>{text}</Text>;
   const start = text.toLocaleLowerCase().indexOf(term.toLocaleLowerCase());
@@ -33,6 +37,8 @@ export function AiDrawer({
   onNew: () => void;
   onSettings: () => void;
 }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [view, setView] = useState<"history" | "search" | "memory">("history");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SearchSort>("relevance");
@@ -144,7 +150,7 @@ export function AiDrawer({
                   {!ordered.length ? <Text style={styles.empty}>还没有对话，开始一段新的聊天吧。</Text> : null}
                   {hasMore ? <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={onMore} style={styles.more}><Text style={styles.moreText}>{busy ? "加载中…" : "查看更早的对话"}</Text></Pressable> : null}
                 </ScrollView>
-                <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => { reset(); onNew(); }} style={({ pressed }) => [styles.newButton, pressed && s.pressed]}><Ionicons name="add" size={23} color={colors.white} /><Text style={styles.newText}>新建对话</Text></Pressable>
+                <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => { reset(); onNew(); }} style={({ pressed }) => [styles.newButton, pressed && s.pressed]}><Ionicons name="add" size={23} color={colors.onPrimary} /><Text style={styles.newText}>新建对话</Text></Pressable>
               </View>
             )}
           </SafeAreaView>
@@ -155,8 +161,8 @@ export function AiDrawer({
   );
 }
 
-const styles = StyleSheet.create({
-  overlay: { flex: 1, flexDirection: "row", backgroundColor: "#25252D77" },
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
+  overlay: { flex: 1, flexDirection: "row", backgroundColor: colors.overlay },
   panel: { width: "86%", maxWidth: 380, backgroundColor: colors.paper },
   safeArea: { flex: 1, paddingHorizontal: space.lg },
   page: { flex: 1 },
@@ -167,7 +173,7 @@ const styles = StyleSheet.create({
   subhead: { ...typography.caption, color: colors.muted },
   iconButton: { width: layout.touchTarget, height: layout.touchTarget, alignItems: "center", justifyContent: "center", borderRadius: radius.control },
   shortcuts: { flexDirection: "row", gap: space.sm, paddingVertical: space.md },
-  shortcut: { flex: 1, minHeight: 57, alignItems: "center", justifyContent: "center", gap: 2, borderRadius: radius.item, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line },
+  shortcut: { flex: 1, minHeight: 57, alignItems: "center", justifyContent: "center", gap: 2, borderRadius: radius.item, backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.line },
   shortcutText: { ...typography.detail, color: colors.ink },
   historyHead: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingTop: space.md, paddingBottom: space.sm },
   heading: { ...typography.section, color: colors.ink },
@@ -180,14 +186,14 @@ const styles = StyleSheet.create({
   empty: { ...typography.body, color: colors.muted, marginTop: space.xl },
   more: { minHeight: layout.touchTarget, alignItems: "center", justifyContent: "center", marginTop: space.sm },
   moreText: { ...typography.button, color: colors.accent },
-  newButton: { minHeight: 48, borderRadius: radius.pill, backgroundColor: colors.accent, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, marginVertical: space.sm },
-  newText: { ...typography.button, color: colors.white },
+  newButton: { minHeight: 48, borderRadius: radius.pill, backgroundColor: colors.primary, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: space.sm, marginVertical: space.sm },
+  newText: { ...typography.button, color: colors.onPrimary },
   topLine: { minHeight: 60, flexDirection: "row", alignItems: "center", gap: space.sm },
-  searchBox: { minHeight: 46, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.white, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
+  searchBox: { minHeight: 46, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surfaceRaised, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
   searchInput: { flex: 1, ...typography.body, color: colors.ink, paddingVertical: space.sm },
   clearButton: { width: 30, height: 40, alignItems: "center", justifyContent: "center" },
   sortBar: { flexDirection: "row", gap: space.sm, paddingVertical: space.md },
-  sortChip: { minHeight: 34, paddingHorizontal: space.md, alignItems: "center", justifyContent: "center", borderRadius: radius.pill, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line },
+  sortChip: { minHeight: 34, paddingHorizontal: space.md, alignItems: "center", justifyContent: "center", borderRadius: radius.pill, backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.line },
   sortActive: { backgroundColor: colors.pale, borderColor: colors.pale },
   sortText: { ...typography.detail, color: colors.muted },
   sortTextActive: { color: colors.accent, fontWeight: "700" },

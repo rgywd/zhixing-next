@@ -1,12 +1,16 @@
+import type { ThemeColors } from "./theme";
+import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AccessibilityInfo, Animated, Easing, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import { colors, radius, space, typography } from "./theme";
+import { radius, space, typography } from "./theme";
 
 export function BottomSheet({ visible, title, subtitle, onClose, children, tall = false }: {
   visible: boolean; title: string; subtitle?: string; onClose: () => void; children: ReactNode; tall?: boolean;
 }) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
@@ -54,7 +58,7 @@ export function BottomSheet({ visible, title, subtitle, onClose, children, tall 
   const availableHeight = Math.max(160, height - keyboardInset - insets.top - 24);
   return <Modal visible={mounted} transparent animationType="none" statusBarTranslucent onRequestClose={dismiss}>
     <View style={styles.root}>
-      <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress, backgroundColor: "rgba(28,25,22,0.30)" }]}>
+      <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress, backgroundColor: colors.overlay }]}>
         <Pressable style={StyleSheet.absoluteFill} accessibilityRole="button" accessibilityLabel={`关闭${title}`} onPress={dismiss} />
       </Animated.View>
       <KeyboardAvoidingView pointerEvents="box-none" behavior={Platform.OS === "ios" ? "padding" : undefined} style={[styles.dock, { paddingBottom: keyboardInset }]}>
@@ -71,12 +75,12 @@ export function BottomSheet({ visible, title, subtitle, onClose, children, tall 
   </Modal>;
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   root: { flex: 1, justifyContent: "flex-end" },
   dock: { justifyContent: "flex-end", maxHeight: "100%" },
   panel: { backgroundColor: colors.paper, borderTopLeftRadius: 28, borderTopRightRadius: 28, overflow: "hidden", width: "100%", maxWidth: 600, alignSelf: "center" },
   handleArea: { height: 26, justifyContent: "center", alignItems: "center" },
-  handle: { width: 32, height: 4, borderRadius: radius.pill, backgroundColor: "#CCC5BD" },
+  handle: { width: 32, height: 4, borderRadius: radius.pill, backgroundColor: colors.strongLine },
   header: { flexDirection: "row", alignItems: "center", paddingLeft: 22, paddingRight: space.md, paddingBottom: 12 },
   heading: { flex: 1, gap: 3 },
   title: { ...typography.section, fontSize: 19, color: colors.ink },

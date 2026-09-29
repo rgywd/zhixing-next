@@ -1,3 +1,6 @@
+import type { ThemeColors } from "./theme";
+import { useUi, Button, Empty, humanError, runLabels, SheetHeader, timeLabel } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useEffect, useRef, useState } from "react";
 import { MessageBody } from "./MessageBody";
 import {
@@ -31,16 +34,6 @@ import { Attachments } from "./Attachments";
 import { ApprovalCards } from "./ApprovalCards";
 import { FilesPanel } from "./FilesPanel";
 import { SearchPicker } from "./SearchPicker";
-import {
-  Button,
-  colors,
-  Empty,
-  humanError,
-  runLabels,
-  SheetHeader,
-  s,
-  timeLabel,
-} from "./ui";
 
 export function ChatPanel({
   connection,
@@ -73,6 +66,8 @@ export function ChatPanel({
   onComposerContext: (value: { conversationId: string; modelId: string | null; kind: "chat" | "task" }) => void;
   onRefresh: () => void;
 }) {
+  const { s, colors } = useUi();
+  const chatStyles = useThemedStyles(createChatStyles);
   const [showModels, setShowModels] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
@@ -370,6 +365,7 @@ function RunDetail({
   close: () => void;
   onCancel: (run: Run) => Promise<void>;
 }) {
+  const { s, colors } = useUi();
   const [run, setRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
   const retry = useRef<() => void>(() => undefined);
@@ -523,7 +519,7 @@ function eventSummary(event: RunEvent) {
     : JSON.stringify(event.data, null, 2);
 }
 
-const chatStyles = StyleSheet.create({
+const createChatStyles = (colors: ThemeColors) => StyleSheet.create({
   delivery: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4, paddingBottom: 5 },
   deliveryChoice: { minHeight: 36, paddingHorizontal: 9, borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 5 },
   pending: { flexDirection: "row", alignItems: "center", marginHorizontal: 18 },

@@ -1,7 +1,10 @@
+import type { ThemeColors } from "./theme";
+import { useUi, ActionLink, IconBadge, PageHero, PageScrollView, ServiceTile } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { Image, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { FinanceSummary } from "./api";
-import { ActionLink, IconBadge, PageHero, PageScrollView, ServiceTile, colors, s } from "./ui";
+
 import { layout, radius, space, typography } from "./theme";
 
 const financeShortcuts = [
@@ -23,6 +26,8 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
   onChat: (prompt: string) => void;
   finance?: FinanceSummary;
 }) {
+  const { s, colors, mode } = useUi();
+  const styles = useThemedStyles(createStyles);
   const narrow = useWindowDimensions().width < layout.compactWidth;
   return (
     <PageScrollView tabs>
@@ -30,18 +35,18 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
 
       <View style={s.card}>
         <View style={s.row}>
-          <IconBadge name="wallet-outline" tone="green" />
+          <IconBadge name="wallet-outline" tone="gold" />
           <Pressable accessibilityRole="button" accessibilityLabel="打开财务" onPress={onFinance} style={styles.financeTitleLink}>
             <Text style={s.heading}>财务</Text>
             <Ionicons name="chevron-forward" size={21} color={colors.ink} />
           </Pressable>
-          {!narrow ? <View style={styles.assistantBadge}><Ionicons name="sparkles" size={13} color={colors.green} /><Text style={styles.assistantBadgeText}>财务助手</Text></View> : null}
+          {!narrow ? <View style={styles.assistantBadge}><Ionicons name="sparkles" size={13} color={colors.gold} /><Text style={styles.assistantBadgeText}>财务助手</Text></View> : null}
         </View>
         <Text style={s.description}>和财务助手聊账户、收支与财务问题。</Text>
         <View style={styles.shortcuts}>
           {financeShortcuts.map((item) => (
             <Pressable key={item.title} accessibilityRole="button" accessibilityLabel={`打开财务助手，${item.title}`} onPress={onFinance} style={({ pressed }) => [styles.shortcut, narrow && styles.shortcutNarrow, pressed && s.pressed]}>
-              <View style={styles.shortcutIcon}><Ionicons name={item.icon} size={20} color={colors.green} /></View>
+              <View style={styles.shortcutIcon}><Ionicons name={item.icon} size={20} color={colors.gold} /></View>
               <Text style={styles.shortcutTitle}>{item.title}</Text>
             </Pressable>
           ))}
@@ -58,7 +63,7 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
             </View> : null}
           </View>
         ) : null}
-        <ActionLink icon="chatbubble-ellipses-outline" tone="green" onPress={onFinance}>和财务助手聊聊</ActionLink>
+        <ActionLink icon="chatbubble-ellipses-outline" tone="gold" onPress={onFinance}>和财务助手聊聊</ActionLink>
         <View style={styles.privacy}>
           <Ionicons name="shield-checkmark-outline" size={17} color={colors.muted} />
           <Text style={styles.privacyText}>只显示你提供的财务信息，不会自动读取账户。</Text>
@@ -74,12 +79,12 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
       </View>
       <View style={s.serviceGrid}>
         {services.map((item) => (
-          <ServiceTile key={item.title} accessibilityLabel={`和知行聊${item.title}`} title={item.title} description={item.subtitle} icon={item.icon} onPress={() => onChat(item.prompt)} tone="green" />
+          <ServiceTile key={item.title} accessibilityLabel={`和知行聊${item.title}`} title={item.title} description={item.subtitle} icon={item.icon} onPress={() => onChat(item.prompt)} tone="gold" />
         ))}
       </View>
 
       <View style={styles.footer}>
-        <Image source={require("../assets/life-footer-red.png")} resizeMode="contain" style={styles.footerArt} accessible={false} />
+        {mode === "light" ? <Image source={require("../assets/life-footer-red.png")} resizeMode="contain" style={styles.footerArt} accessible={false} /> : null}
         <IconBadge name="leaf-outline" small />
         <View style={styles.footerCopy}>
           <Text style={styles.footerText}>把生活的琐碎，{"\n"}变成值得期待的日常。</Text>
@@ -90,14 +95,14 @@ export function LifePanel({ onFinance, onChat, finance = { balances: [], recent:
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   financeTitleLink: { flex: 1, flexDirection: "row", alignItems: "center", gap: 3, minHeight: 44 },
-  assistantBadge: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: colors.greenSoft, borderRadius: 15, paddingHorizontal: 9, paddingVertical: 7 },
-  assistantBadgeText: { ...typography.caption, color: colors.green, fontWeight: "600" },
+  assistantBadge: { flexDirection: "row", alignItems: "center", gap: space.xs, backgroundColor: colors.goldSoft, borderRadius: 15, paddingHorizontal: 9, paddingVertical: 7 },
+  assistantBadgeText: { ...typography.caption, color: colors.gold, fontWeight: "600" },
   shortcuts: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
-  shortcut: { flexGrow: 1, flexBasis: "21%", alignItems: "center", backgroundColor: colors.white, borderRadius: radius.control, paddingVertical: 8, gap: space.xs, borderWidth: 1, borderColor: colors.line },
+  shortcut: { flexGrow: 1, flexBasis: "21%", alignItems: "center", backgroundColor: colors.surfaceRaised, borderRadius: radius.control, paddingVertical: 8, gap: space.xs, borderWidth: 1, borderColor: colors.line },
   shortcutNarrow: { flexBasis: "43%" },
-  shortcutIcon: { width: 30, height: 30, borderRadius: radius.small, backgroundColor: colors.greenSoft, alignItems: "center", justifyContent: "center" },
+  shortcutIcon: { width: 30, height: 30, borderRadius: radius.small, backgroundColor: colors.goldSoft, alignItems: "center", justifyContent: "center" },
   shortcutTitle: { ...typography.detail, color: colors.ink, fontWeight: "600", textAlign: "center" },
   records: { flexDirection: "row", gap: space.md, paddingHorizontal: 2 },
   recordColumn: { flex: 1, gap: space.xs },
@@ -105,9 +110,9 @@ const styles = StyleSheet.create({
   record: { ...typography.detail, color: colors.ink },
   privacy: { flexDirection: "row", alignItems: "flex-start", gap: 7, paddingHorizontal: 3 },
   privacyText: { flex: 1, ...typography.caption, color: colors.muted },
-  footer: { minHeight: 86, flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.white, borderRadius: radius.item, padding: 14, overflow: "hidden", marginTop: 3 },
+  footer: { minHeight: 86, flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: colors.surfaceRaised, borderRadius: radius.item, padding: 14, overflow: "hidden", marginTop: 3 },
   footerArt: { position: "absolute", right: -2, bottom: -4, width: 282, height: 94 },
   footerCopy: { gap: 3, maxWidth: "72%" },
   footerText: { ...typography.detail, color: colors.ink },
-  footerDash: { ...typography.body, color: colors.muted },
+  footerDash: { ...typography.body, color: colors.khaki },
 });

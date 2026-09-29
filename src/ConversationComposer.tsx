@@ -1,10 +1,12 @@
+import type { ThemeColors } from "./theme";
+import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { useEffect, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { request, type Connection, type ModelInfo, type ReasoningEffort, type SearchProvider } from "./api";
 import { BrandIcon } from "./BrandIcon";
 import { reasoningLabel } from "./ModelPicker";
-import { colors, radius, space, typography } from "./theme";
+import { radius, space, typography } from "./theme";
 
 type Props = {
   text: string; placeholder?: string; onText: (text: string) => void; onSend: () => void; onFiles: () => void;
@@ -16,6 +18,8 @@ type Props = {
 };
 
 export function ConversationComposer(props: Props) {
+  const { colors } = useTheme();
+  const styles = useThemedStyles(createStyles);
   const { text, placeholder, onText, onSend, onFiles, editable, canSend, busy, pending, kind, onKind,
     model, depth = "auto", searchId, onModel, onReasoning, onSearch, optionsLocked, children, hint } = props;
   const [provider, setProvider] = useState<SearchProvider | null>(null);
@@ -41,18 +45,18 @@ export function ConversationComposer(props: Props) {
           {onReasoning ? <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${model?.reasoning_levels.length ? reasoningLabel[depth] : "不可调整"}`} accessibilityState={{ disabled: optionsLocked || !model?.reasoning_levels.length }} disabled={optionsLocked || !model?.reasoning_levels.length} onPress={onReasoning} style={[styles.tool, styles.depth, depth !== "none" && styles.reasoningOn, (optionsLocked || !model?.reasoning_levels.length) && styles.disabled]}>
             <Ionicons name={depth === "none" ? "bulb-outline" : "bulb"} size={21} color={depth === "none" ? colors.muted : colors.gold} /><Text style={[styles.depthLabel, depth !== "none" && { color: colors.gold }]}>{model?.reasoning_levels.length ? reasoningLabel[depth] : "—"}</Text>
           </Pressable> : null}
-          <Pressable accessibilityRole="button" accessibilityLabel={kind === "chat" ? "当前聊天，切换为任务" : "当前任务，切换为聊天"} accessibilityState={{ selected: kind === "task", disabled: !!pending || busy || props.kindLocked }} disabled={!!pending || busy || props.kindLocked} onPress={() => onKind(kind === "chat" ? "task" : "chat")} style={[styles.tool, kind === "task" && styles.taskOn, (pending || busy || props.kindLocked) && styles.disabled]}><Ionicons name={kind === "task" ? "flash" : "chatbubble-outline"} size={21} color={kind === "task" ? colors.green : colors.muted} /></Pressable>
+          <Pressable accessibilityRole="button" accessibilityLabel={kind === "chat" ? "当前聊天，切换为任务" : "当前任务，切换为聊天"} accessibilityState={{ selected: kind === "task", disabled: !!pending || busy || props.kindLocked }} disabled={!!pending || busy || props.kindLocked} onPress={() => onKind(kind === "chat" ? "task" : "chat")} style={[styles.tool, kind === "task" && styles.taskOn, (pending || busy || props.kindLocked) && styles.disabled]}><Ionicons name={kind === "task" ? "flash" : "chatbubble-outline"} size={21} color={kind === "task" ? colors.blue : colors.muted} /></Pressable>
         </View>
         <Pressable accessibilityRole="button" accessibilityLabel="添加资料" accessibilityState={{ disabled: props.attachmentLocked }} disabled={props.attachmentLocked} onPress={onFiles} style={[styles.tool, props.attachmentLocked && styles.disabled]}><Ionicons name="add" size={25} color={colors.ink} /></Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !canSend }} disabled={!canSend} onPress={onSend} style={[styles.send, !canSend && styles.sendDisabled]}>{busy ? <ActivityIndicator size="small" color={colors.white} /> : <Ionicons name={pending ? "refresh" : "arrow-up"} size={23} color={canSend ? colors.white : colors.muted} />}</Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel={pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !canSend }} disabled={!canSend} onPress={onSend} style={[styles.send, !canSend && styles.sendDisabled]}>{busy ? <ActivityIndicator size="small" color={colors.onInk} /> : <Ionicons name={pending ? "refresh" : "arrow-up"} size={23} color={canSend ? colors.onInk : colors.muted} />}</Pressable>
       </View>
     </View>
   </View>;
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   area: { paddingHorizontal: 12, paddingBottom: 8, paddingTop: 6 },
-  composer: { backgroundColor: colors.surface, borderRadius: 22, borderWidth: 1, borderColor: "#E2DBD4", paddingHorizontal: 8, paddingBottom: 6, shadowColor: colors.ink, shadowOpacity: 0.035, shadowRadius: 12, shadowOffset: { width: 0, height: 3 } },
+  composer: { backgroundColor: colors.surface, borderRadius: 22, borderWidth: 1, borderColor: colors.line, paddingHorizontal: 8, paddingBottom: 6, shadowColor: colors.shadow, shadowOpacity: 0.035, shadowRadius: 12, shadowOffset: { width: 0, height: 3 } },
   input: { ...typography.reading, fontSize: 16, color: colors.ink, minHeight: 54, maxHeight: 140, paddingHorizontal: 7, paddingTop: 13, paddingBottom: 8, textAlignVertical: "top" },
   toolbar: { flexDirection: "row", alignItems: "center", gap: 2 },
   choices: { flex: 1, flexDirection: "row", alignItems: "center", gap: 2 },
@@ -61,7 +65,7 @@ const styles = StyleSheet.create({
   depthLabel: { ...typography.small, color: colors.muted },
   searchOn: { backgroundColor: colors.blueSoft },
   reasoningOn: { backgroundColor: colors.goldSoft },
-  taskOn: { backgroundColor: colors.greenSoft },
+  taskOn: { backgroundColor: colors.blueSoft },
   statusDot: { position: "absolute", width: 4, height: 4, borderRadius: 2, right: 5, top: 7, backgroundColor: colors.blue },
   send: { width: 40, height: 40, marginLeft: space.xs, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: colors.ink },
   sendDisabled: { backgroundColor: colors.neutral },
