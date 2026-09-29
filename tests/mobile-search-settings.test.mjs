@@ -35,8 +35,9 @@ function screen({ management = true, failMutation = false } = {}) {
     "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
     "./BottomSheet": { BottomSheet: "BottomSheet" },
     "./BrandIcon": { BrandIcon: "BrandIcon" },
+    "./ThemeProvider": { useThemedStyles: (factory) => factory({}) },
     "./theme": { radius: {}, space: {}, typography: {} },
-    "./ui": { ActionLink: "ActionLink", Button: "Button", Field: "Field", IconAction: "IconAction", colors: {}, s: {}, humanError: (error) => error.message },
+    "./ui": { useUi: () => ({ s: {}, colors: {} }), ActionLink: "ActionLink", Button: "Button", Field: "Field", IconAction: "IconAction", colors: {}, s: {}, humanError: (error) => error.message },
     "./api": {
       ApiError,
       request: async (_connection, path, options) => {

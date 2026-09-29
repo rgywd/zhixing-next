@@ -1,25 +1,72 @@
-// Life is the visual baseline. Shared UI owns these values; pages own composition.
-export const colors = {
-  paper: "#FBF7F1",
-  white: "#FFFFFF",
-  surface: "#FFFCFA",
-  ink: "#25252D",
-  accent: "#A6322C",
-  muted: "#77777F",
-  line: "#EBE6E2",
-  pale: "#F8E9E6",
+// Surfaces and foregrounds are separate so a theme never inverts button labels.
+export const lightColors = {
+  paper: "#FAFAF9",
+  surface: "#FFFFFF",
+  surfaceRaised: "#FFFFFF",
+  ink: "#202125",
+  onInk: "#FFFFFF",
+  accent: "#B53632",
+  pale: "#FAEEEC",
+  primary: "#B53632",
+  onPrimary: "#FFFFFF",
+  muted: "#6C6C72",
+  line: "#E7E7E6",
+  strongLine: "#C6C3BC",
+  neutral: "#F1F1EF",
   red: "#B3261E",
-  amber: "#8A5A28",
-  neutral: "#F0EDE8",
-  purple: "#7155BE",
-  purpleSoft: "#EFEAF9",
-  blue: "#357D94",
-  blueSoft: "#E8F1F5",
-  gold: "#A67A2C",
-  goldSoft: "#F6EEDC",
-  green: "#52775B",
-  greenSoft: "#EAF1E9",
+  amber: "#88631C",
+  blue: "#2C648E",
+  blueSoft: "#ECF3FA",
+  blueLine: "#ADC7DE",
+  gold: "#89651E",
+  goldSoft: "#F6F0E2",
+  khaki: "#756F5E",
+  green: "#396A4D",
+  greenSoft: "#EAF2EC",
+  overlay: "rgba(20, 20, 22, 0.32)",
+  shadow: "#18181B",
+  switchThumb: "#FFFFFF",
+  brandPlate: "#F1F1EF",
 };
+
+export type ThemeColors = typeof lightColors;
+export const darkColors: ThemeColors = {
+  paper: "#131211",
+  surface: "#1B1A19",
+  surfaceRaised: "#23211F",
+  ink: "#F2F1EE",
+  onInk: "#171615",
+  accent: "#C4AE86",
+  pale: "#302A20",
+  primary: "#E6E1D8",
+  onPrimary: "#181715",
+  muted: "#ABA6A0",
+  line: "#36332F",
+  strongLine: "#625D53",
+  neutral: "#282624",
+  red: "#F09588",
+  amber: "#CCB47C",
+  blue: "#94BCDB",
+  blueSoft: "#1D2A34",
+  blueLine: "#425F75",
+  gold: "#C6AB73",
+  goldSoft: "#2E291E",
+  khaki: "#B3AC96",
+  green: "#A3C2AA",
+  greenSoft: "#233129",
+  overlay: "rgba(0, 0, 0, 0.64)",
+  shadow: "#000000",
+  switchThumb: "#F2F1EE",
+  brandPlate: "#DDD8CE",
+};
+
+export type ThemeMode = "light" | "dark";
+export type ThemePreference = ThemeMode | "system";
+export const themePreferenceKey = "zhixing.appearance.v1";
+export const parseThemePreference = (value: unknown): ThemePreference =>
+  value === "light" || value === "dark" ? value : "system";
+export const resolveThemeMode = (preference: ThemePreference, system: string | null | undefined): ThemeMode =>
+  preference === "system" ? system === "dark" ? "dark" : "light" : preference;
 
 export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 };
 export const radius = { small: 10, control: 12, item: 16, card: 20, pill: 999 };

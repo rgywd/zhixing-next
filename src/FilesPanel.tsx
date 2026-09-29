@@ -1,3 +1,4 @@
+import { useUi, ActionLink, Button, CardHeader, Empty, IconAction, PageScrollView, SheetHeader, humanError } from "./ui";
 import { useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -14,7 +15,6 @@ import {
   type Connection,
   type Resource,
 } from "./api";
-import { ActionLink, Button, CardHeader, Empty, IconAction, PageScrollView, SheetHeader, humanError, s } from "./ui";
 
 type WorkspaceFile = { path: string; name: string; size: number };
 export function FilesPanel({
@@ -30,6 +30,7 @@ export function FilesPanel({
   close: () => void;
   canAttach: boolean;
 }) {
+  const { s } = useUi();
   const [files, setFiles] = useState<WorkspaceFile[]>([]);
   const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState("");

@@ -1,12 +1,14 @@
+import type { ThemeColors } from "./theme";
+import { useUi, ActionLink, IconAction, PageHeading, PageScrollView, SettingsGroup, StatusPill, humanError } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { BottomSheet } from "./BottomSheet";
 import { BrandIcon } from "./BrandIcon";
-import { colors, radius, space } from "./theme";
+import { radius, space } from "./theme";
 import { request, type Connection, type ModelCatalog } from "./api";
 import { ModelPicker } from "./ModelPicker";
-import { ActionLink, IconAction, PageHeading, PageScrollView, SettingsGroup, StatusPill, humanError, s } from "./ui";
 
 const roles = [
   { id: "chat", label: "聊天", hint: "主知行新对话的默认模型", icon: "chatbubbles-outline" },
@@ -21,6 +23,8 @@ export function ModelsPanel({
   catalog: ModelCatalog | null;
   onCatalog: (catalog: ModelCatalog) => void;
 }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [selectedRole, setSelectedRole] = useState<(typeof roles)[number]["id"] | null>(null);
   const [error, setError] = useState("");
   async function refresh() {
@@ -47,7 +51,7 @@ export function ModelsPanel({
               const model = catalog.items.find((item) => item.id === catalog.roles[role.id]);
               return (
                 <Pressable key={role.id} accessibilityRole="button" accessibilityLabel={`选择${role.label}模型`} onPress={() => setSelectedRole(role.id)} style={[styles.role, role.id !== "memory" && styles.divider]}>
-                  <View style={[styles.roleIcon, { backgroundColor: role.id === "chat" ? colors.purpleSoft : role.id === "task" ? colors.greenSoft : colors.goldSoft }]}><Ionicons name={role.icon} size={20} color={role.id === "chat" ? colors.purple : role.id === "task" ? colors.green : colors.gold} /></View>
+                  <View style={[styles.roleIcon, { backgroundColor: role.id === "chat" ? colors.pale : role.id === "task" ? colors.blueSoft : colors.goldSoft }]}><Ionicons name={role.icon} size={20} color={role.id === "chat" ? colors.accent : role.id === "task" ? colors.blue : colors.gold} /></View>
                   <View style={s.headingCopy}><Text style={s.itemTitle}>{role.label}</Text><Text numberOfLines={1} style={s.muted}>{model?.name ?? "尚未配置"}</Text><Text style={s.small}>{role.hint}</Text></View>
                   <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={23} /><Ionicons name="chevron-forward" size={16} color={colors.muted} />
                 </Pressable>
@@ -81,6 +85,8 @@ export function ProvidersPanel({ connection, catalog, onCatalog }: {
   catalog: ModelCatalog | null;
   onCatalog: (catalog: ModelCatalog) => void;
 }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -98,7 +104,7 @@ export function ProvidersPanel({ connection, catalog, onCatalog }: {
   }
   return <>
     <PageScrollView>
-      <PageHeading title="模型供应商" description="查看已接入的服务与模型能力。" action={<IconAction icon="refresh-outline" label="刷新供应商" tone="purple" disabled={busy} onPress={() => { void refresh(); }} />} />
+      <PageHeading title="模型供应商" description="查看已接入的服务与模型能力。" action={<IconAction icon="refresh-outline" label="刷新供应商" tone="gold" disabled={busy} onPress={() => { void refresh(); }} />} />
       <View style={styles.search}>
         <Ionicons name="search-outline" size={19} color={colors.muted} />
         <TextInput accessibilityLabel="搜索供应商或模型" placeholder="搜索供应商或模型" placeholderTextColor={colors.muted} value={query} onChangeText={setQuery} style={styles.searchInput} autoCapitalize="none" autoCorrect={false} maxLength={100} />
@@ -137,11 +143,11 @@ export function ProvidersPanel({ connection, catalog, onCatalog }: {
   </>;
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   role: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 76, paddingVertical: space.sm },
   roleIcon: { width: 34, height: 34, borderRadius: 11, backgroundColor: colors.neutral, alignItems: "center", justifyContent: "center" },
   divider: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
-  search: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, minHeight: 48, backgroundColor: colors.white, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line },
+  search: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md, minHeight: 48, backgroundColor: colors.surfaceRaised, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line },
   searchInput: { flex: 1, minWidth: 0, color: colors.ink, paddingVertical: space.md, fontSize: 15 },
   provider: { flexDirection: "row", alignItems: "center", gap: space.md, minHeight: 72, paddingVertical: space.md },
   detail: { paddingHorizontal: space.lg, paddingBottom: space.lg, gap: space.md },

@@ -1,9 +1,9 @@
+import { useUi, Button, CardHeader, humanError } from "./ui";
 import { useEffect, useRef, useState } from "react";
 import { Text, View } from "react-native";
 import { ApiError, request, type Approval, type Connection, type Page } from "./api";
 import { useSyncStatus } from "./ConnectionStatus";
 import { shareDownload } from "./resources";
-import { Button, CardHeader, humanError, s } from "./ui";
 
 export function ApprovalCards({ connection, conversationId, runId, onChanged }: {
   connection: Connection;
@@ -11,6 +11,7 @@ export function ApprovalCards({ connection, conversationId, runId, onChanged }: 
   runId?: string;
   onChanged?: () => void;
 }) {
+  const { s } = useUi();
   const [items, setItems] = useState<Approval[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

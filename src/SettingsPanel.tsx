@@ -1,3 +1,4 @@
+import { useUi, ActionLink, Button, Field, PageHeading, PageScrollView, SettingsGroup, StatusPill, humanError } from "./ui";
 import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import {
@@ -8,7 +9,6 @@ import {
   type ServiceStatus,
 } from "./api";
 import { saveConnection } from "./storage";
-import { ActionLink, Button, Field, PageHeading, PageScrollView, SettingsGroup, StatusPill, humanError, s } from "./ui";
 
 export function ConnectionForm({
   initial,
@@ -17,6 +17,7 @@ export function ConnectionForm({
   initial?: Connection;
   onConnect: (connection: Connection) => void;
 }) {
+  const { s } = useUi();
   const [url, setUrl] = useState(initial?.url ?? "");
   const [token, setToken] = useState(initial?.token ?? "");
   const [busy, setBusy] = useState(false);
@@ -93,6 +94,7 @@ export function PersonaSettingsPanel({
   assistant: Assistant;
   onAssistant: (assistant: Assistant) => void;
 }) {
+  const { s } = useUi();
   const [name, setName] = useState(assistant.name);
   const [persona, setPersona] = useState(assistant.persona);
   const [busy, setBusy] = useState(false);
@@ -158,6 +160,7 @@ export function ConnectionSettingsPanel({ connection, onConnect, onDisconnect, o
   onDisconnect?: () => void;
   onExplore?: () => void;
 }) {
+  const { s } = useUi();
   return (
     <PageScrollView>
       <PageHeading title="服务连接" description="连接你的知行，继续聊天与工作。" />

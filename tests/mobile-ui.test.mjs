@@ -21,8 +21,11 @@ function loadUiModule(name, dependencies) {
 }
 
 const theme = loadUiModule("theme.ts", {});
+let activeColors = theme.lightColors;
 const ui = loadUiModule("ui.tsx", {
   "./theme": theme,
+  "./ThemeProvider": { useTheme: () => ({ colors: activeColors, mode: activeColors === theme.darkColors ? "dark" : "light" }), useThemedStyles: (factory) => factory(activeColors) },
+  "./AppearanceControl": { AppearanceControl: "AppearanceControl" },
   "react/jsx-runtime": jsxRuntime,
   "react-native": { ScrollView: "ScrollView", Pressable: "Pressable", Text: "Text", View: "View", useWindowDimensions: () => ({ width: 320 }), StyleSheet: { create: (styles) => styles } },
   "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
@@ -62,4 +65,40 @@ test("shared controls preserve action callbacks, disabled state and accessible n
   assert.equal(link.props.accessibilityRole, "button");
   link.props.onPress();
   assert.equal(calls, 3);
+});
+
+
+test("shared controls and surfaces change together without inverted button labels", () => {
+  for (const palette of [theme.lightColors, theme.darkColors]) {
+    activeColors = palette;
+    const shared = ui.useUi();
+    assert.equal(shared.s.root.backgroundColor, palette.paper);
+    assert.equal(shared.s.input.backgroundColor, palette.surfaceRaised);
+    assert.equal(shared.s.input.color, palette.ink);
+    const group = ui.SettingsGroup({ title: "模型与服务", children: "rows" });
+    assert.equal(group.props.children[1].props.style.backgroundColor, palette.surfaceRaised);
+    assert.equal(group.props.children[0].props.style.color, palette.muted);
+    const button = ui.Button({ children: "保存", onPress() {} });
+    assert.equal(button.props.style({ pressed: false })[0].backgroundColor, palette.primary);
+    const label = button.props.children.find((node) => node?.type === "Text");
+    assert.equal(label.props.style[0].color, palette.onPrimary);
+    assert.notEqual(label.props.style[0].color, palette.primary);
+    assert.equal(ui.IconBadge({ name: "bulb", tone: "gold" }).props.children.props.color, palette.gold);
+  }
+  activeColors = theme.lightColors;
+});
+
+test("Markdown switches syntax highlighting as well as the surrounding reading surfaces", () => {
+  const markdown = loadUiModule("MessageBody.tsx", {
+    "react/jsx-runtime": jsxRuntime,
+    "react-native": { Text: "Text" },
+    "@ronradtke/react-native-markdown-display": { __esModule: true, default: "Markdown" },
+    "./ThemeProvider": { useTheme: () => ({ mode: "dark" }), useThemedStyles: (factory) => factory(theme.darkColors) },
+  });
+  const body = markdown.MessageBody({ children: "```js\nconst value = 1;\n```" });
+  assert.equal(body.props.colorScheme, "dark");
+  assert.equal(body.props.style.fence_code.backgroundColor, theme.darkColors.surfaceRaised);
+  assert.equal(body.props.style.fence_copy_text.color, theme.darkColors.muted);
+  assert.equal(body.props.onLinkPress("https://example.com"), true);
+  assert.equal(body.props.onLinkPress("javascript:alert(1)"), false);
 });

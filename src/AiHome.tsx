@@ -1,3 +1,6 @@
+import type { ThemeColors } from "./theme";
+import { useUi } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ConversationComposer } from "./ConversationComposer";
@@ -6,7 +9,6 @@ import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { type Connection, type ModelCatalog, type ReasoningEffort } from "./api";
 import { ModelPicker } from "./ModelPicker";
 import { SearchPicker } from "./SearchPicker";
-import { colors, s } from "./ui";
 
 type Kind = "chat" | "task";
 
@@ -54,6 +56,8 @@ export function AiHome({
   onFiles: () => void;
   onSend: () => void;
 }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [showModels, setShowModels] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
@@ -98,16 +102,16 @@ export function AiHome({
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   content: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 24, paddingBottom: 28 },
   hero: { alignItems: "flex-start", marginBottom: 32 },
-  orbit: { width: 78, height: 78, borderWidth: 2, borderColor: "#F0D4D0", borderRadius: 39, alignItems: "center", justifyContent: "center", marginBottom: 23 },
-  mark: { width: 60, height: 60, borderRadius: 36, backgroundColor: colors.white, alignItems: "center", justifyContent: "center", shadowColor: colors.accent, shadowOpacity: 0.08, shadowRadius: 16, elevation: 2 },
-  sparkle: { position: "absolute", right: -2, top: 0, width: 38, height: 38, borderRadius: 19, backgroundColor: colors.white, alignItems: "center", justifyContent: "center" },
+  orbit: { width: 78, height: 78, borderWidth: 2, borderColor: colors.line, borderRadius: 39, alignItems: "center", justifyContent: "center", marginBottom: 23 },
+  mark: { width: 60, height: 60, borderRadius: 36, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center", shadowColor: colors.accent, shadowOpacity: 0.08, shadowRadius: 16, elevation: 2 },
+  sparkle: { position: "absolute", right: -2, top: 0, width: 38, height: 38, borderRadius: 19, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center" },
   greeting: { color: colors.ink, fontSize: 28, fontWeight: "700", lineHeight: 38 },
   subtitle: { color: colors.muted, fontSize: 14, lineHeight: 22, marginTop: 7 },
   question: { color: colors.muted, fontSize: 15, marginBottom: 14 },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  suggestion: { width: "48%", flexGrow: 1, minHeight: 54, backgroundColor: colors.white, borderColor: colors.line, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 8 },
+  suggestion: { width: "48%", flexGrow: 1, minHeight: 54, backgroundColor: colors.surfaceRaised, borderColor: colors.line, borderWidth: 1, borderRadius: 14, paddingHorizontal: 12, flexDirection: "row", alignItems: "center", gap: 8 },
   suggestionText: { color: colors.ink, fontSize: 13, fontWeight: "500", flex: 1 },
 });

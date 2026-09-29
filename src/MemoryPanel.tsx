@@ -1,13 +1,18 @@
+import type { ThemeColors } from "./theme";
+import { useUi, humanError } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { request, type Connection, type Page } from "./api";
-import { colors, humanError, s } from "./ui";
+
 import { layout, radius, space, typography } from "./theme";
 
 type Memory = { id: string; content: string; seq: number };
 
 export function MemoryPanel({ connection, onBack }: { connection: Connection; onBack: () => void }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [items, setItems] = useState<Memory[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [busy, setBusy] = useState(true);
@@ -62,7 +67,7 @@ export function MemoryPanel({ connection, onBack }: { connection: Connection; on
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   root: { flex: 1 },
   header: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingTop: space.sm, paddingBottom: space.md, borderBottomWidth: 1, borderBottomColor: colors.line },
   iconButton: { width: layout.touchTarget, height: layout.touchTarget, alignItems: "center", justifyContent: "center", borderRadius: radius.control },
