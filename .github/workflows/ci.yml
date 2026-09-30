@@ -10,6 +10,61 @@ permissions:
   contents: read
 
 jobs:
+  backend:
+    name: Backend and harness regression
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
+          enable-cache: true
+      - run: uv sync --locked --python 3.12
+      - run: uv run ruff check .
+      - run: uv run pytest -q --junitxml=../test-results/backend.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-results
+          path: test-results
+  mobile:
+    name: Mobile checks and bundles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:mobile
+      - run: npm run bundle:android
+      - run: npm run bundle:ios
+  sandbox:
+    name: Docker execution and recovery
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.19"
+          enable-cache: true
+      - run: uv sync --locked --python 3.12
+      - run: docker build -t zhixing-sandbox:1 sandbox
+      - run: ZHIXING_TEST_DOCKER=1 uv run pytest -q tests/test_execution.py tests/test_harness.py --junitxml=../test-results/sandbox.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-results
+          path: test-results
   policy:
     name: PR policy
     runs-on: ubuntu-latest

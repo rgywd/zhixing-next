@@ -28,6 +28,7 @@ function screen(item, decisionError = false, pollError = () => null) {
       useEffect(effect) { if (!mounted) { mounted = true; effect(); } },
     },
     "react-native": { View: "View", Text: "Text" },
+    "./QuestionCards": { QuestionCards: "QuestionCards" },
     "./ConnectionStatus": { useSyncStatus: () => (error) => reports.push(error) },
     "./ui": { Button: "Button", useUi: () => ({ s: {} }), humanError: (error) => error.message },
     "./resources": { shareDownload: async (...args) => { calls.push(args); } },

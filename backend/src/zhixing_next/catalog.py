@@ -40,7 +40,7 @@ def migrate(db, settings):
 
 
 def model_fields(config):
-    return config.model_dump(include={"model", "display_name", "temperature", "reasoning_effort", "reasoning_levels", "timeout", "image_input"})
+    return config.model_dump(include={"model", "display_name", "temperature", "reasoning_effort", "reasoning_levels", "timeout", "image_input", "context_window"})
 
 
 def config_for(provider, model):
@@ -71,7 +71,7 @@ def snapshot(db, run_id, model_id):
 def public_model(identifier, config, **extra):
     return dict(id=identifier, name=config.display_name or config.model, model=config.model,
                 provider=config.provider or PROTOCOL_NAMES[config.protocol], protocol=config.protocol,
-                ready=bool(model_key(config)), image_input=config.image_input,
+                ready=bool(model_key(config)), image_input=config.image_input, context_window=config.context_window,
                 reasoning_levels=config.reasoning_levels, default_reasoning_effort=config.reasoning_effort,
                 **extra)
 

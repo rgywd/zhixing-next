@@ -45,3 +45,20 @@ network_authorization = "ask" # bridge: once per task; allow means persistent au
 memory_mb = 2048
 cpus = 2
 timeout_seconds = 120
+# Optional dedicated folder containing <skill-name>/SKILL.md. Snapshotted read-only.
+# skills_dir = "./skills"
+
+[limits]
+model_attempts = 80 # Includes retries and child agents, across recovery.
+tool_calls = 160
+total_tokens = 1000000 # Stops the next call after the reported cumulative limit.
+active_seconds = 1800
+retries = 3
+retry_base_seconds = 1
+
+# Scoped GitLab integration. Enable only projects the assistant should access.
+[gitlab]
+url = "https://gitlab.com" # Or your self-hosted HTTPS instance.
+token_env = "ZHIXING_GITLAB_TOKEN"
+projects = [] # Numeric project IDs or namespace/project paths; at most 30.
+allow_writes = false # true exposes issue creation/update, each requiring App approval.

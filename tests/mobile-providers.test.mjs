@@ -65,13 +65,14 @@ test("explicit credential clear cannot submit a replacement key at the same time
 });
 
 test("model editing preserves draft on failure and removes an unsupported default depth", async () => {
-  const model = { model: "one", name: "One", enabled: true, image_input: false, reasoning_levels: ["high"], default_reasoning_effort: "high", temperature: null, timeout: 60 };
+  const model = { model: "one", name: "One", enabled: true, image_input: false, reasoning_levels: ["high"], default_reasoning_effort: "high", temperature: null, timeout: 60, context_window: 32768 };
   let submitted;
   const page = form("ManagedModelForm", { protocol: "chat_completions", model, onSave: async (input) => { submitted = input; throw new Error("配置已更新"); } });
   page.nodes().find((item) => item.props.accessibilityLabel === "支持高思考").props.onPress();
   page.field("显示名称").props.onChangeText("自己的名字");
   page.save(); await settle();
   assert.equal(submitted.reasoning_effort, null);
+  assert.equal(submitted.context_window, 32768);
   assert.equal(submitted.reasoning_levels.length, 0);
   assert.equal(page.field("显示名称").props.value, "自己的名字");
   assert.ok(page.nodes().some((item) => item.props.children === "配置已更新"));

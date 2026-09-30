@@ -57,6 +57,8 @@ def create_model(
     }
     if max_tokens is not None:
         options["max_tokens"] = max_tokens
+    if config.context_window:
+        options["profile"] = {"max_input_tokens": config.context_window}
     if config.base_url is not None:
         options["base_url"] = config.base_url
     if config.temperature is not None:

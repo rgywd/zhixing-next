@@ -17,6 +17,7 @@ export function providerInput(provider: ModelProvider | undefined, form: Provide
 }
 export function modelInput(model?: ManagedModel): ManagedModelInput {
   return {
+    context_window: model?.context_window,
     model: model?.model ?? "", display_name: model?.name ?? null, enabled: model?.enabled ?? true,
     image_input: model?.image_input ?? false, reasoning_levels: model?.reasoning_levels ?? [],
     reasoning_effort: model?.default_reasoning_effort ?? null, temperature: model?.temperature ?? null, timeout: model?.timeout ?? 60,

@@ -66,13 +66,19 @@ class Worker:
         try:
             assistant = self.store.get_assistant()
             run["agent"] = self.store.get_agent(run["agent_id"]) if run.get("agent_id") else None
-            run["agents"] = self.store.list_agents()["items"] if not run.get("agent_id") else []
+            run["agents"] = self.store.agents_for_run(run) if not run.get("agent_id") else []
             run["search_provider"] = self.store.get_search_provider(run["search_provider_id"]) if run.get("search_provider_id") else None
             result = await self.runner(
                 self.store.settings_for_run(run), run,
                 persona=f"Assistant name: {assistant['name']}\n{assistant['persona']}", emit=emit,
                 controls=controls, acknowledge=acknowledge,
             )
+            from .taskflow import TaskFlow
+
+            incomplete = [step for step in TaskFlow(self.store).steps(run_id) if step["status"] != "passed"]
+            if incomplete:
+                self.store.finish_run(run_id, "failed", result=result, error="部分完成条件尚未满足，见任务步骤与已有交付。")
+                return
             self.store.finish_run(run_id, "completed", result=result)
             current_input = "\n".join(item["content"] for item in self.store.memory_context(run_id))
             if explicit_memory_request(current_input) and not await self._organize(run):
@@ -88,9 +94,10 @@ class Worker:
         except Exception as exc:
             # Vendor exception strings can contain request payloads and credentials.
             # Keep user-facing diagnostics bounded to known configuration errors.
+            from .resilience import RunLimitError
             from .runtime import RuntimeConfigurationError
 
-            message = str(exc) if isinstance(exc, RuntimeConfigurationError) else (
+            message = str(exc) if isinstance(exc, (RuntimeConfigurationError, RunLimitError)) else (
                 f"运行失败（{type(exc).__name__}）。请检查模型配置或服务连接后继续。"
             )
             logger.warning("run %s failed (%s)", run_id, type(exc).__name__)

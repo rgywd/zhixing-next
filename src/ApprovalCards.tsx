@@ -4,6 +4,7 @@ import { Text, View } from "react-native";
 import { ApiError, request, type Approval, type Connection, type Page } from "./api";
 import { useSyncStatus } from "./ConnectionStatus";
 import { shareDownload } from "./resources";
+import { QuestionCards } from "./QuestionCards";
 
 export function ApprovalCards({ connection, conversationId, runId, onChanged }: {
   connection: Connection;
@@ -57,6 +58,7 @@ export function ApprovalCards({ connection, conversationId, runId, onChanged }: 
     } catch (e) { setError(humanError(e)); } finally { setBusy(false); }
   }
   return <View style={{ gap: 12 }}>
+    <QuestionCards connection={connection} conversationId={conversationId} runId={runId} onChanged={onChanged} />
     {items.map((item) => <View key={item.id} style={s.card}>
       <CardHeader icon={item.kind === "uncertain" ? "help-circle-outline" : "shield-checkmark-outline"} title={item.details.title} description={item.details.description} tone={item.kind === "uncertain" ? "gold" : "blue"} />
       {item.details.task ? <Text style={s.text}>{item.details.task}</Text> : null}

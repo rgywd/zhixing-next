@@ -31,7 +31,13 @@ EFFECT_TOOLS = {
     "schedule_task",
     "set_schedule_enabled",
     "start_background_task",
+    "check_task_step",
+    "start_process",
+    "stop_process",
+    "gitlab_create_issue",
+    "gitlab_update_issue",
 }
+READ_TOOLS = {"fetch_public_page", "search_web", "read_document", "read_text_file", "search_history", "read_history", "read_history_message", "find_resources", "read_saved_resource", "gitlab_projects", "gitlab_issues", "gitlab_read_issue"}
 LIMIT = 20 * 1024 * 1024
 
 
@@ -175,8 +181,8 @@ class Journal:
                 "SELECT 1 FROM approvals WHERE run_id=? AND state='pending'", (run["id"],)
             ).fetchone():
                 db.execute(
-                    "UPDATE runs SET phase='recovering' WHERE id=? AND status='queued'",
-                    (run["id"],),
+                    "UPDATE runs SET phase=? WHERE id=? AND status='queued'",
+                    ("input" if db.execute("SELECT 1 FROM input_requests WHERE run_id=? AND state='pending'", (run["id"],)).fetchone() else "recovering", run["id"]),
                 )
             return approval_record(self.store._require(db, "approvals", identifier))
 
@@ -430,13 +436,13 @@ class OperationRunner:
 
     async def _invoke(self, call, handler):
         name = call["name"]
-        if name not in EFFECT_TOOLS:
+        if name not in EFFECT_TOOLS | READ_TOOLS:
             return await handler()
         if (
             self.sandbox
             and self.settings.execution.network == "bridge"
             and self.settings.execution.network_authorization == "ask"
-            and name in {"execute", "browser_action", "write_file", "edit_file", "delete"}
+            and name in {"execute", "browser_action", "write_file", "edit_file", "delete", "start_process", "check_task_step"}
         ):
             scope_id = str(uuid5(NAMESPACE_URL, f"network:{self.run['id']}"))
             decision = self.approval(
@@ -480,6 +486,15 @@ class OperationRunner:
                         status="error",
                     )
             return decode_result(operation["result"])
+        if name in {"gitlab_create_issue", "gitlab_update_issue"}:
+            if not self.settings.gitlab.allow_writes or call["args"].get("project") not in self.settings.gitlab.projects:
+                raise ValueError("GitLab write is outside the configured scope")
+            permission_id = str(uuid5(NAMESPACE_URL, f"gitlab:{identifier}"))
+            decision = self.approval(permission_id, "external_write", {"title": "提交 GitLab 修改", "description": f"向 {self.settings.gitlab.url} 提交下方指定项目和内容的一次修改。", "tool": name, "arguments": call["args"], "service": self.settings.gitlab.url}, identifier)
+            if decision != "approve":
+                result = ToolMessage(content="GitLab change was denied. Do not submit it.", tool_call_id=call["id"], status="error")
+                self.journal.set_state(identifier, "denied", encode_result(result))
+                return result
         if plan["kind"] == "file":
             if plan["requires_approval"]:
                 decision = self.approval(
@@ -517,7 +532,7 @@ class OperationRunner:
             result = ToolMessage(content=_json(receipt), tool_call_id=call["id"])
             self.journal.set_state(identifier, "succeeded", encode_result(result))
             return result
-        if operation["state"] == "started":
+        if operation["state"] == "started" and name not in READ_TOOLS:
             receipt = self.journal.reconcile_service(operation)
             if receipt is not None:
                 result = ToolMessage(content=_json(receipt), tool_call_id=call["id"])
@@ -546,8 +561,14 @@ class OperationRunner:
                 self.journal.set_state(identifier, "unconfirmed", encode_result(result))
                 return result
         self.journal.set_state(identifier, "started")
+        from .gitlab import ExternalEffectUncertain
+
         try:
             result = await handler()
+        except ExternalEffectUncertain:
+            # Re-enter the existing unknown-outcome branch. Its interrupt keeps
+            # state='started', so a restart cannot turn a timeout into safe replay.
+            return await self._invoke(call, handler)
         except GraphInterrupt:
             self.journal.set_state(identifier, "prepared")
             raise
