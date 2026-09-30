@@ -589,9 +589,7 @@ class Store:
             if model_id is not None and model_id not in models:
                 raise StoreError("unknown_model", "Choose an enabled model", 422)
             conversation = self._require(db, "conversations", conversation_id)
-            if conversation["agent_id"] is not None:
-                raise StoreError("agent_model", "Model controls belong to main assistant chats", 422)
-            selected = model_id or self._role_model(db, "chat")
+            selected = self._conversation_model(db, conversation, "chat", model_id, use_preference=False)
             if reasoning_effort is not None and (
                 selected not in models or reasoning_effort not in models[selected].reasoning_levels
             ):
@@ -729,24 +727,27 @@ class Store:
             })
         return {"items": results}
 
-    def _enqueue(self, db, conversation_id, message_id, content, kind, request_json, model_override=None, reasoning_override=None, search_provider_id=None):
-        run_id, now = str(uuid4()), timestamp()
-        conversation = self._require(db, "conversations", conversation_id)
-        model_id = model_override or (
-            conversation["model_id"]
-            if kind == "chat" and conversation["agent_id"] is None and conversation["model_id"]
-            else self._role_model(db, kind)
-        )
-        reasoning_effort = reasoning_override if reasoning_override is not None else (
-            conversation["reasoning_effort"]
-            if kind == "chat" and conversation["agent_id"] is None else None
-        )
+    def _conversation_model(self, db, conversation, kind, override=None, *, use_preference=True):
+        if override:
+            return override
+        if use_preference and kind == "chat" and conversation["model_id"]:
+            return conversation["model_id"]
         if conversation["agent_id"]:
             assigned = self._require(db, "agents", conversation["agent_id"])["model_id"]
             if assigned:
                 if assigned not in self.runtime_settings(db).models:
-                    raise StoreError("unknown_model", "助手模型已停用或移除，请在助手设置中重新选择。", 422)
-                model_id = assigned
+                    raise StoreError("unknown_model", "助手模型已停用或移除，请重新选择模型。", 422)
+                return assigned
+        return self._role_model(db, kind)
+
+    def _enqueue(self, db, conversation_id, message_id, content, kind, request_json, model_override=None, reasoning_override=None, search_provider_id=None):
+        run_id, now = str(uuid4()), timestamp()
+        conversation = self._require(db, "conversations", conversation_id)
+        model_id = self._conversation_model(db, conversation, kind, model_override)
+        reasoning_effort = reasoning_override if reasoning_override is not None else (
+            conversation["reasoning_effort"]
+            if kind == "chat" else None
+        )
         db.execute(
             "INSERT INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at,request_json) VALUES(?,?,'user',?,'queue',?,'accepted',?,?)",
             (message_id, conversation_id, content, run_id, now, request_json),
@@ -835,17 +836,15 @@ class Store:
             else:
                 conversation = self._require(db, "conversations", conversation_id)
                 models = self.runtime_settings(db).models
-                if model_id is not None and (conversation["agent_id"] is not None or model_id not in models):
-                    raise StoreError("unknown_model", "Choose a configured model for the main assistant", 422)
-                selected_model = model_id or (conversation["model_id"] if kind == "chat" and conversation["agent_id"] is None and conversation["model_id"] else self._role_model(db, kind))
+                if model_id is not None and model_id not in models:
+                    raise StoreError("unknown_model", "Choose an enabled model", 422)
+                selected_model = self._conversation_model(db, conversation, kind, model_id)
                 if reasoning_effort is not None and (
-                    conversation["agent_id"] is not None or selected_model not in models
+                    selected_model not in models
                     or reasoning_effort not in models[selected_model].reasoning_levels
                 ):
                     raise StoreError("unsupported_reasoning", "This model does not support that thinking depth", 422)
                 if search_provider_id is not None:
-                    if conversation["agent_id"] is not None:
-                        raise StoreError("agent_search", "Search controls belong to main assistant chats", 422)
                     self._require(db, "search_providers", search_provider_id)
                 run_id = self._enqueue(db, conversation_id, id, content, kind, request_json, model_id, reasoning_effort, search_provider_id)
             if any(item["mime_type"].startswith("image/") for item in resources):

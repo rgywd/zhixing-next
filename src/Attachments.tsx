@@ -22,7 +22,7 @@ export function Attachments({ connection, items = [], remove }: {
   });
   if (!items.length) return null;
   return <>
-    <ScrollView horizontal contentContainerStyle={{ gap: 8, paddingVertical: 6 }}>
+    <ScrollView horizontal style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 8, paddingVertical: 6 }}>
       {items.map((item) => <View key={item.id} style={{ padding: 8, borderRadius: 12, backgroundColor: colors.blueSoft, maxWidth: 170, minWidth: 130, gap: 4 }}>
         {item.mime_type.startsWith("image/") ? <Pressable accessibilityRole="button" accessibilityLabel={`查看图片 ${item.name}`} onPress={() => setSelected(item)}>
           <Image source={source(item)} accessibilityLabel={item.name} style={{ width: 140, height: 95, borderRadius: 8 }} resizeMode="cover" />

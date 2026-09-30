@@ -389,7 +389,7 @@ async def _run_agent(
     workspace.mkdir(parents=True, exist_ok=True)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     config = {"configurable": {"thread_id": run["conversation_id"]}, "recursion_limit": 100}
-    search_enabled = run.get("search_provider") is not None and not run.get("agent_id")
+    search_enabled = run.get("search_provider") is not None
     store = Store(settings)
     from .taskflow import TaskFlow, create_taskflow_tools
 
@@ -397,7 +397,8 @@ async def _run_agent(
     forgetting = forget_memory_request(run["prompt"])
     reset_revision = store.memory_reset_revision(run["conversation_id"])
     direct_agent = run.get("agent")
-    physical_tools = [*create_file_tools(settings, workspace), fetch_public_page]
+    file_settings = settings.model_copy(update={"grants": []}) if direct_agent and direct_agent["id"] == "finance" else settings
+    physical_tools = [*create_file_tools(file_settings, workspace), fetch_public_page]
     if sandbox:
         from .artifacts import create_artifact_tool
         from .browser import create_browser_tool
@@ -413,7 +414,7 @@ async def _run_agent(
     if not images_enabled and any(item["mime_type"].startswith("image/") for item in run.get("attachments", [])):
         raise RuntimeConfigurationError("当前执行模型不支持本次图片输入，请启用已验证的视觉模型后重新发送。")
     if images_enabled:
-        physical_tools.append(create_image_tool(settings, workspace, run["conversation_id"]))
+        physical_tools.append(create_image_tool(file_settings, workspace, run["conversation_id"]))
     if not direct_agent and not forgetting:
         from .gitlab import create_gitlab_tools
         from .retrieval import create_retrieval_tools
@@ -443,6 +444,14 @@ async def _run_agent(
     operations = OperationRunner(settings, {**run, "workspace_path": str(workspace)}, sandbox)
     middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"])
     assigned_tools = [by_name[name] for name in direct_agent["tools"] if name in by_name] if direct_agent else physical_tools
+    if direct_agent and direct_agent["id"] == "finance":
+        # Finance attachments are readable only inside this conversation's workspace.
+        assigned_tools.extend(
+            tool for tool in physical_tools
+            if tool.name in {"list_directory", "read_text_file", "read_document"}
+        )
+    if direct_agent and search_enabled:
+        assigned_tools.append(by_name["search_web"])
     system_prompt = (
         "You are the user's personal assistant. Be truthful about tool results and capability limits. "
         + ("Your filesystem and execute tools operate in an isolated Linux container. /workspace is the persistent project directory shared with physical tools and the App. Use relative paths with physical file tools. /skills contains tested workflows; /tmp is temporary. No host credentials or service databases are mounted. Run scripts to solve tasks, inspect errors and repair them. Read back and validate deliverables before reporting completion. Maintain a concise WORKING.md with the goal, constraints, progress and outstanding issues during long tasks. " if sandbox else
@@ -474,7 +483,7 @@ async def _run_agent(
     if direct_agent:
         system_prompt += (
             f"\n\nYou are the dedicated {direct_agent['name']} agent. {direct_agent['description']} "
-            f"Only use your assigned physical tools: {', '.join(direct_agent['tools']) or 'none'}. "
+            f"Only use your assigned physical tools: {', '.join(tool.name for tool in assigned_tools) or 'none'}. "
             f"Cite sources when relevant.\nInstructions:\n{direct_agent['instructions']}"
         )
     else:

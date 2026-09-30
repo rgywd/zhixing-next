@@ -130,7 +130,8 @@ def test_memory_management_is_authenticated_and_has_no_mobile_dependency(client)
     assert client.get("/v1/memories").json()["items"] == []
 
 
-def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch):
+@pytest.mark.parametrize("agent_id", [None, "finance"])
+def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch, agent_id):
     monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "placeholder-for-unit-test-only")
     settings.models = {
         "one": ModelConfig(
@@ -151,7 +152,7 @@ def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch):
         assert catalog["items"][0]["ready"] is True
         assert "api_key_env" not in str(catalog)
         assert "base_url" not in str(catalog)
-        conversation = client.post("/v1/conversations", json={"title": "模型切换"}).json()
+        conversation = client.post("/v1/conversations", json={"title": "模型切换", "agent_id": agent_id}).json()
         path = f"/v1/conversations/{conversation['id']}/model"
         assert client.put(path, json={"model_id": "two", "reasoning_effort": "low"}).status_code == 422
         assert client.put(path, json={"model_id": "two", "reasoning_effort": "high"}).json()["model_id"] == "two"
@@ -185,20 +186,18 @@ def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch):
         }).json()["run"]
         assert third["model_id"] == "two"
         assert client.put("/v1/models/roles/chat", json={"model_id": "missing"}).status_code == 422
-        finance = client.post("/v1/conversations", json={"title": "财务", "agent_id": "finance"}).json()
-        assert client.put(f"/v1/conversations/{finance['id']}/model", json={
-            "model_id": "one", "reasoning_effort": None,
-        }).status_code == 422
+        assert client.get(f"/v1/conversations/{conversation['id']}").json()["agent_id"] == agent_id
 
 
-def test_search_provider_secret_stays_server_side_and_run_selection_is_snapshot(client):
+@pytest.mark.parametrize("agent_id", [None, "finance"])
+def test_search_provider_secret_stays_server_side_and_run_selection_is_snapshot(client, agent_id):
     created = client.post("/v1/search/providers", json={"name": "我的 Brave", "kind": "brave", "api_key": "private-test-key"})
     assert created.status_code == 201
     provider = created.json()
     listed = client.get("/v1/search/providers").json()
     assert listed["items"] == [provider]
     assert "private-test-key" not in str(listed)
-    conversation = client.post("/v1/conversations", json={"title": "联网测试"}).json()
+    conversation = client.post("/v1/conversations", json={"title": "联网测试", "agent_id": agent_id}).json()
     path = f"/v1/conversations/{conversation['id']}/messages"
     receipt = client.post(path, json={"id": "search-1", "content": "查一下", "search_provider_id": provider["id"]})
     assert receipt.status_code == 200
@@ -208,6 +207,39 @@ def test_search_provider_secret_stays_server_side_and_run_selection_is_snapshot(
     assert client.post(path, json={"id": "search-1", "content": "查一下", "search_provider_id": "missing"}).status_code == 409
     assert client.post(path, json={"id": "search-2", "content": "查一下", "search_provider_id": "missing"}).status_code == 404
     assert client.post(path, json={"id": "search-3", "content": "查一下", "intent": "steer", "target_run_id": "run-1", "search_provider_id": provider["id"]}).status_code == 422
+
+
+@pytest.mark.parametrize("kind", ["chat", "task"])
+def test_direct_agent_model_priority_and_snapshot(settings, monkeypatch, kind):
+    monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "fixture-only-key")
+    settings.models = {
+        name: ModelConfig(
+            protocol="chat_completions", model=name, api_key_env="ZHIXING_TEST_MODEL_KEY",
+            reasoning_levels=["high"],
+        ) for name in ("global", "assigned", "chosen")
+    }
+    settings.roles = {"chat": "global", "task": "global"}
+    with TestClient(create_app(settings), headers={"Authorization": f"Bearer {settings.api_token}"}) as client:
+        agent = client.post("/v1/agents", json={
+            "name": "资料助手", "description": "读取资料", "instructions": "", "tools": [],
+            "visible": True, "model_id": "assigned",
+        }).json()
+        conversation = client.post("/v1/conversations", json={"title": "专用助手", "agent_id": agent["id"]}).json()
+        prefix = f"/v1/conversations/{conversation['id']}"
+        inherited = client.post(f"{prefix}/messages", json={"id": "inherited", "content": "默认", "kind": kind}).json()["run"]
+        assert inherited["model_id"] == "assigned"
+        assert client.put(f"{prefix}/model", json={"model_id": "chosen", "reasoning_effort": "high"}).status_code == 200
+        preference = client.post(f"{prefix}/messages", json={"id": "preference", "content": "会话", "kind": kind}).json()["run"]
+        assert preference["model_id"] == ("chosen" if kind == "chat" else "assigned")
+        override = client.post(f"{prefix}/messages", json={
+            "id": "override", "content": "本次", "kind": kind, "model_id": "global", "reasoning_effort": "high",
+        }).json()["run"]
+        assert (override["model_id"], override["reasoning_effort"]) == ("global", "high")
+        assert client.put(f"{prefix}/model", json={"model_id": None, "reasoning_effort": "high"}).status_code == 200
+        cleared = client.post(f"{prefix}/messages", json={"id": "cleared", "content": "清除", "kind": kind}).json()["run"]
+        assert cleared["model_id"] == "assigned"
+        assert client.get(f"/v1/runs/{preference['id']}").json()["model_id"] == preference["model_id"]
+        assert client.get(f"{prefix}").json()["agent_id"] == agent["id"]
 
 
 def test_agents_are_persistent_bound_and_conversation_owned(client):

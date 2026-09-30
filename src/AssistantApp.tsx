@@ -651,7 +651,7 @@ function ConnectedSession({
             openMainChat();
           }} />
         ) : financeConversation ? (
-          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} onBack={() => setLifeView("overview")} onRefresh={refresh} />
+          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} catalog={catalog} agentModelId={agents.find((item) => item.id === financeConversation.agent_id)?.model_id ?? null} onBack={() => setLifeView("overview")} onRefresh={refresh} onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))} />
         ) : (
           <View style={[s.body, { padding: 16, gap: 12 }]}>
             <BackLink label="生活" onPress={() => setLifeView("overview")} />
@@ -689,6 +689,7 @@ function ConnectedSession({
               focusMessageSeq={focusMessage?.conversationId === selected.id ? focusMessage.seq : null}
               assistantName={agents.find((item) => item.id === selected.agent_id)?.name ?? assistant?.name ?? "知行"}
               catalog={catalog}
+              agentModelId={agents.find((item) => item.id === selected.agent_id)?.model_id ?? null}
               initialKind={chatStart?.id === selected.id ? chatStart.kind : "chat"}
               initialTaskModelId={chatStart?.id === selected.id ? chatStart.taskModelId : null}
               initialTaskEffort={chatStart?.id === selected.id ? chatStart.taskEffort : null}
