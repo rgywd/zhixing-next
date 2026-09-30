@@ -6,13 +6,10 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { ModelInfo, ReasoningEffort } from "./api";
 import { BottomSheet } from "./BottomSheet";
-import { reasoningLabel } from "./ModelPicker";
+import { thinkingDescription, thinkingLabel } from "./reasoning";
 
 import { radius, space, typography } from "./theme";
 
-const descriptions: Record<ReasoningEffort, string> = {
-  auto: "交给模型决定思考深度", none: "关闭额外思考", low: "轻量思考，快速回应", medium: "兼顾速度与推敲", high: "为复杂问题多想一步", xhigh: "使用当前模型最高思考档位",
-};
 export function ReasoningPicker({ visible, model, selected, onSelect, onClose }: {
   visible: boolean; model?: ModelInfo; selected: ReasoningEffort | null;
   onSelect: (value: ReasoningEffort | null) => Promise<void>; onClose: () => void;
@@ -32,13 +29,13 @@ export function ReasoningPicker({ visible, model, selected, onSelect, onClose }:
     <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
       <View style={styles.preview}>
         <View style={styles.bulb}><Ionicons name={depth === "none" ? "bulb-outline" : "bulb"} size={29} color={depth === "none" ? colors.muted : colors.gold} /></View>
-        <Text style={s.title}>{reasoningLabel[depth]}</Text><Text style={s.muted}>{descriptions[depth]}</Text>
+        <Text style={s.title}>{thinkingLabel(model, depth)}</Text><Text style={s.muted}>{thinkingDescription(model, depth)}</Text>
       </View>
       <View accessibilityRole="radiogroup" style={styles.steps}>
         <View style={styles.track} />
-        {levels.map((level) => <Pressable key={level} accessibilityRole="radio" accessibilityLabel={`思考深度${reasoningLabel[level]}`} accessibilityState={{ checked: depth === level, disabled: busy }} disabled={busy} onPress={() => { void choose(level); }} style={styles.step}>
+        {levels.map((level) => <Pressable key={level} accessibilityRole="radio" accessibilityLabel={`思考深度${thinkingLabel(model, level)}`} accessibilityState={{ checked: depth === level, disabled: busy }} disabled={busy} onPress={() => { void choose(level); }} style={styles.step}>
           <View style={[styles.dot, depth === level && styles.selectedDot]}>{depth === level ? <View style={styles.dotCenter} /> : null}</View>
-          <Text style={[styles.stepText, depth === level && { color: colors.gold, fontWeight: "700" }]}>{reasoningLabel[level]}</Text>
+          <Text style={[styles.stepText, depth === level && { color: colors.gold, fontWeight: "700" }]}>{thinkingLabel(model, level)}</Text>
         </Pressable>)}
       </View>
       <View style={styles.options}>

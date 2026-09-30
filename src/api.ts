@@ -24,7 +24,7 @@ export type ServiceStatus = {
   worker_online: boolean;
   execution_available: boolean;
 };
-export type ReasoningEffort = "auto" | "none" | "low" | "medium" | "high" | "xhigh";
+export type ReasoningEffort = "auto" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ModelInfo = {
   id: string;
   name: string;
@@ -34,6 +34,8 @@ export type ModelInfo = {
   ready: boolean;
   image_input: boolean;
   reasoning_levels: ReasoningEffort[];
+  reasoning_kind?: string;
+  reasoning_labels?: Partial<Record<ReasoningEffort, string>>;
   default_reasoning_effort: Exclude<ReasoningEffort, "auto"> | null;
   context_window?: number | null;
 };

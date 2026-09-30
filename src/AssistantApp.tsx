@@ -38,6 +38,7 @@ import {
   type ServiceStatus,
 } from "./api";
 import { ConnectionStatusProvider, useSyncStatus } from "./ConnectionStatus";
+import { NoticeProvider } from "./Notice";
 import { ChatPanel } from "./ChatPanel";
 import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
@@ -114,7 +115,7 @@ function ThemedApp() {
           style={s.body}
           behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
-          {!ready || !themeReady ? (
+          <NoticeProvider>{!ready || !themeReady ? (
             <ActivityIndicator style={s.body} color={colors.accent} />
           ) : connection ? (
             <Connected
@@ -128,7 +129,7 @@ function ThemedApp() {
             />
           ) : (
             <DisconnectedShell onConnect={connect} error={error} />
-          )}
+          )}</NoticeProvider>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </SafeAreaProvider>

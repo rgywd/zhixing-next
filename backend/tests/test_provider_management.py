@@ -41,6 +41,50 @@ def update(client, provider, **changes):
     return client.put(f"/v1/providers/{provider['id']}", json={**body, **changes})
 
 
+def test_name_adaptation_reaches_catalog_selection_and_frozen_run(client, settings):
+    provider = client.post("/v1/providers", json={"name": "通用兼容端点", "protocol": "chat_completions", "base_url": "https://example.invalid/v1", "api_key": "test-only"}).json()
+    models = ["qwen3.8-flash", "deepseek-v3.2", "gpt-5.2", "gemini-2.5-flash", "glm-4.7", "kimi-k2.5"]
+    response = client.post(f"/v1/providers/{provider['id']}/models", json={"revision": provider["revision"], "models": [{"model": model} for model in models]})
+    assert response.status_code == 201
+    provider = response.json()
+    for model in provider["models"]:
+        assert model["reasoning_levels"]
+        assert "api_key" not in model
+    selected = next(model for model in provider["models"] if model["model"] == "glm-4.7")
+    assert selected["reasoning_levels"] == ["auto", "none", "high"]
+    assert selected["reasoning_labels"] == {"high": "开启"}
+    assert client.put("/v1/models/roles/chat", json={"model_id": selected["id"]}).status_code == 200
+    conversation = client.post("/v1/conversations", json={"title": "matched"}).json()["id"]
+    path = f"/v1/conversations/{conversation}"
+    assert client.put(f"{path}/model", json={"model_id": selected["id"], "reasoning_effort": "low"}).status_code == 422
+    assert client.put(f"{path}/model", json={"model_id": selected["id"], "reasoning_effort": "high"}).status_code == 200
+    run = client.post(f"{path}/messages", json={"id": "thinking", "content": "你好"}).json()["run"]
+    assert run["reasoning_effort"] == "high"
+    client.put(f"/v1/providers/{provider['id']}/models/{selected['id']}", json={"revision": provider["revision"], "model": {"model": "glm-4-flash"}})
+    worker = Worker(settings)
+    claimed = worker.store.claim_next("chat")
+    frozen = worker.store.settings_for_run(claimed)
+    assert frozen.models[selected["id"]].model == "glm-4.7"
+    assert client.get(f"{path}").json()["reasoning_effort"] is None
+
+
+def test_legacy_inherited_depth_falls_back_without_rewriting_queued_run(client, settings):
+    provider = add(client)
+    selected = provider["models"][0]
+    updated = client.put(f"/v1/providers/{provider['id']}/models/{selected['id']}", json={"revision": provider["revision"], "model": {"model": "glm-4.7"}})
+    assert updated.status_code == 200
+    client.put("/v1/models/roles/chat", json={"model_id": selected["id"]})
+    conversation = client.post("/v1/conversations", json={"title": "legacy depth"}).json()["id"]
+    path = f"/v1/conversations/{conversation}"
+    client.put(f"{path}/model", json={"model_id": selected["id"], "reasoning_effort": "high"})
+    first = client.post(f"{path}/messages", json={"id": "first", "content": "first"}).json()["run"]
+    with Store(settings)._connection(write=True) as db:
+        db.execute("UPDATE conversations SET reasoning_effort='low' WHERE id=?", (conversation,))
+    second = client.post(f"{path}/messages", json={"id": "second", "content": "second"}).json()["run"]
+    assert second["reasoning_effort"] is None
+    assert client.get(f"/v1/runs/{first['id']}").json()["reasoning_effort"] == "high"
+
+
 def test_authenticated_crud_keeps_keys_private_and_blank_edits_do_not_erase(client, settings):
     assert client.post("/v1/providers", headers={"Authorization": "Bearer wrong"}, json={}).status_code == 401
     provider = add(client)
