@@ -5,7 +5,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from 
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { request, type Connection, type ModelInfo, type ReasoningEffort, type SearchProvider } from "./api";
 import { BrandIcon } from "./BrandIcon";
-import { reasoningLabel } from "./ModelPicker";
+import { thinkingLabel } from "./reasoning";
 import { radius, space, typography } from "./theme";
 
 type Props = {
@@ -38,12 +38,12 @@ export function ConversationComposer(props: Props) {
       <View style={styles.toolbar}>
         <View style={styles.choices}>
           {onModel ? <Pressable accessibilityRole="button" accessibilityLabel={`选择${kind === "task" ? "任务" : "聊天"}模型，当前${model?.name ?? "未配置"}`} disabled={optionsLocked} accessibilityState={{ disabled: optionsLocked }} onPress={onModel} style={[styles.tool, optionsLocked && styles.disabled]}><BrandIcon name={model ? `${model.model} ${model.provider}` : ""} /><Ionicons name="chevron-down" size={10} color={colors.muted} /></Pressable> : null}
-          {onSearch ? <Pressable accessibilityRole="button" accessibilityLabel={`联网搜索${searchId ? `已开启${provider?.id === searchId ? `，${provider.name}` : ""}` : "已关闭"}`} accessibilityState={{ selected: !!searchId, disabled: optionsLocked }} disabled={optionsLocked} onPress={onSearch} style={[styles.tool, !!searchId && styles.searchOn, optionsLocked && styles.disabled]}>
+          {onSearch ? <Pressable accessibilityRole="button" accessibilityLabel={`联网搜索${searchId ? `已开启${provider?.id === searchId ? `，${provider.name}` : ""}` : "已关闭"}`} accessibilityState={{ selected: !!searchId, disabled: optionsLocked }} disabled={optionsLocked} onPress={onSearch} style={[styles.tool, optionsLocked && styles.disabled]}>
             {searchId ? <BrandIcon name={provider?.id === searchId ? provider.kind : ""} search size={22} /> : <Ionicons name="globe-outline" size={22} color={colors.muted} />}
             {searchId ? <View style={styles.statusDot} /> : null}
           </Pressable> : null}
-          {onReasoning ? <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${model?.reasoning_levels.length ? reasoningLabel[depth] : "不可调整"}`} accessibilityState={{ disabled: optionsLocked || !model?.reasoning_levels.length }} disabled={optionsLocked || !model?.reasoning_levels.length} onPress={onReasoning} style={[styles.tool, styles.depth, depth !== "none" && styles.reasoningOn, (optionsLocked || !model?.reasoning_levels.length) && styles.disabled]}>
-            <Ionicons name={depth === "none" ? "bulb-outline" : "bulb"} size={21} color={depth === "none" ? colors.muted : colors.gold} /><Text style={[styles.depthLabel, depth !== "none" && { color: colors.gold }]}>{model?.reasoning_levels.length ? reasoningLabel[depth] : "—"}</Text>
+          {onReasoning ? <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${model?.reasoning_levels.length ? thinkingLabel(model, depth) : "不可调整"}`} accessibilityState={{ disabled: optionsLocked || !model?.reasoning_levels.length }} disabled={optionsLocked || !model?.reasoning_levels.length} onPress={onReasoning} style={[styles.tool, styles.depth, (optionsLocked || !model?.reasoning_levels.length) && styles.disabled]}>
+            <Ionicons name={depth === "none" ? "bulb-outline" : "bulb"} size={21} color={depth === "none" ? colors.muted : colors.gold} /><Text style={[styles.depthLabel, depth !== "none" && { color: colors.gold }]}>{model?.reasoning_levels.length ? thinkingLabel(model, depth) : "—"}</Text>
           </Pressable> : null}
           <Pressable accessibilityRole="button" accessibilityLabel={kind === "chat" ? "当前聊天，切换为任务" : "当前任务，切换为聊天"} accessibilityState={{ selected: kind === "task", disabled: !!pending || busy || props.kindLocked }} disabled={!!pending || busy || props.kindLocked} onPress={() => onKind(kind === "chat" ? "task" : "chat")} style={[styles.tool, kind === "task" && styles.taskOn, (pending || busy || props.kindLocked) && styles.disabled]}><Ionicons name={kind === "task" ? "flash" : "chatbubble-outline"} size={21} color={kind === "task" ? colors.blue : colors.muted} /></Pressable>
         </View>
@@ -63,8 +63,6 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   tool: { minWidth: 40, minHeight: 44, flexDirection: "row", gap: 2, alignItems: "center", justifyContent: "center", borderRadius: radius.small },
   depth: { paddingHorizontal: 5, gap: 3 },
   depthLabel: { ...typography.small, color: colors.muted },
-  searchOn: { backgroundColor: colors.blueSoft },
-  reasoningOn: { backgroundColor: colors.goldSoft },
   taskOn: { backgroundColor: colors.blueSoft },
   statusDot: { position: "absolute", width: 4, height: 4, borderRadius: 2, right: 5, top: 7, backgroundColor: colors.blue },
   send: { width: 40, height: 40, marginLeft: space.xs, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: colors.ink },

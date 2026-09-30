@@ -12,6 +12,8 @@ from pydantic import (
     model_validator,
 )
 
+from .reasoning import ReasoningLevel, ThinkingLevel
+
 Identifier = Annotated[
     str, StringConstraints(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 ]
@@ -48,7 +50,7 @@ class ConversationInput(Input):
 
 class ConversationModelInput(Input):
     model_id: Identifier | None
-    reasoning_effort: Literal["auto", "none", "low", "medium", "high", "xhigh"] | None
+    reasoning_effort: ReasoningLevel | None
 
 
 class ModelRoleInput(Input):
@@ -94,14 +96,14 @@ class ManagedModelInput(Input):
     display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] | None = None
     enabled: bool = True
     image_input: bool = False
-    reasoning_levels: list[Literal["auto", "none", "low", "medium", "high", "xhigh"]] = Field(default_factory=list, max_length=6)
-    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_levels: list[ReasoningLevel] = Field(default_factory=list, max_length=8)
+    reasoning_effort: ThinkingLevel | None = None
     temperature: float | None = Field(default=None, ge=0, le=2)
     timeout: float = Field(default=60, gt=0, le=300)
 
     @model_validator(mode="after")
     def default_reasoning(self):
-        if self.reasoning_effort is not None and self.reasoning_effort not in self.reasoning_levels:
+        if self.reasoning_effort is not None and "reasoning_levels" in self.model_fields_set and self.reasoning_effort not in self.reasoning_levels:
             raise ValueError("Default thinking level must be available")
         return self
 
@@ -141,7 +143,7 @@ class MessageInput(Input):
     kind: Literal["chat", "task"] = "chat"
     target_run_id: Identifier | None = None
     model_id: Identifier | None = None
-    reasoning_effort: Literal["auto", "none", "low", "medium", "high", "xhigh"] | None = None
+    reasoning_effort: ReasoningLevel | None = None
     search_provider_id: Identifier | None = None
 
     @model_validator(mode="after")
