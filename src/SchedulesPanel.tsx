@@ -1,6 +1,6 @@
 import { useUi, ActionLink, Button, Empty, Field, IconAction, PageHeading, PageScrollView, StatusPill, humanError, timeLabel } from "./ui";
 import { useEffect, useRef, useState } from "react";
-import { Alert, Text, View } from "react-native";
+import { Alert, Platform, Text, View } from "react-native";
 import * as Crypto from "expo-crypto";
 import {
   prepareSchedule,
@@ -11,6 +11,9 @@ import {
   type PlanDraft,
 } from "./api";
 import { clearPlanDraft, readPlanDraft, savePlanDraft } from "./storage";
+import { openSystemCalendar } from "./deviceCapabilities";
+import { scheduleCalendarEvent } from "./deviceCapabilityLogic";
+import { useNotice } from "./Notice";
 
 function nextHour() {
   const date = new Date(Date.now() + 3600000);
@@ -36,6 +39,7 @@ export function SchedulesPanel({
   loadMore: () => void;
 }) {
   const { s } = useUi();
+  const notice = useNotice();
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<PlanDraft>({
     prompt: "",
@@ -47,6 +51,7 @@ export function SchedulesPanel({
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const calendarBusy = useRef(false);
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -246,6 +251,14 @@ export function SchedulesPanel({
                 ? `\n最近运行 ${schedule.last_run_id.slice(0, 8)} · 在归属对话查看结果`
                 : ""}
             </Text>
+            {Platform.OS === "android" ? <ActionLink icon="calendar-outline" tone="blue" disabled={busy} onPress={() => {
+              if (calendarBusy.current) return;
+              calendarBusy.current = true; setBusy(true); setError("");
+              void Promise.resolve().then(() => openSystemCalendar(scheduleCalendarEvent(schedule)))
+                .then((message) => { if (alive.current) notice.show({ message }); })
+                .catch((e) => { if (alive.current) notice.show({ message: humanError(e), tone: "warning", duration: 8000 }); })
+                .finally(() => { calendarBusy.current = false; if (alive.current) setBusy(false); });
+            }}>将本次时间带入日历</ActionLink> : null}
           </View>
         ))
       ) : null}
