@@ -16,7 +16,14 @@
         "backgroundColor": "#A6322C",
         "foregroundImage": "./assets/icon-red.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "blockedPermissions": [
+        "android.permission.READ_CALENDAR",
+        "android.permission.WRITE_CALENDAR",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.FOREGROUND_SERVICE_LOCATION",
+        "android.permission.SCHEDULE_EXACT_ALARM"
+      ]
     },
     "web": {
       "favicon": "./assets/icon-red.png"
@@ -24,7 +31,35 @@
     "plugins": [
       "expo-secure-store",
       "expo-sharing",
-      "expo-system-ui"
+      "expo-system-ui",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "zhixing-updates"
+        }
+      ],
+      [
+        "expo-calendar",
+        {
+          "calendarPermission": false,
+          "remindersPermission": false,
+          "writeOnlyAccess": true,
+          "writeOnlyCalendarPermission": "仅在你添加日程时使用系统日历。"
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "点击获取当前位置时，知行使用一次手机定位。",
+          "locationAlwaysPermission": false,
+          "locationAlwaysAndWhenInUsePermission": false,
+          "motionUsagePermission": false,
+          "isIosBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidForegroundServiceEnabled": false,
+          "isAndroidMotionActivityEnabled": false
+        }
+      ]
     ]
   }
 }
