@@ -7,8 +7,9 @@
 | 模型 | 选项 | 请求转换 |
 | --- | --- | --- |
 | Qwen3 混合思考、Qwen Plus/Flash/Turbo | 自动、关闭、低、中、高 | `enable_thinking`；预算分别为 1024 / 8192 / 16384 token |
-| Qwen3 thinking、Qwen3.8 2.4T | 自动、低、中、高 | 预算控制，不提供关闭 |
-| Qwen3.8 Max | 自动、关闭、低、中、极高 | `enable_thinking` + `reasoning_effort`，均在 `extra_body`，不同时发送预算 |
+| Qwen3 thinking | 自动、低、中、高 | 预算控制，不提供关闭 |
+| Qwen3.8 Max / Flash | 自动、关闭、低、中、极高 | `enable_thinking` + `reasoning_effort`，均在 `extra_body`，不同时发送预算 |
+| Qwen3.8 2.4T / 27B | 自动、低、中、极高 | `reasoning_effort`，不提供关闭 |
 | DeepSeek V3.1 / V3.2、chat | 自动、关闭、开启 | `thinking.type` |
 | DeepSeek V4、flash / pro | 自动、关闭、低、高、最高 | Chat 使用 `thinking.type` 与 `reasoning_effort`；Responses 使用 `reasoning.effort` |
 | GPT-5 | 自动、极低、低、中、高 | `reasoning_effort`；Responses SDK 转成 `reasoning.effort` |

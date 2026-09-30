@@ -16,10 +16,11 @@ from zhixing_next.thinking_chat import ThinkingChatOpenAI
 @pytest.mark.parametrize(
     ("model", "protocol", "levels"),
     [
-        ("Qwen/Qwen3.8-Flash", "chat_completions", ["auto", "none", "low", "medium", "high"]),
+        ("Qwen/Qwen3.8-Flash", "chat_completions", ["auto", "none", "low", "medium", "xhigh"]),
         ("QWEN3.8-MAX-0902", "chat_completions", ["auto", "none", "low", "medium", "xhigh"]),
         ("qwen3-235b-a22b-thinking-2507", "chat_completions", ["auto", "low", "medium", "high"]),
-        ("qwen3.8-2.4t-a95b", "chat_completions", ["auto", "low", "medium", "high"]),
+        ("qwen3.8-2.4t-a95b", "chat_completions", ["auto", "low", "medium", "xhigh"]),
+        ("qwen3.8-27b", "chat_completions", ["auto", "low", "medium", "xhigh"]),
         ("qwen3-coder-plus", "chat_completions", []),
         ("qwen3-embedding-0.6b", "chat_completions", []),
         ("qwen-plus-2024-12-20", "chat_completions", []),
@@ -84,7 +85,7 @@ def test_unknown_model_preserves_explicit_settings_and_ignores_brand_names():
             "qwen3.8-flash",
             "chat_completions",
             "low",
-            {"extra_body": {"enable_thinking": True, "thinking_budget": 1024}},
+            {"extra_body": {"enable_thinking": True, "reasoning_effort": "low"}},
         ),
         (
             "qwen3.8-max",
@@ -162,7 +163,7 @@ def test_selected_default_and_auto_reach_real_sdk_payload(tmp_path):
     model = create_model(settings, "chat")
     assert model._get_request_payload([HumanMessage("hi")])["extra_body"] == {
         "enable_thinking": True,
-        "thinking_budget": 8192,
+        "reasoning_effort": "medium",
     }
     assert model.streaming is True
     assert "extra_body" not in create_model(settings, "chat", "qwen", "auto")._get_request_payload(
@@ -179,7 +180,7 @@ def test_selected_default_and_auto_reach_real_sdk_payload(tmp_path):
         == 0.8
     )
     with pytest.raises(ModelConfigurationError, match="thinking depth"):
-        create_model(settings, "chat", "qwen", "xhigh")
+        create_model(settings, "chat", "qwen", "high")
 
 
 def test_stream_thinking_receipts_merge_and_return_unmodified():

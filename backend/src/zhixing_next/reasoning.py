@@ -29,8 +29,10 @@ def reasoning_profile(model: str, protocol: str) -> ReasoningProfile | None:
             r"coder|instruct|non-thinking|embedding|rerank|guard|asr|tts", name
         ) or name.startswith(("qwq", "qwen3.5-omni")):
             return profile("fixed")
-        if re.match(r"^qwen3\.8-max(?:-|$)", name):
+        if re.match(r"^qwen3\.8-(?:max|flash)(?:-|$)", name):
             return profile("qwen_effort", "none", "low", "medium", "xhigh")
+        if re.match(r"^qwen3\.8-(?:2\.4t-a95b|27b)(?:-|$)", name):
+            return profile("qwen_effort", "low", "medium", "xhigh")
         dated_alias = re.match(r"^qwen-(?:plus|flash|turbo)-(\d{4}-\d{2}-\d{2})$", name)
         if dated_alias and dated_alias[1] < "2025-04-28":
             return profile("fixed")
