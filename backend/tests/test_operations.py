@@ -1,8 +1,9 @@
+import json
 from pathlib import Path
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from test_runtime import ScriptedModel, ignore, no_controls
 
 from zhixing_next.api import create_app
@@ -107,6 +108,18 @@ async def test_overwrite_approval_is_durable_scoped_idempotent_and_resumes_origi
     assert (
         settings.data_dir / "operation-files" / operation["id"] / "before"
     ).read_text() == "original"
+    receipt = next(
+        json.loads(message.content)
+        for message in model.seen[-1]
+        if isinstance(message, ToolMessage) and message.tool_call_id == "write"
+    )
+    assert receipt["authorization"] == {
+        "required": True,
+        "id": approval["id"],
+        "state": "approve",
+        "decided_at": first.json()["decided_at"],
+    }
+    assert "App 没有版本历史或一键恢复入口" in receipt["backup_restore"]
 
 
 @pytest.mark.parametrize("decision", ["deny", "approve"])
@@ -165,6 +178,12 @@ async def test_crash_reconciles_actual_file_without_repeating_write(setup, monke
     assert target.stat().st_mtime_ns == modified
     receipts = Journal(settings).receipts(run["id"])["items"]
     assert len(receipts) == 1 and receipts[0]["state"] == "succeeded"
+    receipt = next(
+        json.loads(message.content)
+        for message in model.seen[-1]
+        if isinstance(message, ToolMessage) and message.tool_call_id == "write"
+    )
+    assert receipt["authorization"] == {"required": False}
 
 
 async def test_schedule_commit_is_reconciled_from_real_service_record(setup, monkeypatch):

@@ -435,3 +435,24 @@ async def test_unknown_shell_effect_is_not_replayed_after_restart(
     assert (Path(run["workspace_path"]) / "counter.txt").read_text() == "once\n" * (
         2 if retry_once else 1
     )
+
+
+async def test_libreoffice_recalculates_formulas_with_writable_profile(execution):
+    settings, _, run, _, emit = execution
+    sandbox = DockerSandbox(settings, Path(run["workspace_path"]), run["id"], emit)
+    try:
+        created = await sandbox.aexecute(
+            "python - <<'PY'\nfrom openpyxl import Workbook\nw=Workbook(); s=w.active; s.append(['项目','金额']); s.append(['餐饮',36]); s.append(['交通',18]); s.append(['合计','=SUM(B2:B3)']); w.save('report.xlsx')\nPY"
+        )
+        assert created.exit_code == 0
+        recalculated = await sandbox.aexecute(
+            "mkdir -p /workspace/recalculated && libreoffice -env:UserInstallation=file:///tmp/lo-calc --headless --convert-to xlsx --outdir /workspace/recalculated /workspace/report.xlsx",
+            timeout=60,
+        )
+        assert recalculated.exit_code == 0, recalculated.output
+        checked = await sandbox.aexecute(
+            "python - <<'PY'\nfrom openpyxl import load_workbook\np='recalculated/report.xlsx'; formulas=load_workbook(p); values=load_workbook(p,data_only=True); assert formulas.active['B4'].value=='=SUM(B2:B3)'; assert values.active['B4'].value==54; assert values.active.max_row==4; print('formula preserved; cached total 54')\nPY"
+        )
+        assert checked.exit_code == 0 and "cached total 54" in checked.output
+    finally:
+        await sandbox.close()
