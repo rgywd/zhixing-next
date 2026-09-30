@@ -69,7 +69,7 @@ class Worker:
             run["agents"] = self.store.list_agents()["items"] if not run.get("agent_id") else []
             run["search_provider"] = self.store.get_search_provider(run["search_provider_id"]) if run.get("search_provider_id") else None
             result = await self.runner(
-                self.settings, run,
+                self.store.settings_for_run(run), run,
                 persona=f"Assistant name: {assistant['name']}\n{assistant['persona']}", emit=emit,
                 controls=controls, acknowledge=acknowledge,
             )

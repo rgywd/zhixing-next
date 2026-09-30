@@ -39,6 +39,30 @@ export type ModelCatalog = {
   items: ModelInfo[];
   roles: Partial<Record<"chat" | "task" | "memory", string | null>>;
 };
+export type ModelProtocol = ModelInfo["protocol"];
+export type ManagedModel = ModelInfo & { enabled: boolean; temperature: number | null; timeout: number };
+export type ModelProvider = {
+  id: string;
+  name: string;
+  protocol: ModelProtocol;
+  base_url: string;
+  enabled: boolean;
+  revision: number;
+  has_api_key: boolean;
+  credential_source: "stored" | "environment" | "none";
+  models: ManagedModel[];
+};
+export type ProviderInput = {
+  name: string; protocol: ModelProtocol; base_url: string; enabled: boolean;
+  api_key?: string; clear_api_key?: boolean; revision?: number;
+};
+export type ManagedModelInput = {
+  model: string; display_name: string | null; enabled: boolean; image_input: boolean;
+  reasoning_levels: ReasoningEffort[]; reasoning_effort: Exclude<ReasoningEffort, "auto"> | null;
+  temperature: number | null; timeout: number;
+};
+export type DiscoveredModel = { model: string; name: string };
+export type ModelProbe = { checks: { kind: "reply" | "stream" | "tools"; ok: boolean; elapsed_ms: number; message?: string }[] };
 export type Project = { id: string; name: string; workspace_path: string };
 export type Conversation = {
   id: string;
@@ -197,13 +221,13 @@ export async function fileUploadRequest(
 export async function request<T>(
   connection: Connection,
   path: string,
-  options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+  options: { method?: string; body?: unknown; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) controller.abort();
-  const timeout = setTimeout(abort, 15000);
+  const timeout = setTimeout(abort, options.timeoutMs ?? 15000);
   try {
     const response = await fetch(`${connection.url}/v1${path}`, {
       method: options.method ?? "GET",

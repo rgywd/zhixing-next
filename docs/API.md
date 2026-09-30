@@ -128,3 +128,22 @@ emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可�
 运行时发现原生 interrupt 后抛出 RunPaused，由 worker 保存等待状态并释放执行槽。恢复时复用同一 checkpoint 和步骤回执；模型/权限/助手/记忆重置/SDK 版本变化会拒绝旧恢复。旧版无恢复标记的运行仍保留 interrupted 行为，不宣称任意工具能自动安全续跑。
 
 主知行聊天工具 `start_background_task(instructions)` 通过同一 Store 入队任务，沿用当前用户附件（包括 Steer），返回真实 `run_id/status`；同运行同要求去重。主知行的 `list_scheduled_tasks`、`schedule_task`、`set_schedule_enabled` 操作已有持久计划服务，不发送外部通知。执行任务通过 DockerSandbox 接入 Deep Agents 的 execute/文件工具；`browser_action` 操作任务内 Chromium，`view_image` 查看实际图片，`publish_artifact` 校验并发布产物。主知行的 `copy_file` 在已授权文件目录间搬运最多 20 MiB 二进制文件。子智能体不自动获得 Shell、浏览器、调度或宿主目录挂载权限。
+
+
+## 供应商管理（v10）
+
+所有接口需服务访问令牌。`GET /v1/models` 保持原响应结构，只列启用的供应商下已启用模型，`ready` 仅表示存在凭据。无可用默认模型时相应角色为 null。
+
+- `GET /v1/providers` → `{items: Provider[]}`。Provider 为 `{id,name,protocol,base_url,enabled,revision,has_api_key,credential_source: stored|environment|none,models: ManagedModel[]}`，不含密钥或环境变量名。
+- `POST /v1/providers {name,protocol: chat_completions|responses|gemini,base_url,api_key?,enabled?}` → 201 Provider。
+- `PUT /v1/providers/{id}` 使用上述字段及 `revision`、可选 `clear_api_key`。省略或 null 密钥保留原值，空串拒绝；清除与替换不能同时指定。旧 revision 返回 409 `catalog_changed`。返回 Provider。
+- `DELETE /v1/providers/{id}?revision=` → `{deleted:true}`，删除供应商及模型，清除不可用默认引用与会话模型；不删除聊天和任务。
+- `POST /v1/providers/{id}/discover` → `{items:[{model,name}],truncated:bool}`，读取供应商远端目录，不直接保存模型。超时/响应过大/错误返回脱敏的 502 `provider_discovery_failed`；无密钥返回 422。
+- `POST /v1/providers/{id}/models {revision,models:[ModelInput]}` → 201 Provider。1–200 个模型，同供应商相同实际 ID 跳过；不覆盖已添加模型。
+- `PUT /v1/providers/{id}/models/{modelId} {revision,model:ModelInput}` → Provider。保留内部 ID，可以修改实际 ID 与显示名；不兼容协议/思考参数返回 422，整批失败不会部分写入。
+- `DELETE /v1/providers/{id}/models/{modelId}?revision=` → Provider。删除/停用后清理无效引用，已入队配置保留。
+- `POST /v1/providers/{id}/models/{modelId}/test` → `{checks:[{kind:reply|stream|tools,ok,elapsed_ms,message?}]}`。每项单独报告，不把 HTTP 200 当作测试通过；最多三个各 15 秒、256 输出 token 的请求，不执行探针请求的工具。
+
+ModelInput 为 `{model,display_name?,enabled?,image_input?,reasoning_levels?,reasoning_effort?,temperature?,timeout?}`；默认启用、文本输入、不声明思考档位、模型默认温度、60 秒超时。温度 0–2，超时大于 0 且不超过 300 秒；默认思考档位必须在支持列表内。Gemini 不允许 none/xhigh 及全局默认思考值。ManagedModel 在原 ModelInfo 上增加 `enabled,temperature,timeout`。
+
+配置和凭据保存在服务端 `app.sqlite`；API 与 worker 按操作读取新配置。私有运行快照独立于公开运行记录，完成、失败、取消后清除；可恢复中断任务保留。v9 现有 TOML 条目仅在迁移时导入一次，详见[升级说明](PROVIDER-MANAGEMENT.md)。

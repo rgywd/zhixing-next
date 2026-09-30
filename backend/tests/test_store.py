@@ -23,7 +23,7 @@ def test_schema_and_persona_survive_reopen(store):
     reopened = Store(store.settings)
     assert reopened.get_assistant()["persona"] == "记得先核实出处"
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 10
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == safe_journal_mode().lower()
 
 
@@ -119,7 +119,7 @@ def test_v5_memory_database_gains_search_without_losing_memories(store):
     assert upgraded.list_memories()["items"][0]["id"] == memory["id"]
     assert upgraded.list_search_providers()["items"] == []
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 9
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 10
 
 
 def test_v8_migration_preserves_legacy_crash_behavior_and_queue(store):

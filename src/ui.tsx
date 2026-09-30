@@ -7,6 +7,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   useWindowDimensions,
@@ -108,6 +109,15 @@ export function SettingsGroup({ title, children }: { title: string; children: Re
   return <View style={s.settingsSection}>
     <Text accessibilityRole="header" style={s.settingsLabel}>{title}</Text>
     <View style={s.settingsGroup}>{children}</View>
+  </View>;
+}
+export function SwitchRow({ label, description, value, disabled, onValueChange }: {
+  label: string; description?: string; value: boolean; disabled?: boolean; onValueChange: (value: boolean) => void;
+}) {
+  const { s, colors } = useUi();
+  return <View style={[s.row, { minHeight: 48 }]}>
+    <View style={s.headingCopy}><Text style={s.text}>{label}</Text>{description ? <Text style={s.muted}>{description}</Text> : null}</View>
+    <Switch accessibilityLabel={label} value={value} disabled={disabled} onValueChange={onValueChange} trackColor={{ false: colors.strongLine, true: colors.gold }} thumbColor={colors.switchThumb} />
   </View>;
 }
 export function IconAction({ icon, label, onPress, tone = "neutral", disabled = false }: { icon: IconName; label: string; onPress: () => void; tone?: UiTone; disabled?: boolean }) {

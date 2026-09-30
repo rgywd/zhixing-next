@@ -66,7 +66,7 @@ export function ConnectionForm({
         editable={!busy}
       />
       <Text style={s.muted}>
-        仅保存连接服务所需的令牌，使用手机安全存储。模型密钥在服务器上配置。
+        仅保存连接服务所需的令牌，使用手机安全存储。供应商密钥仅保存在服务端。
       </Text>
       {error ? (
         <Text accessibilityRole="alert" style={s.error}>

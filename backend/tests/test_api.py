@@ -355,17 +355,16 @@ def test_pagination_and_uniform_http_errors(client):
     }
 
 
-def test_status_reports_configuration_and_heartbeat_without_model_calls(client, monkeypatch):
+def test_status_reports_configuration_and_heartbeat_without_model_calls(settings, monkeypatch):
+    config = ModelConfig(protocol="gemini", model="test-model", api_key_env="ZHIXING_TEST_MODEL_KEY")
+    settings.models = {"chat": config, "task": config}
+    client = TestClient(create_app(settings), headers={"Authorization": f"Bearer {settings.api_token}"})
     response = client.get("/v1/status")
     assert response.status_code == 200
     assert response.json()["model_ready"] is False
     assert response.json()["worker_online"] is False
     assert response.json()["execution_available"] is False
     assert response.json()["sqlite_journal_mode"] in {"wal", "delete"}
-    config = ModelConfig(
-        protocol="gemini", model="test-model", api_key_env="ZHIXING_TEST_MODEL_KEY"
-    )
-    client.app.state.settings.models = {"chat": config, "task": config}
     monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", " \t\n ")
     assert client.get("/v1/status").json()["model_ready"] is False
     monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "test-value-must-not-be-returned")

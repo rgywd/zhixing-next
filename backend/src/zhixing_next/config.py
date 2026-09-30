@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 class ModelConfig(BaseModel):
@@ -16,7 +16,9 @@ class ModelConfig(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     provider: str | None = Field(default=None, min_length=1, max_length=100)
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
-    api_key_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    api_key_env: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    # Runtime-only credential. Public catalog responses and model_dump never include it.
+    api_key: SecretStr | None = Field(default=None, repr=False, exclude=True)
     base_url: str | None = None
     temperature: float | None = None
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
@@ -76,7 +78,7 @@ class Settings(BaseModel):
     workspace_root: Path = Field(default_factory=lambda: Path(".data/workspaces").resolve())
     api_token: str = Field(default="", repr=False, exclude=True)
     models: dict[str, ModelConfig] = Field(default_factory=dict)
-    roles: dict[str, str] = Field(default_factory=lambda: {
+    roles: dict[str, str | None] = Field(default_factory=lambda: {
         "chat": "chat", "task": "task", "memory": "memory",
     })
     grants: list[PathGrant] = Field(default_factory=list)
