@@ -1,9 +1,14 @@
+import type { ThemeColors } from "./theme";
+import { useUi, Empty, humanError } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
 import { useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { Ionicons } from "@react-native-vector-icons/ionicons";
+import { BottomSheet } from "./BottomSheet";
+import { BrandIcon } from "./BrandIcon";
+import { radius, space, typography } from "./theme";
 import type { ModelInfo } from "./api";
-import { Button, colors, humanError, s } from "./ui";
 
 export const reasoningLabel = {
   auto: "自动",
@@ -27,7 +32,10 @@ export function ModelPicker({
   defaultLabel?: string;
   onClose: () => void;
 }) {
+  const { s, colors } = useUi();
+  const styles = useThemedStyles(createStyles);
   const [query, setQuery] = useState("");
+  const [providerFilter, setProviderFilter] = useState<string | null>(null);
   const [favorites, setFavorites] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -66,60 +74,65 @@ export function ModelPicker({
       setBusy(false);
     }
   }
-  const filtered = models.filter((item) =>
+  const filtered = models.filter((item) => (!providerFilter || item.provider === providerFilter) &&
     `${item.name} ${item.model} ${item.provider}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
   );
   const favoriteModels = filtered.filter((item) => favorites.includes(item.id));
-  const providers = [...new Set(filtered.map((item) => item.provider))];
+  const otherModels = filtered.filter((item) => !favorites.includes(item.id));
+  const providers = [...new Set(models.map((item) => item.provider))];
   function row(item: ModelInfo, prefix: string) {
-    return (
-      <View key={`${prefix}-${item.id}`} style={[s.card, { flexDirection: "row", alignItems: "center", padding: 12, gap: 10 }]}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityState={{ selected: selectedId === item.id, disabled: busy || !item.ready }}
-          disabled={busy || !item.ready}
-          onPress={() => { void choose(item.id); }}
-          style={{ flex: 1, gap: 5 }}
-        >
-          <Text numberOfLines={1} style={[s.label, selectedId === item.id && { color: colors.accent }]}>
-            {item.name}{selectedId === item.id ? " · 当前" : ""}
-          </Text>
-          <Text numberOfLines={1} style={s.muted}>
-            {item.model} · {item.protocol === "chat_completions" ? "OpenAI 兼容" : item.protocol === "responses" ? "Responses" : "Gemini"}
-          </Text>
-          <Text style={s.muted}>{item.ready ? (item.reasoning_levels.length ? "密钥已配置 · 可调思考深度" : "密钥已配置") : "密钥未就绪"}{item.image_input ? " · 支持图片" : ""}</Text>
-        </Pressable>
-        <Pressable accessibilityRole="button" accessibilityLabel={`${favorites.includes(item.id) ? "取消收藏" : "收藏"} ${item.name}`} onPress={() => { void toggleFavorite(item.id); }} style={{ padding: 8 }}>
-          <Text style={{ fontSize: 22, color: favorites.includes(item.id) ? colors.accent : colors.muted }}>
-            {favorites.includes(item.id) ? "♥" : "♡"}
-          </Text>
-        </Pressable>
-      </View>
-    );
-  }
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={s.root}>
-        <View style={s.header}>
-          <Text style={[s.heading, s.grow]}>{title}</Text>
-          <Button secondary onPress={onClose}>关闭</Button>
+    const selected = selectedId === item.id;
+    return <View key={`${prefix}-${item.id}`} style={[styles.model, selected && styles.selected]}>
+      <Pressable accessibilityRole="radio" accessibilityLabel={item.name} accessibilityState={{ checked: selected, disabled: busy || !item.ready }} disabled={busy || !item.ready} onPress={() => { void choose(item.id); }} style={[styles.modelChoice, !item.ready && s.disabled]}>
+        <View style={styles.logo}><BrandIcon name={`${item.model} ${item.provider}`} size={28} /></View>
+        <View style={s.headingCopy}>
+          <Text numberOfLines={1} style={styles.modelName}>{item.name}</Text>
+          <View style={styles.capabilities}>
+            {selected ? <Ionicons name="checkmark-circle" size={15} color={colors.gold} /> : null}
+            {item.image_input ? <View style={styles.capability}><Ionicons name="image-outline" size={12} color={colors.blue} /><Text style={styles.capabilityText}>图片</Text></View> : null}
+            {item.reasoning_levels.length ? <View style={styles.capability}><Ionicons name="bulb-outline" size={12} color={colors.gold} /><Text style={styles.capabilityText}>思考</Text></View> : null}
+            <Text numberOfLines={1} style={s.small}>{item.ready ? item.model : "暂不可用"}</Text>
+          </View>
         </View>
-        <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
-          <TextInput accessibilityLabel="搜索模型" placeholder="搜索模型或供应商" placeholderTextColor={colors.muted} value={query} onChangeText={setQuery} autoCorrect={false} style={s.input} />
-          {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-          {onUseDefault ? <Button secondary disabled={busy} onPress={() => { void choose(); }}>{defaultLabel}</Button> : null}
-          {!filtered.length ? <Text style={s.muted}>没有匹配的模型。请在服务器配置模型后刷新。</Text> : null}
-          {favoriteModels.length ? (
-            <View style={{ gap: 8 }}><Text style={s.title}>收藏</Text>{favoriteModels.map((item) => row(item, "favorite"))}</View>
-          ) : null}
-          {providers.map((provider) => (
-            <View key={provider} style={{ gap: 8 }}>
-              <Text style={s.title}>{provider}</Text>
-              {filtered.filter((item) => item.provider === provider).map((item) => row(item, provider))}
-            </View>
-          ))}
-        </ScrollView>
-      </SafeAreaView>
-    </Modal>
-  );
+      </Pressable>
+      <Pressable accessibilityRole="button" accessibilityLabel={`${favorites.includes(item.id) ? "取消收藏" : "收藏"} ${item.name}`} onPress={() => { void toggleFavorite(item.id); }} style={s.iconButton}>
+        <Ionicons name={favorites.includes(item.id) ? "heart" : "heart-outline"} size={20} color={favorites.includes(item.id) ? colors.accent : colors.muted} />
+      </Pressable>
+    </View>;
+  }
+  return <BottomSheet visible={visible} title={title} onClose={onClose} tall>
+    <View style={styles.search}><Ionicons name="search-outline" size={19} color={colors.muted} /><TextInput accessibilityLabel="搜索模型" placeholder="搜索模型或供应商" placeholderTextColor={colors.muted} value={query} onChangeText={setQuery} autoCorrect={false} style={styles.searchInput} />{query ? <Pressable onPress={() => setQuery("")} accessibilityRole="button" accessibilityLabel="清空搜索" style={s.iconButton}><Ionicons name="close-circle" size={17} color={colors.muted} /></Pressable> : null}</View>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filters} contentContainerStyle={styles.filterContent}>
+      {[null, ...providers].map((provider) => <Pressable key={provider ?? "all"} accessibilityRole="button" accessibilityState={{ selected: providerFilter === provider }} onPress={() => setProviderFilter(provider)} style={[styles.filter, providerFilter === provider && styles.filterActive]}><Text style={[styles.filterText, providerFilter === provider && { color: colors.ink }]}>{provider ?? "全部"}</Text></Pressable>)}
+    </ScrollView>
+    <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.list}>
+      {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+      {onUseDefault && !query.trim() ? <Pressable disabled={busy} onPress={() => { void choose(); }} accessibilityRole="button" style={styles.defaultRow}><Ionicons name="return-down-back-outline" size={18} color={colors.muted} /><Text style={s.description}>{defaultLabel}</Text></Pressable> : null}
+      {!filtered.length ? <Empty compact icon="search-outline" title="没有匹配的模型">换个关键词试试</Empty> : null}
+      {favoriteModels.length ? <View style={styles.group}><Text style={styles.groupLabel}>收藏</Text>{favoriteModels.map((item) => row(item, "favorite"))}</View> : null}
+      {providers.filter((provider) => otherModels.some((item) => item.provider === provider)).map((provider) => <View key={provider} style={styles.group}><Text style={styles.groupLabel}>{provider}</Text>{otherModels.filter((item) => item.provider === provider).map((item) => row(item, provider))}</View>)}
+    </ScrollView>
+  </BottomSheet>;
 }
+
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
+  search: { marginHorizontal: 18, backgroundColor: colors.surfaceRaised, borderRadius: radius.control, borderWidth: 1, borderColor: colors.line, paddingLeft: 12, flexDirection: "row", alignItems: "center", gap: 8 },
+  searchInput: { flex: 1, height: 44, ...typography.body, fontSize: 14, color: colors.ink },
+  filters: { flexGrow: 0, flexShrink: 0, height: 44, marginTop: 8, marginBottom: 4 },
+  filterContent: { paddingHorizontal: 18, gap: 6 },
+  filter: { minHeight: 38, paddingHorizontal: 13, justifyContent: "center", borderRadius: radius.small },
+  filterActive: { backgroundColor: colors.neutral },
+  filterText: { ...typography.detail, color: colors.muted, fontWeight: "600" },
+  list: { paddingHorizontal: 18, paddingBottom: 20, gap: 14 },
+  group: { gap: 6 },
+  groupLabel: { ...typography.caption, color: colors.muted, paddingLeft: 3, paddingTop: 5 },
+  model: { flexDirection: "row", alignItems: "center", paddingRight: 4, borderRadius: radius.item, backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: "transparent" },
+  selected: { backgroundColor: colors.goldSoft, borderColor: colors.gold },
+  modelChoice: { flex: 1, flexDirection: "row", alignItems: "center", gap: 10, padding: 11, minHeight: 64 },
+  logo: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
+  modelName: { ...typography.item, color: colors.ink, fontSize: 14 },
+  capabilities: { flexDirection: "row", alignItems: "center", gap: 5, overflow: "hidden" },
+  capability: { flexDirection: "row", alignItems: "center", gap: 2, backgroundColor: colors.paper, paddingHorizontal: 4, borderRadius: 4 },
+  capabilityText: { ...typography.small, color: colors.muted },
+  defaultRow: { flexDirection: "row", minHeight: 44, gap: space.sm, alignItems: "center" },
+});

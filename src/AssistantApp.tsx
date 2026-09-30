@@ -1,3 +1,7 @@
+import { availablePreference } from "./providerEditing";
+import { ThemeProvider } from "./ThemeProvider";
+import { AppearanceControl } from "./AppearanceControl";
+import { useUi, ActionLink, ActionRow, BackLink, Button, CardHeader, Field, humanError, PageHeading, PageScrollView, SheetHeader, timeLabel } from "./ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -9,7 +13,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   Text,
   View,
 } from "react-native";
@@ -34,16 +37,21 @@ import {
   type Schedule,
   type ServiceStatus,
 } from "./api";
+import { ConnectionStatusProvider, useSyncStatus } from "./ConnectionStatus";
 import { ChatPanel } from "./ChatPanel";
 import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
+import { BottomSheet } from "./BottomSheet";
 import { FinancePage } from "./FinancePage";
 import { ResourcesPanel } from "./ResourcesPanel";
 import { ModelsPanel } from "./ModelsPanel";
-import { HomePanel, ToolboxPanel, WorkPanel } from "./OverviewPanels";
+import { ProvidersPanel } from "./ProvidersPanel";
+import { HomePanel, WorkPanel } from "./OverviewPanels";
 import { LifePanel } from "./LifePanel";
 import { SchedulesPanel } from "./SchedulesPanel";
-import { ConnectionForm, SettingsPanel } from "./SettingsPanel";
+import { ConnectionForm, ConnectionSettingsPanel, PersonaSettingsPanel } from "./SettingsPanel";
+import { SettingsHome, type SettingsDestination } from "./SettingsHome";
+import { SearchPicker } from "./SearchPicker";
 import { AgentsPanel } from "./AgentsPanel";
 import {
   draftKey,
@@ -52,11 +60,15 @@ import {
   removeConnection,
   saveDraft,
 } from "./storage";
-import { Button, colors, Field, humanError, s, timeLabel } from "./ui";
 
-type Tab = "home" | "life" | "chat" | "work" | "toolbox";
+type Tab = "home" | "life" | "chat" | "work" | "settings";
 
 export default function AssistantApp() {
+  return <ThemeProvider><ThemedApp /></ThemeProvider>;
+}
+
+function ThemedApp() {
+  const { s, colors, mode, ready: themeReady } = useUi();
   const [connection, setConnection] = useState<Connection | null>(null);
   const [generation, setGeneration] = useState(0);
   const [ready, setReady] = useState(false);
@@ -97,12 +109,12 @@ export default function AssistantApp() {
   return (
     <SafeAreaProvider>
       <SafeAreaView style={s.root}>
-        <StatusBar style="dark" />
+        <StatusBar style={mode === "dark" ? "light" : "dark"} animated />
         <KeyboardAvoidingView
           style={s.body}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
         >
-          {!ready ? (
+          {!ready || !themeReady ? (
             <ActivityIndicator style={s.body} color={colors.accent} />
           ) : connection ? (
             <Connected
@@ -124,6 +136,7 @@ export default function AssistantApp() {
 }
 
 function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => void }) {
+  const { s, colors } = useUi();
   return (
     <View pointerEvents="box-none" style={s.floatingTabs}>
       <View pointerEvents="none" style={s.tabs}>
@@ -135,7 +148,7 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
           { id: "life", label: "生活", icon: "leaf-outline" },
           { id: "chat", label: "AI", icon: null },
           { id: "work", label: "工作", icon: "briefcase-outline" },
-          { id: "toolbox", label: "工具箱", icon: "grid-outline" },
+          { id: "settings", label: "设置", icon: "settings-outline" },
         ] as const).map((item) => (
           <Pressable
             accessibilityRole={item.id === "chat" ? "button" : "tab"}
@@ -165,18 +178,21 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
 }
 
 function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection) => void; error: string }) {
+  const { s, colors } = useUi();
   const [tab, setTab] = useState<Tab>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
-  const showTabs = tab !== "chat" && (tab !== "life" || lifeView === "overview");
+  const [showConnection, setShowConnection] = useState(false);
+  const showTabs = tab !== "chat" && (tab !== "life" || lifeView === "overview") && (tab !== "settings" || !showConnection);
   useEffect(() => {
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
       if (tab === "chat") { setTab("home"); return true; }
       if (tab === "life" && lifeView !== "overview") { setLifeView("overview"); return true; }
+      if (tab === "settings" && showConnection) { setShowConnection(false); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, lifeView]);
+  }, [tab, lifeView, showConnection]);
   return (
     <View style={s.body}>
       {tab === "home" ? (
@@ -187,12 +203,12 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
         lifeView === "overview" ? (
           <LifePanel onFinance={() => setLifeView("finance")} onChat={() => setTab("chat")} />
         ) : (
-          <ScrollView contentContainerStyle={s.content}>
-            <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
+          <PageScrollView>
+            <BackLink label="生活" onPress={() => setLifeView("overview")} />
             <Text style={s.heading}>财务</Text>
             <Text style={s.muted}>连接服务后，可以在这里和财务助手聊。</Text>
             <Button onPress={() => setTab("chat")}>连接知行</Button>
-          </ScrollView>
+          </PageScrollView>
         )
       ) : tab === "work" ? (
         <WorkPanel conversations={[]} projects={[]} schedules={[]}
@@ -200,27 +216,35 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           onChooseConversation={() => setTab("chat")}
           onCreateProject={() => setTab("chat")}
           onSchedules={() => setTab("chat")} />
-      ) : tab === "toolbox" ? (
-        <ToolboxPanel onResources={() => setTab("chat")} onSettings={() => setTab("chat")} onAgents={() => setTab("chat")} onModels={() => setTab("chat")} />
+      ) : tab === "settings" ? (
+        showConnection ? <>
+          <BackLink label="设置" onPress={() => setShowConnection(false)} />
+          {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+          <ConnectionSettingsPanel onConnect={onConnect} />
+        </> : <SettingsHome onOpen={() => setShowConnection(true)} />
       ) : (
         <View style={s.body}>
           <View style={[s.header, s.spread]}>
             <Text style={s.heading}>连接知行</Text>
-            <Pressable accessibilityRole="button" accessibilityLabel="返回首页" onPress={() => setTab("home")} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}><Ionicons name="close" size={26} color={colors.ink} /></Pressable>
+            <Pressable accessibilityRole="button" accessibilityLabel="返回首页" onPress={() => setTab("home")} style={s.iconButton}><Ionicons name="close" size={22} color={colors.ink} /></Pressable>
           </View>
-          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
+          <PageScrollView>
             <Text style={s.muted}>连接后可以聊天、运行任务，并看到自己的真实资料。</Text>
             {error ? <Text style={s.error}>{error}</Text> : null}
             <ConnectionForm onConnect={onConnect} />
-          </ScrollView>
+          </PageScrollView>
         </View>
       )}
-      {showTabs ? <BottomTabs value={tab} onChange={setTab} /> : null}
+      {showTabs ? <BottomTabs value={tab} onChange={(next) => { setShowConnection(false); setTab(next); }} /> : null}
     </View>
   );
 }
 
-function Connected({
+function Connected(props: Parameters<typeof ConnectedSession>[0]) {
+  return <ConnectionStatusProvider><ConnectedSession {...props} /></ConnectionStatusProvider>;
+}
+
+function ConnectedSession({
   connection,
   onConnect,
   onDisconnect,
@@ -231,11 +255,13 @@ function Connected({
   onDisconnect: () => void;
   connectionError: string;
 }) {
+  const { s, colors } = useUi();
   const [tab, setTab] = useState<Tab>("home");
   const [returnTab, setReturnTab] = useState<Exclude<Tab, "chat">>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
   const [workView, setWorkView] = useState<"overview" | "schedules">("overview");
-  const [toolView, setToolView] = useState<"overview" | "settings" | "agents" | "models" | "resources">("overview");
+  const [settingsView, setSettingsView] = useState<"overview" | Exclude<SettingsDestination, "search">>("overview");
+  const [showSearchSettings, setShowSearchSettings] = useState(false);
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [status, setStatus] = useState<ServiceStatus | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -246,6 +272,7 @@ function Connected({
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
   const [financeId, setFinanceId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number } | null>(null);
   const selectedRef = useRef(selectedId);
   const [conversationCursor, setConversationCursor] = useState<string | null>(
     null,
@@ -266,20 +293,22 @@ function Connected({
   const [projectName, setProjectName] = useState("");
   const [projectId, setProjectId] = useState<string | null>(null);
   const [error, setError] = useState("");
-  const [syncError, setSyncError] = useState("");
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
   const refreshRef = useRef<() => void>(() => undefined);
   const alive = useRef(true);
   const refresh = useCallback(() => refreshRef.current(), []);
+  const reportSync = useSyncStatus(refresh);
+  const [composerContext, setComposerContext] = useState<{ conversationId: string; modelId: string | null; kind: "chat" | "task" } | null>(null);
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
-  const selectedModel = catalog?.items.find((item) => item.id === (selected?.model_id ?? catalog.roles.chat));
+  const currentComposer = composerContext?.conversationId === selectedId ? composerContext : null;
+  const selectedModel = catalog?.items.find((item) => item.id === (currentComposer ? currentComposer.modelId : selected?.model_id ?? catalog.roles.chat));
   const financeConversation = conversations.find((item) => item.id === financeId) ?? null;
   const showTabs = tab === "home"
     || (tab === "life" && lifeView === "overview")
     || (tab === "work" && workView === "overview")
-    || (tab === "toolbox" && toolView === "overview");
+    || (tab === "settings" && settingsView === "overview");
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
     const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
@@ -291,11 +320,11 @@ function Connected({
       if (tab === "chat") { setTab(returnTab); return true; }
       if (tab === "life" && lifeView !== "overview") { setLifeView("overview"); return true; }
       if (tab === "work" && workView !== "overview") { setWorkView("overview"); return true; }
-      if (tab === "toolbox" && toolView !== "overview") { setToolView("overview"); return true; }
+      if (tab === "settings" && settingsView !== "overview") { setSettingsView("overview"); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, returnTab, lifeView, workView, toolView]);
+  }, [tab, returnTab, lifeView, workView, settingsView]);
   function openMainChat() {
     if (tab !== "chat") setReturnTab(tab);
     setShowWelcome(true);
@@ -306,10 +335,18 @@ function Connected({
     else setTab(next);
     if (next === "life") setLifeView("overview");
     if (next === "work") setWorkView("overview");
-    if (next === "toolbox") setToolView("overview");
+    if (next === "settings") setSettingsView("overview");
   }
-  function openConversation(id: string) {
-    if (conversations.find((item) => item.id === id)?.agent_id === "finance") {
+  async function openConversation(id: string, messageSeq?: number) {
+    let target = conversations.find((item) => item.id === id);
+    if (!target) {
+      try {
+        const fetched = await request<Conversation>(connection, `/conversations/${id}`);
+        target = fetched;
+        setConversations((old) => mergeById(old, [fetched]));
+      } catch (e) { setError(humanError(e)); return; }
+    }
+    if (target.agent_id === "finance") {
       setFinanceId(id);
       setLifeView("finance");
       setShowConversations(false);
@@ -318,6 +355,7 @@ function Connected({
       return;
     }
     setSelectedId(id);
+    setFocusMessage(messageSeq ? { conversationId: id, seq: messageSeq } : null);
     selectedRef.current = id;
     setShowConversations(false);
     setShowAiDrawer(false);
@@ -389,11 +427,10 @@ function Connected({
         setSelectedId(
           (old) => old ?? [...chats.items].reverse().find((item) => !item.agent_id)?.id ?? null,
         );
-        setSyncError("");
+        reportSync();
       } catch (e) {
         if (active) {
-          setSyncError(humanError(e));
-          setStatus(null);
+          reportSync(e);
         }
       } finally {
         polling = false;
@@ -417,7 +454,7 @@ function Connected({
       controller.abort();
       listener.remove();
     };
-  }, [connection]);
+  }, [connection, reportSync]);
 
   async function newConversation(
     explore = false,
@@ -502,16 +539,17 @@ function Connected({
       if (alive.current) setBusy(false);
     }
   }
+  const welcomePreference = availablePreference(catalog, welcomeKind, welcomeModels[welcomeKind], welcomeEfforts[welcomeKind]);
   function submitWelcome() {
     const text = welcomeDraft.trim();
-    if (text && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomeModels[welcomeKind], effort: welcomeEfforts[welcomeKind], searchId: welcomeSearchId });
+    if (text && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
   }
   const welcomeControls = {
-    connection, catalog, modelId: welcomeModels[welcomeKind], effort: welcomeEfforts[welcomeKind], searchProviderId: welcomeSearchId,
+    connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchProviderId: welcomeSearchId,
     onModelId: (id: string | null) => setWelcomeModels((old) => ({ ...old, [welcomeKind]: id })),
     onEffort: (value: ReasoningEffort | null) => setWelcomeEfforts((old) => ({ ...old, [welcomeKind]: value })),
     onSearchProviderId: setWelcomeSearchId,
-    onFiles: () => { if (!busy) void newConversation(false, null, true, { text: welcomeDraft, kind: welcomeKind, modelId: welcomeModels[welcomeKind], effort: welcomeEfforts[welcomeKind], searchId: welcomeSearchId, filesOnly: true }); },
+    onFiles: () => { if (!busy) void newConversation(false, null, true, { text: welcomeDraft, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId, filesOnly: true }); },
   };
   function openAgent(agentId: string) {
     const existing = [...conversations].reverse().find((item) => item.agent_id === agentId);
@@ -578,18 +616,11 @@ function Connected({
   }
   return (
     <View style={s.body}>
-      {syncError ? (
-        <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
-          <Text style={s.noticeText}>{syncError}</Text>
-          <Button secondary small onPress={refresh}>
-            重新连接
-          </Button>
-        </View>
-      ) : status && (!status.model_ready || !status.worker_online) ? (
+      {status && (!status.model_ready || !status.worker_online) ? (
         <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
           <Text style={s.noticeText}>
             {!status.model_ready
-              ? "服务已连接，模型尚未配置。请在服务器上设置模型后开始使用。"
+              ? "服务已连接，模型尚未配置。请在设置中添加供应商并选择默认模型。"
               : "执行服务暂时离线。已接收任务会保留，等待 worker 恢复。"}
           </Text>
         </View>
@@ -620,42 +651,45 @@ function Connected({
             openMainChat();
           }} />
         ) : financeConversation ? (
-          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} catalog={catalog} onBack={() => setLifeView("overview")} onRefresh={refresh} onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))} />
+          <FinancePage key={financeConversation.id} connection={connection} conversation={financeConversation} finance={finance} catalog={catalog} agentModelId={agents.find((item) => item.id === financeConversation.agent_id)?.model_id ?? null} onBack={() => setLifeView("overview")} onRefresh={refresh} onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))} />
         ) : (
-          <View style={[s.body, { padding: 22, gap: 18 }]}>
-            <Button secondary small onPress={() => setLifeView("overview")}>‹ 生活</Button>
+          <View style={[s.body, { padding: 16, gap: 12 }]}>
+            <BackLink label="生活" onPress={() => setLifeView("overview")} />
             <Text style={s.heading}>财务</Text>
             {busy ? <ActivityIndicator color={colors.accent} /> : <Button onPress={openFinance}>连接财务助手</Button>}
           </View>
         )
       ) : tab === "chat" ? (
         <>
-          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 9, gap: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 5, gap: 5 }}>
             <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="menu-outline" size={29} color={colors.ink} />
+              <Ionicons name="menu-outline" size={25} color={colors.ink} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={s.grow}>
-              <Text numberOfLines={1} style={[s.title, { textAlign: "center" }]}>{assistant?.name ?? "知行"}</Text>
-              <Text numberOfLines={1} style={[s.muted, { textAlign: "center" }]}>
-                {showWelcome ? "AI 伙伴" : selected?.title ?? "新的对话"}{!showWelcome && selectedModel ? ` · ${selectedModel.name}` : ""}
+              <Text numberOfLines={1} style={[s.itemTitle, { textAlign: "left" }]}>{showWelcome ? assistant?.name ?? "知行" : selected?.title ?? "新的对话"}</Text>
+              <Text numberOfLines={1} style={[s.muted, { textAlign: "left" }]}>
+                {showWelcome ? "随时聊聊，把事情做成" : `${currentComposer?.kind === "task" ? "任务 · " : ""}${selectedModel?.name ?? "知行"}`}
               </Text>
             </Pressable>
+            <AppearanceControl />
             <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => setShowWelcome(true)} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="add" size={29} color={colors.ink} />
+              <Ionicons name="create-outline" size={23} color={colors.ink} />
             </Pressable>
             <Pressable accessibilityRole="button" accessibilityLabel="返回上一页" onPress={() => setTab(returnTab)} style={{ width: 38, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="close" size={26} color={colors.ink} />
+              <Ionicons name="close" size={22} color={colors.ink} />
             </Pressable>
           </View>
           {showWelcome ? (
             <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />
           ) : selected ? (
             <ChatPanel
-              key={selected.id}
+              key={`${selected.id}:${focusMessage?.conversationId === selected.id ? focusMessage.seq : ""}`}
               connection={connection}
               conversation={selected}
+              focusMessageSeq={focusMessage?.conversationId === selected.id ? focusMessage.seq : null}
               assistantName={agents.find((item) => item.id === selected.agent_id)?.name ?? assistant?.name ?? "知行"}
               catalog={catalog}
+              agentModelId={agents.find((item) => item.id === selected.agent_id)?.model_id ?? null}
               initialKind={chatStart?.id === selected.id ? chatStart.kind : "chat"}
               initialTaskModelId={chatStart?.id === selected.id ? chatStart.taskModelId : null}
               initialTaskEffort={chatStart?.id === selected.id ? chatStart.taskEffort : null}
@@ -663,6 +697,7 @@ function Connected({
               startWithFiles={chatStart?.id === selected.id && chatStart.files}
               onFilesOpened={() => setChatStart((old) => old ? { ...old, files: false } : null)}
               onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))}
+              onComposerContext={setComposerContext}
               onRefresh={refresh}
             />
           ) : <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy || loading} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />}
@@ -680,9 +715,7 @@ function Connected({
           />
         ) : (
           <>
-            <Pressable accessibilityRole="button" onPress={() => setWorkView("overview")} style={s.backLink}>
-              <Text style={s.backLinkText}>‹ 返回工作</Text>
-            </Pressable>
+            <BackLink label="工作" onPress={() => setWorkView("overview")} />
             <SchedulesPanel
               connection={connection}
               schedules={schedules}
@@ -702,44 +735,38 @@ function Connected({
             />
           </>
         )
-      ) : toolView === "overview" ? (
-        <ToolboxPanel onResources={() => setToolView("resources")} onSettings={() => setToolView("settings")} onAgents={() => setToolView("agents")} onModels={() => setToolView("models")} />
+      ) : settingsView === "overview" ? (
+        <SettingsHome assistant={assistant} catalog={catalog} connectionUrl={connection.url} onOpen={(destination) => {
+          if (destination === "search") setShowSearchSettings(true);
+          else setSettingsView(destination);
+        }} />
       ) : (
         <>
-          <Pressable accessibilityRole="button" onPress={() => setToolView("overview")} style={s.backLink}>
-            <Text style={s.backLinkText}>‹ 返回工具箱</Text>
-          </Pressable>
-          {toolView === "agents" ? (
+          <BackLink label="设置" onPress={() => setSettingsView("overview")} />
+          {settingsView === "agents" ? (
             <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />
-          ) : toolView === "models" ? (
+          ) : settingsView === "models" ? (
             <ModelsPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
-          ) : toolView === "resources" ? (
+          ) : settingsView === "providers" ? (
+            <ProvidersPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
+          ) : settingsView === "resources" ? (
             <ResourcesPanel connection={connection} />
+          ) : settingsView === "connection" ? (
+            <ConnectionSettingsPanel connection={connection} onConnect={onConnect} onDisconnect={onDisconnect} onExplore={() => { void newConversation(true); }} />
           ) : assistant ? (
-            <SettingsPanel
-              connection={connection}
-              assistant={assistant}
-              onAssistant={setAssistant}
-              onConnect={onConnect}
-              onDisconnect={onDisconnect}
-              onExplore={() => {
-                void newConversation(true);
-              }}
-            />
+            <PersonaSettingsPanel connection={connection} assistant={assistant} onAssistant={setAssistant} />
           ) : (
-            <ScrollView contentContainerStyle={s.content}>
-              <Text style={s.title}>连接设置</Text>
-              <Text style={s.muted}>服务连接恢复后，可以编辑人格设定。</Text>
-              <Button secondary onPress={onDisconnect}>
-                移除当前连接，重新设置
-              </Button>
-            </ScrollView>
+            <PageScrollView>
+              <PageHeading title="人格偏好" description="暂时无法读取人格设定，连接恢复后可继续编辑。" />
+              <ActionLink icon="refresh-outline" onPress={refresh}>重新加载</ActionLink>
+            </PageScrollView>
           )}
         </>
       )}
       {showTabs && !keyboardVisible ? <BottomTabs value={tab} onChange={selectTab} /> : null}
       <AiDrawer
         visible={showAiDrawer}
+        connection={connection}
         name={assistant?.name ?? "知行"}
         conversations={conversations}
         selectedId={showWelcome ? null : selectedId}
@@ -749,29 +776,18 @@ function Connected({
         onOpen={openConversation}
         onMore={() => { void loadMore("conversations"); }}
         onNew={() => { setShowWelcome(true); setShowAiDrawer(false); setTab("chat"); }}
-        onSettings={() => { setShowAiDrawer(false); setToolView("settings"); setTab("toolbox"); }}
       />
-      <Modal
-        visible={showProjectCreator}
-        animationType="slide"
-        presentationStyle="pageSheet"
-        onRequestClose={() => setShowProjectCreator(false)}
-      >
-        <SafeAreaView style={s.root}>
-          <View style={s.header}>
-            <Text style={[s.heading, s.grow]}>创建项目</Text>
-            <Button secondary onPress={() => setShowProjectCreator(false)}>关闭</Button>
-          </View>
-          <View style={s.content}>
-            <Text style={s.muted}>为相关对话、文件和任务留一个持久工作目录。</Text>
-            <Field label="项目名称" placeholder="例如：我的项目" value={projectName} onChangeText={setProjectName} maxLength={100} />
-            <Button disabled={busy || !projectName.trim()} onPress={() => { void newProject(true); }}>
-              {busy ? "正在创建…" : "创建项目"}
-            </Button>
-            {error ? <Text style={s.error}>{error}</Text> : null}
-          </View>
-        </SafeAreaView>
-      </Modal>
+      <SearchPicker visible={showSearchSettings} connection={connection} management selectedId={welcomeSearchId} onSelect={setWelcomeSearchId}
+        onRemoved={(id) => setChatStart((old) => old?.searchId === id ? { ...old, searchId: null } : old)} onClose={() => setShowSearchSettings(false)} />
+      <BottomSheet visible={showProjectCreator} title="创建项目" subtitle="为相关对话、文件和任务留一个工作目录" onClose={() => setShowProjectCreator(false)}>
+        <View style={{ paddingHorizontal: 20, paddingBottom: 12, gap: 12 }}>
+          <Field label="项目名称" placeholder="例如：我的项目" value={projectName} onChangeText={setProjectName} maxLength={100} />
+          <Button disabled={busy || !projectName.trim()} onPress={() => { void newProject(true); }}>
+            {busy ? "正在创建…" : "创建项目"}
+          </Button>
+          {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+        </View>
+      </BottomSheet>
       <Modal
         visible={showConversations}
         animationType="slide"
@@ -779,18 +795,10 @@ function Connected({
         onRequestClose={() => setShowConversations(false)}
       >
         <SafeAreaView style={s.root}>
-          <View style={s.header}>
-            <Text style={[s.heading, s.grow]}>你的对话</Text>
-            <Button secondary onPress={() => setShowConversations(false)}>
-              关闭
-            </Button>
-          </View>
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={s.content}
-          >
+          <SheetHeader title="你的对话" onClose={() => setShowConversations(false)} />
+          <PageScrollView>
             <View style={s.card}>
-              <Text style={s.title}>留一个新的话题</Text>
+              <CardHeader icon="chatbubble-outline" title="留一个新的话题" tone="red" />
               <Field
                 label="对话名称"
                 placeholder="例如：周末计划、游戏攻略"
@@ -800,22 +808,17 @@ function Connected({
               />
               <Text style={s.label}>工作项目（可选）</Text>
               <View style={s.wrap}>
-                <Button
-                  small
-                  secondary={projectId !== null}
-                  onPress={() => setProjectId(null)}
-                >
-                  日常对话
-                </Button>
+                <Pressable accessibilityRole="button" accessibilityState={{ selected: projectId === null }} onPress={() => setProjectId(null)} style={[s.chip, projectId === null && s.chipActive]}><Text style={[s.chipText, projectId === null && s.chipActiveText]}>日常对话</Text></Pressable>
                 {projects.map((project) => (
-                  <Button
+                  <Pressable
                     key={project.id}
-                    small
-                    secondary={projectId !== project.id}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: projectId === project.id }}
+                    style={[s.chip, projectId === project.id && s.chipActive]}
                     onPress={() => setProjectId(project.id)}
                   >
-                    {project.name}
-                  </Button>
+                    <Text numberOfLines={1} style={[s.chipText, projectId === project.id && s.chipActiveText]}>{project.name}</Text>
+                  </Pressable>
                 ))}
               </View>
               <View style={s.row}>
@@ -829,16 +832,13 @@ function Connected({
                   />
                 </View>
                 <View style={{ paddingTop: 23 }}>
-                  <Button
-                    small
-                    secondary
+                  <ActionLink
+                    icon="add"
                     disabled={busy || !projectName.trim()}
                     onPress={() => {
                       void newProject();
                     }}
-                  >
-                    创建
-                  </Button>
+                  >创建</ActionLink>
                 </View>
               </View>
               {projectId ? (
@@ -860,41 +860,32 @@ function Connected({
               {error ? <Text style={s.error}>{error}</Text> : null}
             </View>
             <Text style={s.label}>已有的对话</Text>
-            {[...conversations]
+            <View style={s.card}>{[...conversations]
               .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-              .map((conversation) => (
-                <Pressable
+              .map((conversation, index, all) => (
+                <ActionRow
                   key={conversation.id}
-                  accessibilityRole="button"
+                  icon={conversation.agent_id === "finance" ? "wallet-outline" : "chatbubble-outline"}
+                  tone={conversation.agent_id === "finance" ? "gold" : "red"}
+                  title={conversation.title}
+                  description={`${timeLabel(conversation.updated_at)}${conversation.blocked ? " · 队列等待继续" : ""}`}
+                  compact
+                  last={index === all.length - 1}
                   onPress={() => {
                     openConversation(conversation.id);
                   }}
-                  style={[
-                    s.card,
-                    conversation.id === selectedId && {
-                      backgroundColor: colors.pale,
-                    },
-                  ]}
-                >
-                  <Text style={s.title}>{conversation.title}</Text>
-                  <Text style={s.muted}>
-                    {timeLabel(conversation.updated_at)}
-                    {conversation.blocked ? " · 队列等待继续" : ""}
-                  </Text>
-                </Pressable>
-              ))}
+                />
+              ))}</View>
             {conversationCursor ? (
-              <Button
-                secondary
+              <ActionLink
+                icon="chevron-down"
                 disabled={busy}
                 onPress={() => {
                   void loadMore("conversations");
                 }}
-              >
-                更早的对话
-              </Button>
+              >更早的对话</ActionLink>
             ) : null}
-          </ScrollView>
+          </PageScrollView>
         </SafeAreaView>
       </Modal>
     </View>

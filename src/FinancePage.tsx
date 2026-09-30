@@ -1,28 +1,32 @@
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Connection, Conversation, FinanceSummary, ModelCatalog } from "./api";
 import { ChatPanel } from "./ChatPanel";
-import { colors, s } from "./ui";
+import { useUi, BackLink, CardHeader } from "./ui";
+import { useTheme, useThemedStyles } from "./ThemeProvider";
+import { type ThemeColors, typography } from "./theme";
 
 export function FinancePage({
-  connection, conversation, finance, catalog, onBack, onRefresh, onConversationChanged,
+  connection, conversation, finance, catalog, onBack, onRefresh, onConversationChanged, agentModelId = null,
 }: {
   connection: Connection;
   conversation: Conversation;
   finance: FinanceSummary;
   catalog: ModelCatalog | null;
+  agentModelId?: string | null;
   onBack: () => void;
   onRefresh: () => void;
   onConversationChanged: (conversation: Conversation) => void;
 }) {
+  const { s } = useUi();
+  const { mode } = useTheme();
+  const styles = useThemedStyles(createStyles);
+  const { width } = useWindowDimensions();
   return (
     <View style={s.body}>
       <View style={styles.hero}>
-        <Image source={require("../assets/life-header-red.png")} resizeMode="contain" style={styles.heroArt} accessible={false} />
-        <Pressable accessibilityRole="button" accessibilityLabel="返回生活" onPress={onBack} style={({ pressed }) => [styles.back, pressed && s.pressed]}>
-          <Ionicons name="chevron-back" size={18} color={colors.accent} />
-          <Text style={styles.backText}>生活</Text>
-        </Pressable>
+        {mode === "light" && width >= 380 ? <Image source={require("../assets/life-header-red.png")} resizeMode="contain" style={styles.heroArt} accessible={false} /> : null}
+        <BackLink label="生活" onPress={onBack} />
         <Text accessibilityRole="header" style={styles.title}>财务</Text>
         <Text style={styles.intro}>账户、收支和扣费问题，直接和财务助手聊。</Text>
       </View>
@@ -31,6 +35,7 @@ export function FinancePage({
         conversation={conversation}
         assistantName="财务助手"
         catalog={catalog}
+        agentModelId={agentModelId}
         onConversationChanged={onConversationChanged}
         onRefresh={onRefresh}
         intro={<FinanceOverview finance={finance} />}
@@ -41,17 +46,13 @@ export function FinancePage({
 }
 
 function FinanceOverview({ finance }: { finance: FinanceSummary }) {
+  const { s } = useUi();
+  const styles = useThemedStyles(createStyles);
   const emptyOverview = !finance.balances.length && !finance.recent.length;
   return (
     <View style={[styles.overview, emptyOverview && styles.fill]}>
-      <View style={[styles.summaryCard, emptyOverview && styles.fill]}>
-        <View style={styles.sectionHeading}>
-          <View style={styles.sectionIcon}><Ionicons name="wallet-outline" size={26} color={colors.accent} /></View>
-          <View style={styles.sectionCopy}>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>账户一览</Text>
-            <Text style={styles.sectionSubtitle}>{finance.balances.length ? "你提供的各平台余额" : "还没有你提供的余额。"}</Text>
-          </View>
-        </View>
+      <View style={[s.card, emptyOverview && styles.fill]}>
+        <CardHeader icon="wallet-outline" title="账户一览" tone="gold" />
         {finance.balances.length ? (
           <View style={styles.records}>
             {finance.balances.map((item) => (
@@ -63,14 +64,8 @@ function FinanceOverview({ finance }: { finance: FinanceSummary }) {
           </View>
         ) : <FinanceEmpty icon="wallet-outline">{"告诉我账户名称和余额，\n我来帮你整理。"}</FinanceEmpty>}
       </View>
-      <View style={[styles.summaryCard, emptyOverview && styles.fill]}>
-        <View style={styles.sectionHeading}>
-          <View style={styles.sectionIcon}><Ionicons name="bar-chart-outline" size={26} color={colors.accent} /></View>
-          <View style={styles.sectionCopy}>
-            <Text accessibilityRole="header" style={styles.sectionTitle}>最近收支</Text>
-            <Text style={styles.sectionSubtitle}>{finance.recent.length ? "最近提供的收入与支出" : "还没有你提供的收支。"}</Text>
-          </View>
-        </View>
+      <View style={[s.card, emptyOverview && styles.fill]}>
+        <CardHeader icon="bar-chart-outline" title="最近收支" tone="gold" />
         {finance.recent.length ? (
           <View style={styles.records}>
             {finance.recent.slice(0, 5).map((item) => (
@@ -90,10 +85,13 @@ function FinanceOverview({ finance }: { finance: FinanceSummary }) {
 }
 
 function FinanceEmpty({ icon, children }: { icon: "wallet-outline" | "receipt-outline"; children: string }) {
+  const { colors } = useUi();
+  const { mode } = useTheme();
+  const styles = useThemedStyles(createStyles);
   return (
     <View style={styles.emptyState}>
       <View style={styles.emptyArtwork} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        <Image source={require("../assets/life-footer-red.png")} resizeMode="contain" style={styles.hills} />
+        {mode === "light" ? <Image source={require("../assets/life-footer-red.png")} resizeMode="contain" style={styles.hills} /> : null}
         <Ionicons name="leaf-outline" size={27} color={colors.accent} style={styles.sprout} />
         <View style={styles.emptyObject}><Ionicons name={icon} size={40} color={colors.accent} /></View>
       </View>
@@ -102,21 +100,13 @@ function FinanceEmpty({ icon, children }: { icon: "wallet-outline" | "receipt-ou
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   hero: { paddingHorizontal: 22, paddingTop: 6, paddingBottom: 14, gap: 8, minHeight: 166 },
   heroArt: { position: "absolute", width: 286, height: 190, right: -30, top: -9 },
-  back: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 4, minHeight: 40, paddingHorizontal: 14, borderRadius: 24, backgroundColor: colors.pale },
-  backText: { color: colors.accent, fontSize: 15, fontWeight: "600" },
-  title: { color: colors.ink, fontSize: 38, lineHeight: 48, fontWeight: "700" },
+  title: { ...typography.hero, color: colors.ink },
   intro: { color: colors.muted, fontSize: 13, lineHeight: 21, maxWidth: "76%" },
   overview: { gap: 14 },
   fill: { flexGrow: 1 },
-  summaryCard: { padding: 16, gap: 14, borderRadius: 24, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.line, shadowColor: colors.ink, shadowOpacity: 0.04, shadowOffset: { width: 0, height: 3 }, shadowRadius: 10, elevation: 1 },
-  sectionHeading: { flexDirection: "row", alignItems: "center", gap: 14 },
-  sectionIcon: { width: 46, height: 46, borderRadius: 17, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center" },
-  sectionCopy: { flex: 1, gap: 3 },
-  sectionTitle: { fontSize: 19, lineHeight: 27, fontWeight: "700", color: colors.ink },
-  sectionSubtitle: { fontSize: 13, lineHeight: 21, color: colors.muted },
   emptyState: { flexGrow: 1, alignItems: "center", justifyContent: "center", gap: 9, paddingBottom: 5 },
   emptyArtwork: { width: "100%", maxWidth: 280, height: 96, alignItems: "center", justifyContent: "center" },
   hills: { position: "absolute", width: "100%", height: 90, bottom: -3, opacity: 0.5 },

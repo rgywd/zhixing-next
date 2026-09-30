@@ -15,9 +15,11 @@
     "expo-sharing": "~57.0.22",
     "expo-speech": "~57.0.3",
     "expo-status-bar": "~57.0.1",
+    "expo-system-ui": "~57.0.4",
     "react": "19.2.3",
     "react-native": "0.86.3",
-    "react-native-safe-area-context": "~5.7.0"
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-svg": "15.15.4"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
@@ -31,7 +33,7 @@
     "ios": "expo run:ios",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint . --max-warnings 0",
-    "test:mobile": "node --experimental-strip-types --test tests/mobile-api.test.mjs",
+    "test:mobile": "node --experimental-strip-types --test tests/mobile-*.test.mjs",
     "bundle:android": "expo export --platform android --output-dir dist/android",
     "bundle:ios": "expo export --platform ios --output-dir dist/ios"
   },

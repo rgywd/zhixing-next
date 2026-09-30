@@ -23,7 +23,7 @@ def test_schema_and_persona_survive_reopen(store):
     reopened = Store(store.settings)
     assert reopened.get_assistant()["persona"] == "记得先核实出处"
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == safe_journal_mode().lower()
 
 
@@ -43,6 +43,11 @@ def test_existing_v1_database_gains_agents_without_losing_conversations(tmp_path
 
 def test_v2_finance_agent_customization_survives_tool_upgrade(store):
     with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE approvals")
+        db.execute("DROP TABLE operations")
+        db.execute("ALTER TABLE runs DROP COLUMN recovery_enabled")
+        db.execute("ALTER TABLE runs DROP COLUMN recovery_count")
+        db.execute("ALTER TABLE runs DROP COLUMN phase")
         db.execute("DROP TABLE resources")
         db.execute("ALTER TABLE messages DROP COLUMN attachments_json")
         db.execute("ALTER TABLE runs DROP COLUMN attachments_json")
@@ -73,6 +78,11 @@ def test_v4_upgrade_keeps_old_conversations_without_reprocessing_them(store):
     store.claim_next("chat")
     store.finish_run(run["id"], "completed", result="旧回复")
     with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE approvals")
+        db.execute("DROP TABLE operations")
+        db.execute("ALTER TABLE runs DROP COLUMN recovery_enabled")
+        db.execute("ALTER TABLE runs DROP COLUMN recovery_count")
+        db.execute("ALTER TABLE runs DROP COLUMN phase")
         db.execute("DROP TABLE resources")
         db.execute("ALTER TABLE messages DROP COLUMN attachments_json")
         db.execute("ALTER TABLE runs DROP COLUMN attachments_json")
@@ -92,6 +102,11 @@ def test_v4_upgrade_keeps_old_conversations_without_reprocessing_them(store):
 def test_v5_memory_database_gains_search_without_losing_memories(store):
     memory = store.add_memory("用户喜欢简洁回答")
     with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE approvals")
+        db.execute("DROP TABLE operations")
+        db.execute("ALTER TABLE runs DROP COLUMN recovery_enabled")
+        db.execute("ALTER TABLE runs DROP COLUMN recovery_count")
+        db.execute("ALTER TABLE runs DROP COLUMN phase")
         db.execute("DROP TABLE resources")
         db.execute("ALTER TABLE messages DROP COLUMN attachments_json")
         db.execute("ALTER TABLE runs DROP COLUMN attachments_json")
@@ -104,7 +119,29 @@ def test_v5_memory_database_gains_search_without_losing_memories(store):
     assert upgraded.list_memories()["items"][0]["id"] == memory["id"]
     assert upgraded.list_search_providers()["items"] == []
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
+
+
+def test_v8_migration_preserves_legacy_crash_behavior_and_queue(store):
+    conversation = store.create_conversation("升级前任务")["id"]
+    run = enqueue(store, conversation, "first")
+    store.claim_next("task")
+    queued = enqueue(store, conversation, "later")
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("DROP TABLE approvals")
+        db.execute("DROP TABLE operations")
+        db.execute("ALTER TABLE runs DROP COLUMN recovery_enabled")
+        db.execute("ALTER TABLE runs DROP COLUMN recovery_count")
+        db.execute("ALTER TABLE runs DROP COLUMN phase")
+        db.execute("PRAGMA user_version=8")
+    upgraded = Store(store.settings)
+    upgraded.recover_interrupted()
+    assert upgraded.get_run(run["id"])["status"] == "interrupted"
+    assert not upgraded.get_run(run["id"])["recovery_enabled"]
+    assert upgraded.get_run(queued["id"])["status"] == "queued"
+    assert upgraded.claim_next("task") is None
+    with pytest.raises(StoreError):
+        upgraded.resume_run(run["id"])
 
 
 def test_duplicate_messages_and_competing_claims_are_atomic(store):

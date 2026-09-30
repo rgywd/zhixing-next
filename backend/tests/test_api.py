@@ -65,6 +65,54 @@ def test_persona_project_and_conversation_flow(client):
     )
 
 
+def test_conversation_search_finds_full_history_and_message_text(client):
+    store = client.app.state.store
+    first = store.create_conversation("旅行计划")
+    second = store.create_conversation("普通聊天")
+    store.create_conversation("其他话题")
+    client.post(f"/v1/conversations/{second['id']}/messages", json={
+        "id": "search-message", "content": "下周去京都看红叶，预订车票", "kind": "chat",
+    })
+    client.post(f"/v1/conversations/{first['id']}/messages", json={
+        "id": "unrelated", "content": "别的内容", "kind": "chat",
+    })
+    result = client.get("/v1/conversations/search", params={"q": "旅行"})
+    assert result.status_code == 200
+    assert result.json()["items"][0]["conversation_id"] == first["id"]
+    assert result.json()["items"][0]["message_id"] is None
+    result = client.get("/v1/conversations/search", params={"q": "京都 车票"})
+    assert len(result.json()["items"]) == 1
+    match = result.json()["items"][0]
+    assert match["conversation_id"] == second["id"]
+    assert match["message_id"] == "search-message"
+    assert "京都" in match["snippet"]
+    for index in range(105):
+        store.create_conversation(f"其他对话 {index}")
+    assert client.get("/v1/conversations?latest=true&limit=100").json()["items"][0]["id"] != first["id"]
+    assert client.get("/v1/conversations/search", params={"q": "旅行"}).json()["items"][0]["conversation_id"] == first["id"]
+    later = store.create_conversation("最近聊天")
+    client.post(f"/v1/conversations/{later['id']}/messages", json={
+        "id": "later-message", "content": "京都行程已经更新",
+    })
+    assert client.get("/v1/conversations/search", params={"q": "京都", "sort": "oldest"}).json()["items"][0]["conversation_id"] == second["id"]
+    assert client.get("/v1/conversations/search", params={"q": "京都", "sort": "newest"}).json()["items"][0]["conversation_id"] == later["id"]
+    window = client.get(f"/v1/conversations/{second['id']}/messages", params={"before": match["message_seq"] + 1}).json()
+    assert any(item["id"] == match["message_id"] for item in window["items"])
+    rejected = store.create_conversation("隐藏消息")
+    client.post(f"/v1/conversations/{rejected['id']}/messages", json={
+        "id": "rejected-message", "content": "不应检索到这条孤立文本",
+    })
+    with store._connection(write=True) as db:
+        db.execute("UPDATE messages SET status='rejected' WHERE id='rejected-message'")
+    assert client.get("/v1/conversations/search", params={"q": "孤立文本"}).json()["items"] == []
+    assert client.get("/v1/conversations/search", params={"q": "%"}).json()["items"] == []
+    assert client.get("/v1/conversations/search", params={"q": " "}).json()["items"] == []
+    assert client.get("/v1/conversations/search", params={"q": "京" * 101}).status_code == 422
+    assert client.get("/v1/conversations/search", params={"q": "京都"}, headers={
+        "Authorization": "Bearer wrong",
+    }).status_code == 401
+
+
 def test_memory_management_is_authenticated_and_has_no_mobile_dependency(client):
     created = client.post("/v1/memories", json={"content": "用户喜欢简洁回答"})
     assert created.status_code == 201
@@ -159,6 +207,39 @@ def test_search_provider_secret_stays_server_side_and_run_selection_is_snapshot(
     assert client.post(path, json={"id": "search-1", "content": "查一下", "search_provider_id": "missing"}).status_code == 409
     assert client.post(path, json={"id": "search-2", "content": "查一下", "search_provider_id": "missing"}).status_code == 404
     assert client.post(path, json={"id": "search-3", "content": "查一下", "intent": "steer", "target_run_id": "run-1", "search_provider_id": provider["id"]}).status_code == 422
+
+
+@pytest.mark.parametrize("kind", ["chat", "task"])
+def test_direct_agent_model_priority_and_snapshot(settings, monkeypatch, kind):
+    monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "fixture-only-key")
+    settings.models = {
+        name: ModelConfig(
+            protocol="chat_completions", model=name, api_key_env="ZHIXING_TEST_MODEL_KEY",
+            reasoning_levels=["high"],
+        ) for name in ("global", "assigned", "chosen")
+    }
+    settings.roles = {"chat": "global", "task": "global"}
+    with TestClient(create_app(settings), headers={"Authorization": f"Bearer {settings.api_token}"}) as client:
+        agent = client.post("/v1/agents", json={
+            "name": "资料助手", "description": "读取资料", "instructions": "", "tools": [],
+            "visible": True, "model_id": "assigned",
+        }).json()
+        conversation = client.post("/v1/conversations", json={"title": "专用助手", "agent_id": agent["id"]}).json()
+        prefix = f"/v1/conversations/{conversation['id']}"
+        inherited = client.post(f"{prefix}/messages", json={"id": "inherited", "content": "默认", "kind": kind}).json()["run"]
+        assert inherited["model_id"] == "assigned"
+        assert client.put(f"{prefix}/model", json={"model_id": "chosen", "reasoning_effort": "high"}).status_code == 200
+        preference = client.post(f"{prefix}/messages", json={"id": "preference", "content": "会话", "kind": kind}).json()["run"]
+        assert preference["model_id"] == ("chosen" if kind == "chat" else "assigned")
+        override = client.post(f"{prefix}/messages", json={
+            "id": "override", "content": "本次", "kind": kind, "model_id": "global", "reasoning_effort": "high",
+        }).json()["run"]
+        assert (override["model_id"], override["reasoning_effort"]) == ("global", "high")
+        assert client.put(f"{prefix}/model", json={"model_id": None, "reasoning_effort": "high"}).status_code == 200
+        cleared = client.post(f"{prefix}/messages", json={"id": "cleared", "content": "清除", "kind": kind}).json()["run"]
+        assert cleared["model_id"] == "assigned"
+        assert client.get(f"/v1/runs/{preference['id']}").json()["model_id"] == preference["model_id"]
+        assert client.get(f"{prefix}").json()["agent_id"] == agent["id"]
 
 
 def test_agents_are_persistent_bound_and_conversation_owned(client):
@@ -306,17 +387,16 @@ def test_pagination_and_uniform_http_errors(client):
     }
 
 
-def test_status_reports_configuration_and_heartbeat_without_model_calls(client, monkeypatch):
+def test_status_reports_configuration_and_heartbeat_without_model_calls(settings, monkeypatch):
+    config = ModelConfig(protocol="gemini", model="test-model", api_key_env="ZHIXING_TEST_MODEL_KEY")
+    settings.models = {"chat": config, "task": config}
+    client = TestClient(create_app(settings), headers={"Authorization": f"Bearer {settings.api_token}"})
     response = client.get("/v1/status")
     assert response.status_code == 200
     assert response.json()["model_ready"] is False
     assert response.json()["worker_online"] is False
     assert response.json()["execution_available"] is False
     assert response.json()["sqlite_journal_mode"] in {"wal", "delete"}
-    config = ModelConfig(
-        protocol="gemini", model="test-model", api_key_env="ZHIXING_TEST_MODEL_KEY"
-    )
-    client.app.state.settings.models = {"chat": config, "task": config}
     monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", " \t\n ")
     assert client.get("/v1/status").json()["model_ready"] is False
     monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "test-value-must-not-be-returned")

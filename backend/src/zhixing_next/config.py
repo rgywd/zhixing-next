@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 class ModelConfig(BaseModel):
@@ -16,13 +16,16 @@ class ModelConfig(BaseModel):
     model: str = Field(min_length=1, max_length=200)
     provider: str | None = Field(default=None, min_length=1, max_length=100)
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
-    api_key_env: str = Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    api_key_env: str | None = Field(default=None, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    # Runtime-only credential. Public catalog responses and model_dump never include it.
+    api_key: SecretStr | None = Field(default=None, repr=False, exclude=True)
     base_url: str | None = None
     temperature: float | None = None
     reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
     reasoning_levels: list[Literal["auto", "none", "low", "medium", "high", "xhigh"]] = Field(default_factory=list, max_length=6)
     timeout: float = Field(default=60, gt=0, le=300)
     image_input: bool = False
+    context_window: int | None = Field(default=None, ge=4096, le=10_000_000)
 
     @field_validator("base_url")
     @classmethod
@@ -55,17 +58,50 @@ class PathGrant(BaseModel):
     model_config = ConfigDict(extra="forbid")
     path: Path
     writable: bool = False
+    overwrite: Literal["ask", "allow"] = "ask"
 
 
 class ExecutionConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = False
+    skills_dir: Path | None = None
     image: str = Field(default="zhixing-sandbox:1", pattern=r"^[a-zA-Z0-9][a-zA-Z0-9._/:@-]+$")
     memory_mb: int = Field(default=2048, ge=256, le=16384)
     cpus: float = Field(default=2, gt=0, le=16)
     timeout_seconds: int = Field(default=120, ge=1, le=1800)
     # Explicit host-side network grant. 'none' remains useful with uploaded resources.
     network: Literal["none", "bridge"] = "none"
+    network_authorization: Literal["ask", "allow"] = "ask"
+
+
+class RuntimeLimits(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    model_attempts: int = Field(default=80, ge=1, le=1000)
+    tool_calls: int = Field(default=160, ge=1, le=2000)
+    total_tokens: int = Field(default=1_000_000, ge=1, le=20_000_000)
+    retries: int = Field(default=3, ge=0, le=5)
+    retry_base_seconds: float = Field(default=1, ge=0, le=10)
+    active_seconds: int = Field(default=1800, ge=1, le=14400)
+
+
+class GitLabConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = "https://gitlab.com"
+    token_env: str = Field(default="ZHIXING_GITLAB_TOKEN", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
+    projects: list[str] = Field(default_factory=list, max_length=30)
+    allow_writes: bool = False
+
+    @field_validator("url")
+    @classmethod
+    def endpoint(cls, value):
+        return ModelConfig.validate_base_url(value)
+
+    @field_validator("projects")
+    @classmethod
+    def project_ids(cls, value):
+        if any(not item or len(item) > 200 or any(part in {"", ".", ".."} for part in item.split("/")) or any(c in item for c in "?#%\\") for item in value):
+            raise ValueError("Use project IDs or namespace/project paths")
+        return list(dict.fromkeys(value))
 
 
 class Settings(BaseModel):
@@ -74,11 +110,13 @@ class Settings(BaseModel):
     workspace_root: Path = Field(default_factory=lambda: Path(".data/workspaces").resolve())
     api_token: str = Field(default="", repr=False, exclude=True)
     models: dict[str, ModelConfig] = Field(default_factory=dict)
-    roles: dict[str, str] = Field(default_factory=lambda: {
+    roles: dict[str, str | None] = Field(default_factory=lambda: {
         "chat": "chat", "task": "task", "memory": "memory",
     })
     grants: list[PathGrant] = Field(default_factory=list)
     execution: ExecutionConfig = Field(default_factory=ExecutionConfig)
+    limits: RuntimeLimits = Field(default_factory=RuntimeLimits)
+    gitlab: GitLabConfig = Field(default_factory=GitLabConfig)
     poll_interval: float = Field(default=0.25, ge=0.05, le=10)
     config_file: Path | None = None
 
@@ -108,7 +146,7 @@ def load_settings() -> Settings:
         with config_file.open("rb") as file:
             raw = tomllib.load(file)
     base = config_file.parent if config_file else Path.cwd()
-    allowed = {"data_dir", "workspace_root", "api_token_env", "models", "roles", "grants", "poll_interval", "execution"}
+    allowed = {"data_dir", "workspace_root", "api_token_env", "models", "roles", "grants", "poll_interval", "execution", "limits", "gitlab"}
     if unknown := raw.keys() - allowed:
         raise ValueError("Unknown configuration fields: " + ", ".join(sorted(unknown)))
     data_dir = Path(os.environ.get("ZHIXING_DATA_DIR", raw.pop("data_dir", ".data"))).expanduser()
@@ -120,6 +158,9 @@ def load_settings() -> Settings:
     for grant in raw.get("grants", []):
         path = Path(grant["path"]).expanduser()
         grant["path"] = (path if path.is_absolute() else base / path).resolve()
+    if raw.get("execution", {}).get("skills_dir"):
+        directory = Path(raw["execution"]["skills_dir"]).expanduser()
+        raw["execution"]["skills_dir"] = (directory if directory.is_absolute() else base / directory).resolve()
     token_env = raw.pop("api_token_env", "ZHIXING_API_TOKEN")
     token = os.environ.get(token_env, "")
     if token and len(token) < 24:

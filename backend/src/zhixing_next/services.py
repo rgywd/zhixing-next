@@ -9,6 +9,10 @@ from .schemas import ScheduleInput
 from .store import Store
 
 
+def schedule_identifier(run_id, prompt, next_run_at, interval_seconds):
+    return str(uuid5(NAMESPACE_URL, f"{run_id}:{prompt}:{next_run_at}:{interval_seconds}"))
+
+
 def create_schedule_tools(settings, run):
     store = Store(settings)
 
@@ -22,9 +26,7 @@ def create_schedule_tools(settings, run):
         prompt: str, next_run_at: str, interval_seconds: int | None = None
     ) -> dict:
         """Create a user-requested scheduled task in this conversation. next_run_at must be an ISO datetime with an explicit timezone; clarify timezone only if unknown and relevant. Omit interval_seconds for a one-time task. The same request within a run is idempotent. This schedules execution, not an external push notification."""
-        identifier = str(
-            uuid5(NAMESPACE_URL, f"{run['id']}:{prompt}:{next_run_at}:{interval_seconds}")
-        )
+        identifier = schedule_identifier(run["id"], prompt, next_run_at, interval_seconds)
         body = ScheduleInput(
             id=identifier,
             conversation_id=run["conversation_id"],

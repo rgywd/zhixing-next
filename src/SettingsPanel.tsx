@@ -1,5 +1,6 @@
+import { useUi, ActionLink, Button, Field, PageHeading, PageScrollView, SettingsGroup, StatusPill, humanError } from "./ui";
 import { useState } from "react";
-import { Alert, ScrollView, Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import {
   normalizeServerUrl,
   request,
@@ -8,7 +9,6 @@ import {
   type ServiceStatus,
 } from "./api";
 import { saveConnection } from "./storage";
-import { Button, Field, humanError, s } from "./ui";
 
 export function ConnectionForm({
   initial,
@@ -17,6 +17,7 @@ export function ConnectionForm({
   initial?: Connection;
   onConnect: (connection: Connection) => void;
 }) {
+  const { s } = useUi();
   const [url, setUrl] = useState(initial?.url ?? "");
   const [token, setToken] = useState(initial?.token ?? "");
   const [busy, setBusy] = useState(false);
@@ -41,7 +42,7 @@ export function ConnectionForm({
     }
   }
   return (
-    <View style={{ gap: 18 }}>
+    <View style={s.form}>
       <Field
         label="服务地址"
         placeholder="https://assistant.example.com"
@@ -65,7 +66,7 @@ export function ConnectionForm({
         editable={!busy}
       />
       <Text style={s.muted}>
-        仅保存连接服务所需的令牌，使用手机安全存储。模型密钥在服务器上配置。
+        仅保存连接服务所需的令牌，使用手机安全存储。供应商密钥仅保存在服务端。
       </Text>
       {error ? (
         <Text accessibilityRole="alert" style={s.error}>
@@ -74,6 +75,7 @@ export function ConnectionForm({
       ) : null}
       <Button
         disabled={busy}
+        style={{ alignSelf: "flex-start" }}
         onPress={() => {
           void connect();
         }}
@@ -83,21 +85,16 @@ export function ConnectionForm({
     </View>
   );
 }
-export function SettingsPanel({
+export function PersonaSettingsPanel({
   connection,
   assistant,
   onAssistant,
-  onConnect,
-  onDisconnect,
-  onExplore,
 }: {
   connection: Connection;
   assistant: Assistant;
   onAssistant: (assistant: Assistant) => void;
-  onConnect: (connection: Connection) => void;
-  onDisconnect: () => void;
-  onExplore: () => void;
 }) {
+  const { s } = useUi();
   const [name, setName] = useState(assistant.name);
   const [persona, setPersona] = useState(assistant.persona);
   const [busy, setBusy] = useState(false);
@@ -121,32 +118,31 @@ export function SettingsPanel({
     }
   }
   return (
-    <ScrollView
-      keyboardShouldPersistTaps="handled"
-      contentContainerStyle={s.content}
-    >
-      <Text style={s.heading}>慢慢熟悉彼此</Text>
-      <Text style={s.muted}>称呼、表达方式和相处习惯，都可以随时调整。</Text>
-      <View style={s.card}>
+    <PageScrollView>
+      <PageHeading title="人格偏好" description="称呼、表达方式和相处习惯，都可以随时调整。" />
+      <View style={s.form}>
         <Field
           label="助手的名字"
           value={name}
-          onChangeText={setName}
+          onChangeText={(value) => { setName(value); setNotice(""); }}
           maxLength={80}
+          editable={!busy}
         />
         <Field
           label="你希望我们怎样相处"
           placeholder="例如：自然直接，先给结论；遇到不确定的事坦诚说明。可以称呼我…"
           multiline
           value={persona}
-          onChangeText={setPersona}
+          onChangeText={(value) => { setPersona(value); setNotice(""); }}
           maxLength={20000}
-          style={{ minHeight: 190 }}
+          editable={!busy}
+          style={{ minHeight: 132 }}
         />
-        {error ? <Text style={s.error}>{error}</Text> : null}
-        {notice ? <Text style={s.muted}>{notice}</Text> : null}
+        {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+        {notice ? <StatusPill tone="green">已保存</StatusPill> : null}
         <Button
           disabled={busy || !name.trim()}
+          style={{ alignSelf: "flex-start" }}
           onPress={() => {
             void save();
           }}
@@ -154,21 +150,28 @@ export function SettingsPanel({
           {busy ? "保存中…" : "保存人格设定"}
         </Button>
       </View>
-      <View style={s.card}>
-        <Text style={s.title}>认识运行环境</Text>
-        <Text style={s.muted}>
-          创建一次可追踪的只读任务，了解实际可访问的目录和工具。结果保留在独立会话中。
-        </Text>
-        <Button secondary onPress={onExplore}>
-          探索我的运行环境
-        </Button>
-      </View>
-      <View style={s.card}>
-        <Text style={s.title}>连接服务</Text>
-        <ConnectionForm initial={connection} onConnect={onConnect} />
-        <Button
-          secondary
-          danger
+    </PageScrollView>
+  );
+}
+
+export function ConnectionSettingsPanel({ connection, onConnect, onDisconnect, onExplore }: {
+  connection?: Connection;
+  onConnect: (connection: Connection) => void;
+  onDisconnect?: () => void;
+  onExplore?: () => void;
+}) {
+  const { s } = useUi();
+  return (
+    <PageScrollView>
+      <PageHeading title="服务连接" description="连接你的知行，继续聊天与工作。" />
+      <ConnectionForm initial={connection} onConnect={onConnect} />
+      {onExplore ? <SettingsGroup title="运行环境">
+        <ActionLink icon="compass-outline" tone="blue" onPress={onExplore}>探索运行环境</ActionLink>
+        <Text style={[s.muted, { paddingBottom: 12 }]}>了解可访问的目录和工具，结果会保留在一段新对话中。</Text>
+      </SettingsGroup> : null}
+      {onDisconnect ? (
+        <ActionLink
+          icon="log-out-outline"
           onPress={() =>
             Alert.alert(
               "断开当前服务？",
@@ -179,10 +182,8 @@ export function SettingsPanel({
               ],
             )
           }
-        >
-          断开并移除令牌
-        </Button>
-      </View>
-    </ScrollView>
+        >断开并移除令牌</ActionLink>
+      ) : null}
+    </PageScrollView>
   );
 }

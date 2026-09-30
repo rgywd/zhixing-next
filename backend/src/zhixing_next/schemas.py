@@ -28,6 +28,10 @@ class AssistantInput(Input):
     persona: str = Field(max_length=50_000)
 
 
+class AnswerInput(Input):
+    answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10000)]
+
+
 class ProjectInput(Input):
     name: Title
 
@@ -51,11 +55,73 @@ class ModelRoleInput(Input):
     model_id: Identifier
 
 
+class ProviderInput(Input):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+    protocol: Literal["chat_completions", "responses", "gemini"]
+    base_url: str = Field(min_length=1, max_length=2000)
+    api_key: str | None = Field(default=None, min_length=1, max_length=1000, repr=False)
+    enabled: bool = True
+
+    @field_validator("base_url")
+    @classmethod
+    def endpoint(cls, value):
+        from .config import ModelConfig
+
+        return ModelConfig.validate_base_url(value.strip())
+
+    @field_validator("api_key")
+    @classmethod
+    def credential(cls, value):
+        if value is not None and (not value.strip() or not value.isascii() or "\n" in value or "\r" in value):
+            raise ValueError("API key must be nonblank and one line")
+        return value.strip() if value else value
+
+
+class ProviderUpdate(ProviderInput):
+    revision: int = Field(ge=1)
+    clear_api_key: bool = False
+
+    @model_validator(mode="after")
+    def key_action(self):
+        if self.clear_api_key and self.api_key is not None:
+            raise ValueError("Choose replace or clear")
+        return self
+
+
+class ManagedModelInput(Input):
+    context_window: int | None = Field(default=None, ge=4096, le=10_000_000)
+    model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] | None = None
+    enabled: bool = True
+    image_input: bool = False
+    reasoning_levels: list[Literal["auto", "none", "low", "medium", "high", "xhigh"]] = Field(default_factory=list, max_length=6)
+    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    timeout: float = Field(default=60, gt=0, le=300)
+
+    @model_validator(mode="after")
+    def default_reasoning(self):
+        if self.reasoning_effort is not None and self.reasoning_effort not in self.reasoning_levels:
+            raise ValueError("Default thinking level must be available")
+        return self
+
+
+class ModelsImport(Input):
+    revision: int = Field(ge=1)
+    models: list[ManagedModelInput] = Field(min_length=1, max_length=200)
+
+
+class ManagedModelUpdate(Input):
+    revision: int = Field(ge=1)
+    model: ManagedModelInput
+
+
 class MemoryInput(Input):
     content: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=500)]
 
 
 class AgentInput(Input):
+    model_id: Identifier | None = None
     name: Title
     description: str = Field(min_length=1, max_length=1000)
     instructions: str = Field(default="", max_length=20_000)
@@ -116,3 +182,7 @@ class ScheduleInput(Input):
 
 class ScheduleUpdate(Input):
     enabled: bool = Field(strict=True)
+
+
+class ApprovalDecision(Input):
+    decision: Literal["approve", "deny", "retry", "skip"]

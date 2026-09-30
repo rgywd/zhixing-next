@@ -2,6 +2,8 @@
 
 2026-09-29，基线 `5606517`。保留 Deep Agents / LangGraph、SQLite 和单 worker，以实际任务、文件及操作回执连接手机与执行环境。以下是本分支的实现与本地验收，不代表生产服务已升级。
 
+后续已接入[中断恢复与授权](RECOVERY-AND-AUTHORIZATION.md)，当前数据库为 v9。本文保留第一轮执行能力验收范围；恢复与批准采用后续说明。
+
 ## 已交付的使用链路
 
 - 聊天、财务页都能上传图片或文件，支持只发附件。模型收到实际图片内容；原图以不可变资源保存，手机可预览和下载。文字模型不会静默丢弃本次图片输入。
@@ -39,6 +41,7 @@ uv export --only-group sandbox --no-emit-project --format requirements.txt --out
 enabled = true
 image = "zhixing-sandbox:1"
 network = "none"
+network_authorization = "ask"
 memory_mb = 2048
 cpus = 2
 timeout_seconds = 120
@@ -61,11 +64,11 @@ timeout_seconds = 120
 | 额外文件 | `[[grants]]` 沿用只读/可写权限，经物理文件工具访问；`copy_file` 可导入/导出二进制资料，不自动挂载宿主目录 |
 | 生命周期 | 运行结束移除容器，工作文件持久保留；临时目录、进程和浏览器会话不跨运行保存 |
 | 取消/超时 | 移除整个容器及子进程，确认后记录 `stopped:true`；停止失败保留标记，不能声称已停止 |
-| 重启 | worker 获得唯一锁后按服务标签清理旧容器，记录中断回执，再恢复队列；不自动重放副作用 |
+| 重启 | worker 获得唯一锁后清理旧容器，记录真实停止回执，再按 checkpoint 和操作记录继续；不确定副作用等待决定 |
 
 启用 bridge 后可按用户任务访问网页或下载依赖；额外 Python 依赖可安装到 `/workspace` 下的虚拟环境，根目录仍只读。`fetch_public_page` 继续保留其原有公网限制，该限制不扩展到 Shell/浏览器。当前没有宿主服务管理工具、账号连接平台、外部 harness 编排或跨任务保留的登录浏览器。
 
-额外目录权限和已有服务配置作为持久授权沿用，普通已授权操作不逐命令弹确认。财务及自建子智能体保留各自工具范围，不自动获得 Shell。隔离依赖 Docker/宿主安全边界，不等同于恶意多租户隔离认证。
+普通已授权操作不逐命令弹确认。额外目录替换默认 ask，可明确配置 overwrite=allow；bridge 联网默认每任务批准一次，可明确配置 network_authorization=allow 沿用持久授权。财务及自建子智能体保留各自工具范围，不自动获得 Shell。隔离依赖 Docker/宿主安全边界，不等同于恶意多租户隔离认证。
 
 ## 附件、产物和恢复
 

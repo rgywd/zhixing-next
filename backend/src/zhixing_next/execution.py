@@ -61,6 +61,8 @@ async def cleanup_orphans(settings: Settings) -> None:
     from .store import Store
 
     store = Store(settings)
+    with store._connection(write=True) as db:
+        db.execute("UPDATE processes SET state='interrupted' WHERE state IN ('starting','running')")
     for marker in markers:
         record = json.loads(marker.read_text())
         store.add_event(
@@ -72,6 +74,7 @@ async def cleanup_orphans(settings: Settings) -> None:
                 "stopped": True,
                 "reason": "worker_restart",
             },
+            allow_terminal=True,
         )
         marker.unlink()
 
@@ -105,6 +108,9 @@ class DockerSandbox(BaseSandbox):
         if "," in str(workspace):
             raise ValueError("Workspace cannot contain commas")
         options = self.settings.execution
+        from .skills import skill_bundle
+
+        bundle, _ = skill_bundle(self.settings)
         self._marker.parent.mkdir(exist_ok=True)
         # Persist ownership before spawning. A worker crash cannot hide an in-flight container.
         from .resources import _atomic_write
@@ -141,9 +147,10 @@ class DockerSandbox(BaseSandbox):
             f"type=bind,src={workspace},dst=/workspace",
             "--workdir",
             "/workspace",
+            *(["--mount", f"type=bind,src={bundle},dst=/custom-skills,readonly"] if bundle else []),
             options.image,
             "sleep",
-            "3600",
+            str(self.settings.limits.active_seconds + 60),
         ]
         try:
             code, _ = await docker(*args)
@@ -169,6 +176,10 @@ class DockerSandbox(BaseSandbox):
             raise RuntimeError("Sandbox stop is unconfirmed; execution must be reconciled")
         self._started = False
         self._marker.unlink(missing_ok=True)
+        from .store import Store
+
+        with Store(self.settings)._connection(write=True) as db:
+            db.execute("UPDATE processes SET state='interrupted' WHERE container=? AND state IN ('starting','running')", (self.container,))
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         # SDK sync fallbacks run in threads. All lifecycle operations remain on the owning loop.

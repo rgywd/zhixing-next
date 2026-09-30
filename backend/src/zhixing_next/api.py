@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import hmac
-import os
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -19,18 +18,26 @@ from filelock import Timeout
 from starlette.exceptions import HTTPException
 
 from . import files, resources
+from .catalog import Catalog, public_model
 from .config import Settings, load_settings
 from .models import model_ready
+from .provider_network import discover, probe
 from .schemas import (
     AgentInput,
     AgentUpdate,
+    AnswerInput,
+    ApprovalDecision,
     AssistantInput,
     ConversationInput,
     ConversationModelInput,
+    ManagedModelUpdate,
     MemoryInput,
     MessageInput,
     ModelRoleInput,
+    ModelsImport,
     ProjectInput,
+    ProviderInput,
+    ProviderUpdate,
     ResourceInput,
     ScheduleInput,
     ScheduleUpdate,
@@ -45,6 +52,7 @@ Cursor = Annotated[int, Query(ge=0)]
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings if settings is not None else load_settings()
     store = Store(settings)
+    catalog = Catalog(store)
     app = FastAPI(title="知行 Next", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.store = store
     app.state.settings = settings
@@ -127,8 +135,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def status():
         from .tools import capability_status
 
-        roles = store.model_roles()
-        ready = all(model_ready(settings, role, roles.get(role)) for role in ("chat", "task"))
+        runtime_settings = store.runtime_settings()
+        roles = runtime_settings.roles
+        ready = all(model_ready(runtime_settings, role, roles.get(role)) for role in ("chat", "task"))
         capability = capability_status(settings)
         return {
             "model_ready": ready,
@@ -148,27 +157,45 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @router.get("/models")
     def models():
-        return {
-            "items": [
-                {
-                    "id": identifier,
-                    "name": config.display_name or config.model,
-                    "model": config.model,
-                    "provider": config.provider or {
-                        "chat_completions": "OpenAI 兼容",
-                        "responses": "OpenAI Responses",
-                        "gemini": "Gemini",
-                    }[config.protocol],
-                    "protocol": config.protocol,
-                    "ready": bool(os.environ.get(config.api_key_env, "").strip()),
-                    "image_input": config.image_input,
-                    "reasoning_levels": config.reasoning_levels,
-                    "default_reasoning_effort": config.reasoning_effort,
-                }
-                for identifier, config in settings.models.items()
-            ],
-            "roles": store.model_roles(),
-        }
+        configured = store.runtime_settings()
+        return {"items": [public_model(identifier, config) for identifier, config in configured.models.items()], "roles": configured.roles}
+
+    @router.get("/providers")
+    def providers():
+        return catalog.list()
+
+    @router.post("/providers", status_code=201)
+    def add_provider(body: ProviderInput):
+        return catalog.create(body)
+
+    @router.put("/providers/{provider_id}")
+    def update_provider(provider_id: str, body: ProviderUpdate):
+        return catalog.update(provider_id, body)
+
+    @router.delete("/providers/{provider_id}")
+    def delete_provider(provider_id: str, revision: Annotated[int, Query(ge=1)]):
+        catalog.delete(provider_id, revision)
+        return {"deleted": True}
+
+    @router.post("/providers/{provider_id}/discover")
+    async def discover_models(provider_id: str):
+        return await discover(catalog.connection(provider_id))
+
+    @router.post("/providers/{provider_id}/models", status_code=201)
+    def add_models(provider_id: str, body: ModelsImport):
+        return catalog.save_models(provider_id, body)
+
+    @router.put("/providers/{provider_id}/models/{model_id}")
+    def update_model(provider_id: str, model_id: str, body: ManagedModelUpdate):
+        return catalog.save_models(provider_id, body, model_id)
+
+    @router.delete("/providers/{provider_id}/models/{model_id}")
+    def delete_model(provider_id: str, model_id: str, revision: Annotated[int, Query(ge=1)]):
+        return catalog.delete_model(provider_id, model_id, revision)
+
+    @router.post("/providers/{provider_id}/models/{model_id}/test")
+    async def test_model(provider_id: str, model_id: str):
+        return await probe(settings, catalog.connection(provider_id, model_id))
 
     @router.put("/models/roles/{role}")
     def update_model_role(role: Literal["chat", "task", "memory"], body: ModelRoleInput):
@@ -254,6 +281,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ):
         check_window(cursor, before, latest)
         return store.list_conversations(cursor, limit, before=before, latest=latest)
+
+    @router.get("/conversations/search")
+    def conversation_search(
+        q: Annotated[str, Query(min_length=1, max_length=100)],
+        sort: Literal["relevance", "newest", "oldest"] = "relevance",
+        limit: Limit = 50,
+    ):
+        return store.search_conversations(q, sort=sort, limit=limit)
 
     @router.post("/conversations", status_code=201)
     def create_conversation(body: ConversationInput):
@@ -353,6 +388,55 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.get("/resources")
     def resource_list(conversation_id: str | None = None, cursor: Cursor = 0, limit: Limit = 50):
         return store.list_resources(conversation_id, cursor, limit)
+
+    @router.get("/input-requests")
+    def input_requests(conversation_id: str | None = None, run_id: str | None = None):
+        from .taskflow import TaskFlow
+
+        return TaskFlow(store).questions(conversation_id, run_id)
+
+    @router.post("/input-requests/{request_id}/answer")
+    def answer_request(request_id: UUID, body: AnswerInput):
+        from .taskflow import TaskFlow
+
+        return TaskFlow(store).answer(str(request_id), body.answer)
+
+    @router.get("/runs/{run_id}/report")
+    def run_report(run_id: UUID):
+        from .resilience import RunBudget
+        from .taskflow import TaskFlow
+
+        store.get_run(str(run_id))
+        return {"usage": RunBudget(store, str(run_id)).summary(), "steps": TaskFlow(store).steps(str(run_id))}
+
+    @router.get("/approvals")
+    def approval_list(conversation_id: str | None = None, run_id: str | None = None):
+        from .operations import Journal
+
+        return Journal(settings).approvals(conversation_id, run_id)
+
+    @router.post("/approvals/{approval_id}/decision")
+    def approval_decision(approval_id: UUID, body: ApprovalDecision):
+        from .operations import Journal
+
+        return Journal(settings).decide(str(approval_id), body.decision)
+
+    @router.get("/approvals/{approval_id}/file")
+    def approval_file(approval_id: UUID, version: Literal["before", "after"] = "after"):
+        from .operations import Journal
+
+        name, data = Journal(settings).approval_file(str(approval_id), version)
+        return Response(data, media_type="application/octet-stream", headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename*=UTF-8''" + quote(name)})
+
+    @router.get("/runs/{run_id}/operations")
+    def operation_list(run_id: str):
+        from .operations import Journal
+
+        return Journal(settings).receipts(run_id)
+
+    @router.post("/runs/{run_id}/resume")
+    def resume_run(run_id: str):
+        return store.resume_run(run_id)
 
     @router.post("/conversations/{conversation_id}/resources")
     def capture_resource(conversation_id: str, body: ResourceInput):

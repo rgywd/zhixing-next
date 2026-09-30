@@ -182,6 +182,8 @@ Deep Agents / LangGraph 仍负责模型与工具循环，第一版不接入 Code
 
 运行状态、客户端事件和 LangGraph 内部状态各有归属，需要定义一致性和恢复策略；选定框架不等于这些产品语义自动完成。
 
+2026-09-29 已接入原生 interrupt/resume、持久步骤回执与认证批准接口。文件按实际内容核对，无法核实的命令/外部效果不自动重放；实现、迁移和验证边界见[中断恢复与授权](RECOVERY-AND-AUTHORIZATION.md)。这不是任意进程恢复或任意外部系统 exactly-once 的承诺。
+
 ### 运行中输入与控制
 
 Queue / Steer 的用户语义由 [PRODUCT.md](PRODUCT.md#queue-与-steer) 统一定义。建议在产品后端持久接收输入，

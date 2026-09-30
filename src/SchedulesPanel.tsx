@@ -1,5 +1,6 @@
+import { useUi, ActionLink, Button, Empty, Field, IconAction, PageHeading, PageScrollView, StatusPill, humanError, timeLabel } from "./ui";
 import { useEffect, useRef, useState } from "react";
-import { Alert, ScrollView, Text, View } from "react-native";
+import { Alert, Text, View } from "react-native";
 import * as Crypto from "expo-crypto";
 import {
   prepareSchedule,
@@ -10,7 +11,6 @@ import {
   type PlanDraft,
 } from "./api";
 import { clearPlanDraft, readPlanDraft, savePlanDraft } from "./storage";
-import { Button, Field, humanError, s, timeLabel } from "./ui";
 
 function nextHour() {
   const date = new Date(Date.now() + 3600000);
@@ -35,6 +35,7 @@ export function SchedulesPanel({
   hasMore: boolean;
   loadMore: () => void;
 }) {
+  const { s } = useUi();
   const [creating, setCreating] = useState(false);
   const [draft, setDraft] = useState<PlanDraft>({
     prompt: "",
@@ -146,19 +147,10 @@ export function SchedulesPanel({
     }
   }
   return (
-    <ScrollView
-      keyboardShouldPersistTaps="handled"
-      contentContainerStyle={s.content}
-    >
-      <View style={s.spread}>
-        <View style={s.grow}>
-          <Text style={s.heading}>在合适的时候</Text>
-          <Text style={s.muted}>把需要惦记的事，交给知行。</Text>
-        </View>
-        <Button secondary onPress={() => setCreating(!creating)}>
-          {creating ? "收起" : "＋ 新计划"}
-        </Button>
-      </View>
+    <PageScrollView>
+      <PageHeading title="定时计划" description="把需要惦记的事，交给知行。" action={
+        <IconAction icon={creating ? "close" : "add"} label={creating ? "收起新计划" : "新计划"} onPress={() => setCreating(!creating)} tone="gold" />
+      } />
       {error ? (
         <Text accessibilityRole="alert" style={s.error}>
           {error}
@@ -203,6 +195,7 @@ export function SchedulesPanel({
             disabled={
               !ready || busy || !prompt.trim() || (!conversation && !pending)
             }
+            style={{ alignSelf: "flex-start" }}
             onPress={() => {
               void create();
             }}
@@ -214,37 +207,32 @@ export function SchedulesPanel({
               <Text style={s.muted}>
                 等待确认 · 重试会沿用原时间、原会话与同一请求 ID。
               </Text>
-              <Button secondary onPress={editPending}>
-                重新编辑计划
-              </Button>
+              <ActionLink icon="create-outline" tone="gold" onPress={editPending}>重新编辑计划</ActionLink>
             </>
           ) : null}
         </View>
       ) : null}
-      {!schedules.length ? (
-        <View style={[s.card, { paddingVertical: 32 }]}>
-          <Text style={s.title}>还没有安排</Text>
-          <Text style={s.muted}>
+      {!schedules.length && !creating ? (
+        <View style={s.card}>
+          <Empty compact icon="calendar-outline" title="还没有安排">
             先从一件小事开始：定时整理资料，或者继续一项研究。
-          </Text>
+          </Empty>
         </View>
-      ) : (
+      ) : schedules.length ? (
         [...schedules].reverse().map((schedule) => (
           <View key={schedule.id} style={s.card}>
             <View style={s.spread}>
-              <Text style={s.label}>
-                {schedule.enabled ? "● 计划中" : "○ 已暂停 / 一次性已触发"}
-              </Text>
-              <Button
-                secondary
-                small
+              <StatusPill tone={schedule.enabled ? "green" : "neutral"}>{schedule.enabled ? "计划中" : "已暂停 / 已触发"}</StatusPill>
+              <ActionLink
+                icon={schedule.enabled ? "pause-outline" : "play-outline"}
+                tone="gold"
                 disabled={busy}
                 onPress={() => {
                   void toggle(schedule);
                 }}
               >
                 {schedule.enabled ? "暂停" : "启用"}
-              </Button>
+              </ActionLink>
             </View>
             <Text style={s.text}>{schedule.prompt}</Text>
             <Text style={s.muted}>
@@ -260,12 +248,10 @@ export function SchedulesPanel({
             </Text>
           </View>
         ))
-      )}
-      {hasMore ? (
-        <Button secondary onPress={loadMore}>
-          加载更多计划
-        </Button>
       ) : null}
-    </ScrollView>
+      {hasMore ? (
+        <ActionLink icon="chevron-down" onPress={loadMore}>加载更多计划</ActionLink>
+      ) : null}
+    </PageScrollView>
   );
 }

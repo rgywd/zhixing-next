@@ -34,12 +34,31 @@ api_key_env = "ZHIXING_GEMINI_API_KEY"
 # [[grants]]
 # path = "/absolute/path/to/reference-materials"
 # writable = false
+# overwrite = "ask" # allow only for explicitly authorized persistent replacements.
 
 # Build sandbox/Dockerfile and verify the target host before enabling execution.
 [execution]
 enabled = false
 image = "zhixing-sandbox:1"
 network = "none" # bridge also allows Docker-reachable private networks.
+network_authorization = "ask" # bridge: once per task; allow means persistent authorization.
 memory_mb = 2048
 cpus = 2
 timeout_seconds = 120
+# Optional dedicated folder containing <skill-name>/SKILL.md. Snapshotted read-only.
+# skills_dir = "./skills"
+
+[limits]
+model_attempts = 80 # Includes retries and child agents, across recovery.
+tool_calls = 160
+total_tokens = 1000000 # Stops the next call after the reported cumulative limit.
+active_seconds = 1800
+retries = 3
+retry_base_seconds = 1
+
+# Scoped GitLab integration. Enable only projects the assistant should access.
+[gitlab]
+url = "https://gitlab.com" # Or your self-hosted HTTPS instance.
+token_env = "ZHIXING_GITLAB_TOKEN"
+projects = [] # Numeric project IDs or namespace/project paths; at most 30.
+allow_writes = false # true exposes issue creation/update, each requiring App approval.

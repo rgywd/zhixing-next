@@ -21,6 +21,7 @@ import {
   saveDraft,
   type Draft,
 } from "./storage";
+import { useSyncStatus } from "./ConnectionStatus";
 import { humanError } from "./ui";
 
 export function useChat({
@@ -29,12 +30,14 @@ export function useChat({
   onRefresh,
   initialKind = "chat",
   startWithFiles = false,
+  focusMessageSeq = null,
 }: {
   connection: Connection;
   conversation: Conversation;
   onRefresh: () => void;
   initialKind?: "chat" | "task";
   startWithFiles?: boolean;
+  focusMessageSeq?: number | null;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const pendingStatusRef = useRef<number | null>(null);
@@ -62,16 +65,16 @@ export function useChat({
   const [target, setTarget] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [syncError, setSyncError] = useState("");
   const [loading, setLoading] = useState(true);
   const [detail, setDetail] = useState<string | null>(null);
   const [showFiles, setShowFiles] = useState(startWithFiles);
   const [speaking, setSpeaking] = useState<string | null>(null);
   const alive = useRef(true);
   const list = useRef<FlatList<Message>>(null);
-  const nearBottomRef = useRef(true);
+  const nearBottomRef = useRef(focusMessageSeq === null);
   const key = draftKey(connection.url, conversation.id);
   const refresh = useRef<() => void>(() => undefined);
+  const reportSync = useSyncStatus(() => refresh.current());
 
   useEffect(() => {
     alive.current = true;
@@ -118,7 +121,7 @@ export function useChat({
         const [history, tasks, activeRuns, receipts] = await Promise.all([
           request<Page<Message>>(
             connection,
-            `/conversations/${conversation.id}/messages?${initial ? "latest=true" : `cursor=${lastSeq}`}&limit=100`,
+            `/conversations/${conversation.id}/messages?${initial ? (focusMessageSeq === null ? "latest=true" : `before=${focusMessageSeq + 1}`) : `cursor=${lastSeq}`}&limit=100`,
             { signal: controller.signal },
           ),
           request<Page<Run>>(
@@ -159,9 +162,9 @@ export function useChat({
           setPrevious(history.previous_cursor ?? null);
           initial = false;
         }
-        setSyncError("");
+        reportSync();
       } catch (e) {
-        if (active) setSyncError(humanError(e));
+        if (active) reportSync(e);
       } finally {
         polling = false;
         if (active) setLoading(false);
@@ -188,7 +191,7 @@ export function useChat({
       controller.abort();
       listener.remove();
     };
-  }, [connection, conversation.id]);
+  }, [connection, conversation.id, focusMessageSeq, reportSync]);
 
   async function loadOlder() {
     if (!previous || busy) return;
@@ -359,7 +362,6 @@ export function useChat({
     busy,
     error,
     setError,
-    syncError,
     loading,
     detail,
     setDetail,

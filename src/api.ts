@@ -9,6 +9,7 @@ export type AgentTool = "inspect_environment" | "list_directory" | "read_text_fi
 export type FinanceObservation = { id: string; kind: "balance" | "income" | "expense"; platform: string; amount: string; note: string; created_at: string };
 export type FinanceSummary = { balances: FinanceObservation[]; recent: FinanceObservation[] };
 export type Agent = {
+  model_id?: string | null;
   id: string;
   kind: "service" | "custom";
   service: string | null;
@@ -34,11 +35,36 @@ export type ModelInfo = {
   image_input: boolean;
   reasoning_levels: ReasoningEffort[];
   default_reasoning_effort: Exclude<ReasoningEffort, "auto"> | null;
+  context_window?: number | null;
 };
 export type ModelCatalog = {
   items: ModelInfo[];
   roles: Partial<Record<"chat" | "task" | "memory", string | null>>;
 };
+export type ModelProtocol = ModelInfo["protocol"];
+export type ManagedModel = ModelInfo & { enabled: boolean; temperature: number | null; timeout: number };
+export type ModelProvider = {
+  id: string;
+  name: string;
+  protocol: ModelProtocol;
+  base_url: string;
+  enabled: boolean;
+  revision: number;
+  has_api_key: boolean;
+  credential_source: "stored" | "environment" | "none";
+  models: ManagedModel[];
+};
+export type ProviderInput = {
+  name: string; protocol: ModelProtocol; base_url: string; enabled: boolean;
+  api_key?: string; clear_api_key?: boolean; revision?: number;
+};
+export type ManagedModelInput = {
+  model: string; display_name: string | null; enabled: boolean; image_input: boolean;
+  reasoning_levels: ReasoningEffort[]; reasoning_effort: Exclude<ReasoningEffort, "auto"> | null;
+  temperature: number | null; timeout: number; context_window?: number | null;
+};
+export type DiscoveredModel = { model: string; name: string };
+export type ModelProbe = { checks: { kind: "reply" | "stream" | "tools"; ok: boolean; elapsed_ms: number; message?: string }[] };
 export type Project = { id: string; name: string; workspace_path: string };
 export type Conversation = {
   id: string;
@@ -50,7 +76,19 @@ export type Conversation = {
   blocked: boolean;
   updated_at: string;
 };
+export type ConversationSearchResult = {
+  conversation_id: string;
+  title: string;
+  agent_id: string | null;
+  updated_at: string;
+  message_id: string | null;
+  message_seq: number | null;
+  snippet: string;
+};
 export type Run = {
+  phase?: "normal" | "approval" | "input" | "recovering";
+  recovery_enabled?: number;
+  recovery_count?: number;
   id: string;
   conversation_id: string;
   kind: "chat" | "task";
@@ -90,6 +128,13 @@ export type MessageInput = {
 };
 export type SearchProvider = { id: string; name: string; kind: "brave" | "tavily" | "serper" };
 export type Resource = { id: string; name: string; path: string; size: number; mime_type: string; conversation_id: string };
+export type Approval = {
+  id: string;
+  run_id: string;
+  kind: "overwrite" | "network" | "uncertain";
+  state: string;
+  details: { title: string; description?: string; path?: string; bytes?: number; preview?: string; task?: string; tool?: string; arguments?: Record<string, unknown> };
+};
 export type Draft = { text: string; attachments?: Resource[]; pending: MessageInput | null };
 export type Schedule = {
   id: string;
@@ -178,13 +223,13 @@ export async function fileUploadRequest(
 export async function request<T>(
   connection: Connection,
   path: string,
-  options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
+  options: { method?: string; body?: unknown; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   options.signal?.addEventListener("abort", abort, { once: true });
   if (options.signal?.aborted) controller.abort();
-  const timeout = setTimeout(abort, 15000);
+  const timeout = setTimeout(abort, options.timeoutMs ?? 15000);
   try {
     const response = await fetch(`${connection.url}/v1${path}`, {
       method: options.method ?? "GET",
