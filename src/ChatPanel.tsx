@@ -33,6 +33,7 @@ import { useChat } from "./useChat";
 import { ModelPicker, reasoningLabel } from "./ModelPicker";
 import { Attachments } from "./Attachments";
 import { ApprovalCards } from "./ApprovalCards";
+import { RunReport } from "./RunReport";
 import { FilesPanel } from "./FilesPanel";
 import { SearchPicker } from "./SearchPicker";
 
@@ -260,7 +261,7 @@ export function ChatPanel({
           <Text numberOfLines={1} style={[s.muted, s.grow]}>
             {running
               ? `正在${running.kind === "task" ? "处理委托" : "回复"} · ${pendingRuns.filter((run) => run.status === "queued").length} 条等待`
-              : pendingRuns.some((run) => run.phase === "approval") ? "有操作需要你的决定" : `${pendingRuns.length} 条等待执行`}
+              : pendingRuns.some((run) => run.phase === "input") ? "有问题需要你补充" : pendingRuns.some((run) => run.phase === "approval") ? "有操作需要你的决定" : `${pendingRuns.length} 条等待执行`}
           </Text>
           <Pressable accessibilityRole="button" accessibilityLabel="查看运行进度" onPress={() => setDetail(running?.id ?? pendingRuns[0].id)}>
             <Text style={chatStyles.link}>进度</Text>
@@ -424,7 +425,7 @@ function RunDetail({
           <>
             <Text style={s.title}>{run.prompt}</Text>
             <Text style={s.muted}>
-              {run.status === "queued" && run.phase === "approval" ? "等待批准" : run.status === "queued" && run.phase === "recovering" ? "正在恢复任务" : runLabels[run.status]} · {run.id.slice(0, 8)}
+              {run.status === "queued" && run.phase === "input" ? "等待回答" : run.status === "queued" && run.phase === "approval" ? "等待批准" : run.status === "queued" && run.phase === "recovering" ? "正在恢复任务" : runLabels[run.status]} · {run.id.slice(0, 8)}
             </Text>
             {run.model_id ? (
               <Text style={s.muted}>
@@ -442,6 +443,7 @@ function RunDetail({
               void request<Run>(connection, `/runs/${run.id}/resume`, { method: "POST" }).then(setRun).catch((e) => setError(humanError(e)));
             }}>核对已有步骤并继续原任务</Button> : null}
             <ApprovalCards connection={connection} runId={run.id} />
+            <RunReport connection={connection} runId={run.id} />
             {run.result ? (
               <View style={s.card}>
                 <Text style={s.label}>结果</Text>
@@ -494,8 +496,15 @@ function RunDetail({
   );
 }
 function eventSummary(event: RunEvent) {
+  if (event.type === "retry") return `连接短暂波动，正在重试（第 ${String(event.data.attempt)} 次）。`;
+  if (event.type === "model_error") return `模型请求未成功 · ${String(event.data.kind ?? "未知原因")}`;
+  if (event.type === "usage") return `已报告用量：输入 ${String(event.data.input_tokens ?? 0)} / 输出 ${String(event.data.output_tokens ?? 0)} token · 调用 ${String(event.data.model_attempts ?? 0)} 次${event.data.unknown_usage ? " · 部分调用未返回用量" : ""}`;
+  if (event.type === "input_required") return String(event.data.question ?? "等待补充信息");
+  if (event.type === "input_answered") return "回答已保存，将继续原任务。";
+  if (event.type === "task_plan") return "任务完成条件已记录。";
+  if (event.type === "task_check") return `验证 ${String(event.data.step_id)} · ${event.data.status === "passed" ? "已取得证据" : "存在阻碍"}`;
   if (event.type === "recovering") return "已保留进度，正在核对并继续原任务。";
-  if (event.type === "paused") return event.data.reason === "resume" ? "决定已保存，准备继续任务。" : "任务进度已保存，等待操作决定。";
+  if (event.type === "paused") return event.data.reason === "input" ? "任务进度已保存，等待补充信息。" : event.data.reason === "resume" ? "决定已保存，准备继续任务。" : "任务进度已保存，等待操作决定。";
   if (event.type === "operation") {
     const labels: Record<string, string> = { prepared: "准备就绪", started: "已开始", succeeded: "已核对完成", failed: "未完成", denied: "未获批准", unconfirmed: "结果待核对" };
     return `${String(event.data.tool ?? "操作")} · ${labels[String(event.data.state)] ?? "状态已更新"}`;

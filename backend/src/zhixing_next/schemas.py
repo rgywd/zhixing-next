@@ -28,6 +28,10 @@ class AssistantInput(Input):
     persona: str = Field(max_length=50_000)
 
 
+class AnswerInput(Input):
+    answer: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10000)]
+
+
 class ProjectInput(Input):
     name: Title
 
@@ -85,6 +89,7 @@ class ProviderUpdate(ProviderInput):
 
 
 class ManagedModelInput(Input):
+    context_window: int | None = Field(default=None, ge=4096, le=10_000_000)
     model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
     display_name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)] | None = None
     enabled: bool = True
@@ -116,6 +121,7 @@ class MemoryInput(Input):
 
 
 class AgentInput(Input):
+    model_id: Identifier | None = None
     name: Title
     description: str = Field(min_length=1, max_length=1000)
     instructions: str = Field(default="", max_length=20_000)

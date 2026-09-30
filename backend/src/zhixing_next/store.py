@@ -14,6 +14,7 @@ from .config import Settings
 from .sqlite_policy import safe_journal_mode
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
+CUSTOM_AGENT_TOOLS = {"inspect_environment", "list_directory", "read_text_file", "read_document", "view_image", "write_text_file", "fetch_public_page"}
 _CREDENTIAL_WORDS = re.compile(
     r"api[_ -]?key|password|passwd|token|secret|cookie|密码|密钥|私钥|恢复密钥"
     r"|\bsk-[A-Za-z0-9_-]{10,}|\bghp_[A-Za-z0-9]{20,}|-----BEGIN .*PRIVATE KEY-----",
@@ -75,7 +76,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 10:
+            if version > 11:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -134,6 +135,17 @@ class Store:
 
                 migrate(db, settings)
                 db.execute("PRAGMA user_version=10")
+            if version < 11:
+                if "model_id" not in {row[1] for row in db.execute("PRAGMA table_info(agents)")}:
+                    db.execute("ALTER TABLE agents ADD COLUMN model_id TEXT")
+                db.execute("CREATE TABLE IF NOT EXISTS agent_model_configs(run_id TEXT NOT NULL REFERENCES runs(id),model_id TEXT NOT NULL,config_json TEXT NOT NULL,api_key TEXT,PRIMARY KEY(run_id,model_id))")
+                db.execute("CREATE TABLE IF NOT EXISTS run_agent_assignments(run_id TEXT NOT NULL REFERENCES runs(id),agent_id TEXT NOT NULL,model_id TEXT,PRIMARY KEY(run_id,agent_id))")
+                db.execute("INSERT OR IGNORE INTO run_agent_assignments SELECT r.id,a.id,a.model_id FROM runs r CROSS JOIN agents a WHERE r.status IN ('queued','running','interrupted')")
+                db.execute("CREATE TABLE IF NOT EXISTS run_usage(run_id TEXT PRIMARY KEY REFERENCES runs(id),model_attempts INTEGER NOT NULL DEFAULT 0,tool_calls INTEGER NOT NULL DEFAULT 0,input_tokens INTEGER NOT NULL DEFAULT 0,output_tokens INTEGER NOT NULL DEFAULT 0,unknown_usage INTEGER NOT NULL DEFAULT 0,active_seconds REAL NOT NULL DEFAULT 0,loop_signature TEXT,loop_call_id TEXT,loop_count INTEGER NOT NULL DEFAULT 0)")
+                db.execute("CREATE TABLE IF NOT EXISTS input_requests(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),question TEXT NOT NULL,options_json TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'pending',answer TEXT,created_at TEXT NOT NULL,answered_at TEXT)")
+                db.execute("CREATE TABLE IF NOT EXISTS task_steps(run_id TEXT NOT NULL REFERENCES runs(id),id TEXT NOT NULL,description TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',evidence_json TEXT,PRIMARY KEY(run_id,id))")
+                db.execute("CREATE TABLE IF NOT EXISTS processes(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),container TEXT NOT NULL,command TEXT NOT NULL,state TEXT NOT NULL,exit_code INTEGER,created_at TEXT NOT NULL)")
+                db.execute("PRAGMA user_version=11")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)
@@ -413,20 +425,28 @@ class Store:
         with self._connection() as db:
             return _record(self._require(db, "agents", agent_id))
 
-    def create_agent(self, *, name, description, instructions, tools, visible):
-        if set(tools) - {"inspect_environment", "list_directory", "read_text_file", "read_document", "view_image", "write_text_file", "fetch_public_page"}:
+    def create_agent(self, *, name, description, instructions, tools, visible, model_id=None):
+        if set(tools) - CUSTOM_AGENT_TOOLS:
             raise StoreError("tool_not_allowed", "This tool belongs to a fixed service agent", 422)
         identifier, now = str(uuid4()), timestamp()
         with self._connection(write=True) as db:
+            if model_id is not None and model_id not in self.runtime_settings(db).models:
+                raise StoreError("unknown_model", "Choose an enabled model", 422)
             db.execute("INSERT INTO agents(id,kind,service,name,description,instructions,tools_json,visible,created_at,updated_at) VALUES(?,'custom',NULL,?,?,?,?,?,?,?)", (identifier, name, description, instructions, _json(sorted(set(tools))), visible, now, now))
+            db.execute("UPDATE agents SET model_id=? WHERE id=?", (model_id, identifier))
             return _record(self._require(db, "agents", identifier))
 
-    def update_agent(self, agent_id, *, name, description, instructions, tools, visible):
+    def update_agent(self, agent_id, *, name, description, instructions, tools, visible, model_id=None):
         with self._connection(write=True) as db:
             agent = self._require(db, "agents", agent_id)
+            if agent["kind"] == "custom" and set(tools) - CUSTOM_AGENT_TOOLS:
+                raise StoreError("tool_not_allowed", "This tool belongs to a fixed service agent", 422)
+            if model_id is not None and model_id not in self.runtime_settings(db).models:
+                raise StoreError("unknown_model", "Choose an enabled model", 422)
             if agent["kind"] == "service" and sorted(set(tools)) != json.loads(agent["tools_json"]):
                 raise StoreError("tool_not_allowed", "Service agent tools are fixed by the service", 422)
             db.execute("UPDATE agents SET name=?,description=?,instructions=?,tools_json=?,visible=?,updated_at=? WHERE id=?", (name, description, instructions, _json(sorted(set(tools))), visible, timestamp(), agent_id))
+            db.execute("UPDATE agents SET model_id=? WHERE id=?", (model_id, agent_id))
             return _record(self._require(db, "agents", agent_id))
 
     def delete_agent(self, agent_id):
@@ -537,7 +557,17 @@ class Store:
             if saved is None or json.loads(saved["config_json"]) is None:
                 return self.settings.model_copy(update={"models": {}, "roles": {}})
             config = ModelConfig(**(json.loads(saved["config_json"]) | {"api_key_env": None, "api_key": saved["api_key"]}))
-            return self.settings.model_copy(update={"models": {run["model_id"]: config}})
+            models = {run["model_id"]: config}
+            for child in db.execute("SELECT * FROM agent_model_configs WHERE run_id=?", (run["id"],)):
+                models[child["model_id"]] = ModelConfig(**(json.loads(child["config_json"]) | {"api_key_env": None, "api_key": child["api_key"]}))
+            return self.settings.model_copy(update={"models": models})
+
+    def agents_for_run(self, run):
+        # Freeze model selection while keeping current tool restrictions. Deleted
+        # agents stay unavailable and newly added agents cannot retarget a queue.
+        with self._connection() as db:
+            assignments = {row["agent_id"]: row["model_id"] for row in db.execute("SELECT * FROM run_agent_assignments WHERE run_id=?", (run["id"],))}
+        return [agent | {"model_id": assignments[agent["id"]]} for agent in self.list_agents()["items"] if agent["id"] in assignments]
 
     def model_roles(self):
         return self.runtime_settings().roles
@@ -711,6 +741,12 @@ class Store:
             conversation["reasoning_effort"]
             if kind == "chat" and conversation["agent_id"] is None else None
         )
+        if conversation["agent_id"]:
+            assigned = self._require(db, "agents", conversation["agent_id"])["model_id"]
+            if assigned:
+                if assigned not in self.runtime_settings(db).models:
+                    raise StoreError("unknown_model", "助手模型已停用或移除，请在助手设置中重新选择。", 422)
+                model_id = assigned
         db.execute(
             "INSERT INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at,request_json) VALUES(?,?,'user',?,'queue',?,'accepted',?,?)",
             (message_id, conversation_id, content, run_id, now, request_json),
@@ -722,6 +758,14 @@ class Store:
         from .catalog import snapshot
 
         snapshot(db, run_id, model_id)
+        from .models import model_key
+
+        models = self.runtime_settings(db).models
+        db.execute("INSERT INTO run_agent_assignments SELECT ?,id,model_id FROM agents", (run_id,))
+        for child in db.execute("SELECT DISTINCT model_id FROM agents WHERE model_id IS NOT NULL"):
+            if child[0] in models:
+                config = models[child[0]]
+                db.execute("INSERT INTO agent_model_configs VALUES(?,?,?,?)", (run_id, child[0], _json(config.model_dump(mode="json")), model_key(config)))
         db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id))
         return run_id
 
@@ -875,7 +919,7 @@ class Store:
         with self._connection(write=True) as db:
             row = db.execute(
                 """SELECT r.*,c.workspace_path,c.agent_id FROM runs r JOIN conversations c ON c.id=r.conversation_id
-                WHERE r.kind=? AND r.status='queued' AND r.phase!='approval' AND c.blocked=0
+                WHERE r.kind=? AND r.status='queued' AND r.phase NOT IN ('approval','input') AND c.blocked=0
                   AND NOT EXISTS(SELECT 1 FROM runs active WHERE active.conversation_id=r.conversation_id AND active.status='running')
                   AND NOT EXISTS(SELECT 1 FROM runs earlier WHERE earlier.conversation_id=r.conversation_id AND earlier.status='queued' AND earlier.seq<r.seq)
                 ORDER BY r.seq LIMIT 1""",
@@ -949,8 +993,11 @@ class Store:
             (status, result, error, now, run["id"]),
         )
         if status in {"cancelled", "completed", "failed"}:
+            db.execute("DELETE FROM run_agent_assignments WHERE run_id=?", (run["id"],))
+            db.execute("DELETE FROM agent_model_configs WHERE run_id=?", (run["id"],))
             db.execute("DELETE FROM run_model_configs WHERE run_id=?", (run["id"],))
             db.execute("UPDATE approvals SET state='cancelled',decided_at=? WHERE run_id=? AND state='pending'", (now, run["id"]))
+            db.execute("UPDATE input_requests SET state='cancelled' WHERE run_id=? AND state='pending'", (run["id"],))
         db.execute(
             "UPDATE messages SET status='rejected' WHERE run_id=? AND status='accepted'",
             (run["id"],),
@@ -963,7 +1010,7 @@ class Store:
             "UPDATE conversations SET blocked=MAX(blocked,?),updated_at=? WHERE id=?",
             (int(should_block), now, run["conversation_id"]),
         )
-        if status == "completed" and result is not None:
+        if status in {"completed", "failed"} and result is not None:
             artifacts = [json.loads(row[0])["resource"] for row in db.execute(
                 "SELECT data FROM events WHERE run_id=? AND type='artifact' ORDER BY seq", (run["id"],)
             )]
@@ -992,8 +1039,9 @@ class Store:
                 self._finish(db, run, "cancelled")
                 return
             pending = db.execute("SELECT 1 FROM approvals WHERE run_id=? AND state='pending'", (run_id,)).fetchone()
-            db.execute("UPDATE runs SET status='queued',phase=? WHERE id=?", ("approval" if pending else "recovering", run_id))
-            self._event(db, run_id, "paused", {"reason": "approval" if pending else "resume"})
+            db.execute("UPDATE runs SET status='queued',phase=? WHERE id=?", ("approval" if pending else "input" if db.execute("SELECT 1 FROM input_requests WHERE run_id=? AND state='pending'", (run_id,)).fetchone() else "recovering", run_id))
+            phase = db.execute("SELECT phase FROM runs WHERE id=?", (run_id,)).fetchone()[0]
+            self._event(db, run_id, "paused", {"reason": phase if phase in {"approval", "input"} else "resume"})
 
     def interrupt_run(self, run_id):
         with self._connection(write=True) as db:
@@ -1004,7 +1052,7 @@ class Store:
             self._finish(db, run, "cancelled")
         elif run["recovery_enabled"] and run["recovery_count"] < 3:
             pending = db.execute("SELECT 1 FROM approvals WHERE run_id=? AND state='pending'", (run["id"],)).fetchone()
-            db.execute("UPDATE runs SET status='queued',phase=?,recovery_count=recovery_count+1,finished_at=NULL WHERE id=?", ("approval" if pending else "recovering", run["id"]))
+            db.execute("UPDATE runs SET status='queued',phase=?,recovery_count=recovery_count+1,finished_at=NULL WHERE id=?", ("approval" if pending else "input" if db.execute("SELECT 1 FROM input_requests WHERE run_id=? AND state='pending'", (run["id"],)).fetchone() else "recovering", run["id"]))
             self._event(db, run["id"], "recovering", {"attempt": run["recovery_count"] + 1})
         else:
             self._finish(db, run, "interrupted", error="运行未能安全自动恢复，已保留步骤回执。请检查后继续原任务。")

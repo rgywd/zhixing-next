@@ -25,6 +25,7 @@ from .provider_network import discover, probe
 from .schemas import (
     AgentInput,
     AgentUpdate,
+    AnswerInput,
     ApprovalDecision,
     AssistantInput,
     ConversationInput,
@@ -387,6 +388,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.get("/resources")
     def resource_list(conversation_id: str | None = None, cursor: Cursor = 0, limit: Limit = 50):
         return store.list_resources(conversation_id, cursor, limit)
+
+    @router.get("/input-requests")
+    def input_requests(conversation_id: str | None = None, run_id: str | None = None):
+        from .taskflow import TaskFlow
+
+        return TaskFlow(store).questions(conversation_id, run_id)
+
+    @router.post("/input-requests/{request_id}/answer")
+    def answer_request(request_id: UUID, body: AnswerInput):
+        from .taskflow import TaskFlow
+
+        return TaskFlow(store).answer(str(request_id), body.answer)
+
+    @router.get("/runs/{run_id}/report")
+    def run_report(run_id: UUID):
+        from .resilience import RunBudget
+        from .taskflow import TaskFlow
+
+        store.get_run(str(run_id))
+        return {"usage": RunBudget(store, str(run_id)).summary(), "steps": TaskFlow(store).steps(str(run_id))}
 
     @router.get("/approvals")
     def approval_list(conversation_id: str | None = None, run_id: str | None = None):

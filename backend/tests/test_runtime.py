@@ -23,6 +23,7 @@ async def run_agent(settings, run, **kwargs):
     store = Store(settings)
     workspace = settings.workspace_root / "conversations" / run["conversation_id"]
     with store._connection(write=True) as db:
+        db.execute("UPDATE runs SET status='completed' WHERE id!=? AND conversation_id=?", (run["id"], run["conversation_id"]))
         db.execute("INSERT OR IGNORE INTO conversations(id,title,workspace_path,created_at,updated_at) VALUES(?,?,?,?,?)", (run["conversation_id"], "测试", str(workspace), "2026-09-29", "2026-09-29"))
         db.execute("INSERT OR IGNORE INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at) VALUES(?,?,'user',?,'queue',?,'applied','2026-09-29')", (run["message_id"], run["conversation_id"], run["prompt"], run["id"]))
         db.execute("INSERT OR IGNORE INTO runs(id,conversation_id,message_id,kind,prompt,status,created_at) VALUES(?,?,?,?,?,'running','2026-09-29')", (run["id"], run["conversation_id"], run["message_id"], run["kind"], run["prompt"]))

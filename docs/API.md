@@ -147,3 +147,15 @@ emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可�
 ModelInput 为 `{model,display_name?,enabled?,image_input?,reasoning_levels?,reasoning_effort?,temperature?,timeout?}`；默认启用、文本输入、不声明思考档位、模型默认温度、60 秒超时。温度 0–2，超时大于 0 且不超过 300 秒；默认思考档位必须在支持列表内。Gemini 不允许 none/xhigh 及全局默认思考值。ManagedModel 在原 ModelInfo 上增加 `enabled,temperature,timeout`。
 
 配置和凭据保存在服务端 `app.sqlite`；API 与 worker 按操作读取新配置。私有运行快照独立于公开运行记录，完成、失败、取消后清除；可恢复中断任务保留。v9 现有 TOML 条目仅在迁移时导入一次，详见[升级说明](PROVIDER-MANAGEMENT.md)。
+
+## 执行闭环与必要问答（v11）
+
+- `GET /v1/input-requests?conversation_id=&run_id=` 返回最多 50 个 pending 问题，分页形态 `{items,next_cursor:null}`。条目有 `id,run_id,question,options,state,answer,created_at,answered_at`。
+- `POST /v1/input-requests/{id}/answer {answer}`：回答 1–10000 字，去除首尾空白；接受自定义文本，不限于建议选项。同一回答重试幂等，冲突/过期返回 409；认证与其他端点一致。
+- Run 增加 `phase=input`：保持 queued 并等待回答，不占 worker 执行槽。存在未决批准时先等批准，两个条件都满足才继续；取消后问题失效。
+- `GET /v1/runs/{id}/report` → `{usage,steps}`。usage 为 `model_attempts,tool_calls,input_tokens,output_tokens,unknown_usage,active_seconds`；steps 含 `id,description,status:pending|passed|blocked,evidence`。证据 `kind=command` 表示实际断言命令，`kind=agent_review` 表示模型核对持久操作回执。
+- 运行事件增加 `retry,model_error,usage,input_required,input_answered,task_plan,task_check`；原有事件增量游标不变。未完成的条件不会因模型输出一句“完成”就变成 passed。
+- Agent 输入/输出增加可空 `model_id`。空值跟随当前任务模型，非空须指向启用模型；与主模型一起在入队时保存服务端私有快照。权限仍以助手显式工具集合为界。
+- ModelInput、ModelInfo 增加可空 `context_window`（4096–10000000 token）；通过 SDK profile 决定压缩阈值。省略时保持 SDK 模型资料/默认行为。
+
+GitLab 主机、凭据环境变量、项目范围及写开关由服务端配置；模型只能调用已暴露的项目/议题工具。写操作产生 `kind=external_write` 的现有 approval 卡片；它复用 approve/deny 路径。中断后结果无法确认时仍使用 uncertain 的 retry/skip，不能把 HTTP 超时当成未提交。具体配置、迁移及验证限制见[执行闭环验收](HARNESS-ACCEPTANCE-2026-09-30.md)。

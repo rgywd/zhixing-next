@@ -6,4 +6,5 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 COPY skills /skills
 COPY verify.py /opt/zhixing/verify.py
 COPY browser.py /opt/zhixing/browser.py
+COPY process.py /opt/zhixing/process.py
 WORKDIR /workspace

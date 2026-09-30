@@ -101,6 +101,8 @@ class FileAccess:
         if not supplied or "\x00" in supplied or any(part == ".." for part in Path(supplied).parts):
             raise PermissionError("A valid path without parent traversal is required.")
         requested = Path(supplied)
+        if self.settings.execution.enabled and (supplied == "/workspace" or supplied.startswith("/workspace/")):
+            requested = self.workspace / supplied.removeprefix("/workspace").lstrip("/")
         # Windows alternate data streams and drive-relative paths are ambiguous.
         if os.name == "nt" and (
             ":" in str(requested).replace(requested.drive, "", 1)
@@ -304,85 +306,91 @@ class FileAccess:
             raise ValueError("start must be at least 1; count must be between 1 and 20.")
         path, data = self.read_bytes(supplied)
         suffix = path.suffix.lower()
-        if suffix == ".docx":
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                entries = archive.infolist()
-                if (
-                    len(entries) > 1000
-                    or sum(entry.file_size for entry in entries) > 20 * 1024 * 1024
-                ):
-                    raise ValueError("DOCX exceeds archive entry or expanded-size limits.")
-                document = archive.getinfo("word/document.xml")
-                if document.file_size > 5 * 1024 * 1024 or document.flag_bits & 1:
-                    raise ValueError("DOCX body is too large or encrypted.")
-                with archive.open(document) as member:
-                    body = member.read(5 * 1024 * 1024 + 1)
-                if len(body) > 5 * 1024 * 1024:
-                    raise ValueError("DOCX body exceeds the expanded-size limit.")
-            xml = body.decode("utf-8-sig")
-            if "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper():
-                raise ValueError("XML declarations containing entities are not supported.")
-            root = ET.fromstring(xml)
-            namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
-            # Preserve paragraph/table cell order without interpreting embedded objects.
-            paragraphs = [
-                "".join(text.text or "" for text in paragraph.findall(".//w:t", namespace))
-                for paragraph in root.findall(".//w:p", namespace)
-            ]
-            unit = "paragraph"
-            total = len(paragraphs)
-            selected = paragraphs[start - 1 : start - 1 + count]
-        elif suffix == ".pdf":
-            from pypdf import PdfReader, apply_configuration
+        return extract_document(data, suffix, str(path), start=start, count=count)
 
-            with apply_configuration(
-                maximum_declared_stream_length=2 * 1024 * 1024,
-                array_based_stream_maximum_output_length=2 * 1024 * 1024,
-                zlib_maximum_output_length=2 * 1024 * 1024,
-                lzw_maximum_output_length=2 * 1024 * 1024,
-                run_length_maximum_output_length=2 * 1024 * 1024,
-                image_maximum_buffer_size=2 * 1024 * 1024,
-                page_tree_maximum_entries=2000,
-                page_tree_maximum_depth=32,
-                xform_maximum_invocations_per_extraction=100,
-                jbig2dec_binary=None,
+
+def extract_document(data: bytes, suffix: str, name: str, *, start=1, count=10):
+    if start < 1 or not 1 <= count <= 20:
+        raise ValueError("Invalid document window")
+    if suffix == ".docx":
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            entries = archive.infolist()
+            if (
+                len(entries) > 1000
+                or sum(entry.file_size for entry in entries) > 20 * 1024 * 1024
             ):
-                reader = PdfReader(io.BytesIO(data), strict=True)
-                if reader.is_encrypted:
-                    raise ValueError("Encrypted PDFs are not supported.")
-                total = len(reader.pages)
-                if total > 2000:
-                    raise ValueError("PDF exceeds the 2000-page limit.")
-                unit = "page"
-                selected = []
-                for page in reader.pages[start - 1 : start - 1 + count]:
-                    stream = page.get_contents()
-                    if stream is not None and len(stream.get_data()) > 2 * 1024 * 1024:
-                        raise ValueError("PDF page content exceeds the extraction limit.")
-                    selected.append(page.extract_text() or "")
-        else:
-            raise ValueError(
-                "Only PDF and DOCX text extraction is supported; use read_text_file for UTF-8 files."
-            )
-        remaining = 20000
-        items = []
-        for index, text in enumerate(selected, start):
-            if remaining <= 0:
-                break
-            excerpt = text[:remaining]
-            items.append({"number": index, "text": excerpt, "truncated": len(excerpt) < len(text)})
-            remaining -= len(excerpt)
-        next_start = start + len(items)
-        return {
-            "path": str(path),
-            "format": suffix[1:],
-            "unit": unit,
-            "total_units": total,
-            "items": items,
-            "next_start": next_start if next_start <= total else None,
-            "truncated": len(items) < len(selected) or any(item["truncated"] for item in items),
-            "note": "Text extraction only; layout, images, and OCR are not included. Empty PDF pages may be scanned images requiring OCR.",
-        }
+                raise ValueError("DOCX exceeds archive entry or expanded-size limits.")
+            document = archive.getinfo("word/document.xml")
+            if document.file_size > 5 * 1024 * 1024 or document.flag_bits & 1:
+                raise ValueError("DOCX body is too large or encrypted.")
+            with archive.open(document) as member:
+                body = member.read(5 * 1024 * 1024 + 1)
+            if len(body) > 5 * 1024 * 1024:
+                raise ValueError("DOCX body exceeds the expanded-size limit.")
+        xml = body.decode("utf-8-sig")
+        if "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper():
+            raise ValueError("XML declarations containing entities are not supported.")
+        root = ET.fromstring(xml)
+        namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+        # Preserve paragraph/table cell order without interpreting embedded objects.
+        paragraphs = [
+            "".join(text.text or "" for text in paragraph.findall(".//w:t", namespace))
+            for paragraph in root.findall(".//w:p", namespace)
+        ]
+        unit = "paragraph"
+        total = len(paragraphs)
+        selected = paragraphs[start - 1 : start - 1 + count]
+    elif suffix == ".pdf":
+        from pypdf import PdfReader, apply_configuration
+
+        with apply_configuration(
+            maximum_declared_stream_length=2 * 1024 * 1024,
+            array_based_stream_maximum_output_length=2 * 1024 * 1024,
+            zlib_maximum_output_length=2 * 1024 * 1024,
+            lzw_maximum_output_length=2 * 1024 * 1024,
+            run_length_maximum_output_length=2 * 1024 * 1024,
+            image_maximum_buffer_size=2 * 1024 * 1024,
+            page_tree_maximum_entries=2000,
+            page_tree_maximum_depth=32,
+            xform_maximum_invocations_per_extraction=100,
+            jbig2dec_binary=None,
+        ):
+            reader = PdfReader(io.BytesIO(data), strict=True)
+            if reader.is_encrypted:
+                raise ValueError("Encrypted PDFs are not supported.")
+            total = len(reader.pages)
+            if total > 2000:
+                raise ValueError("PDF exceeds the 2000-page limit.")
+            unit = "page"
+            selected = []
+            for page in reader.pages[start - 1 : start - 1 + count]:
+                stream = page.get_contents()
+                if stream is not None and len(stream.get_data()) > 2 * 1024 * 1024:
+                    raise ValueError("PDF page content exceeds the extraction limit.")
+                selected.append(page.extract_text() or "")
+    else:
+        raise ValueError(
+            "Only PDF and DOCX text extraction is supported; use read_text_file for UTF-8 files."
+        )
+    remaining = 20000
+    items = []
+    for index, text in enumerate(selected, start):
+        if remaining <= 0:
+            break
+        excerpt = text[:remaining]
+        items.append({"number": index, "text": excerpt, "truncated": len(excerpt) < len(text)})
+        remaining -= len(excerpt)
+    next_start = start + len(items)
+    return {
+        "path": str(name),
+        "format": suffix[1:],
+        "unit": unit,
+        "total_units": total,
+        "items": items,
+        "next_start": next_start if next_start <= total else None,
+        "truncated": len(items) < len(selected) or any(item["truncated"] for item in items),
+        "note": "Text extraction only; layout, images, and OCR are not included. Empty PDF pages may be scanned images requiring OCR.",
+    }
 
 
 def create_file_tools(settings: Settings, workspace: Path) -> list[Any]:

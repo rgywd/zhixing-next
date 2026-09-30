@@ -2,7 +2,9 @@ import { useUi, ActionLink, ActionRow, Button, CardHeader, Field, IconAction, Pa
 import { useState } from "react";
 import { Alert, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import { request, type Agent, type AgentTool, type Connection } from "./api";
+import { request, type Agent, type AgentTool, type Connection, type ModelCatalog } from "./api";
+
+import { ModelPicker } from "./ModelPicker";
 
 const TOOL_LABELS: { id: AgentTool; label: string }[] = [
   { id: "inspect_environment", label: "查看运行环境" },
@@ -13,8 +15,8 @@ const TOOL_LABELS: { id: AgentTool; label: string }[] = [
   { id: "write_text_file", label: "写入文本" },
   { id: "fetch_public_page", label: "读取公开网页" },
 ];
-type Form = Pick<Agent, "name" | "description" | "instructions" | "tools" | "visible">;
-const blank: Form = { name: "", description: "", instructions: "", tools: [], visible: true };
+type Form = Pick<Agent, "name" | "description" | "instructions" | "tools" | "visible" | "model_id">;
+const blank: Form = { name: "", description: "", instructions: "", tools: [], visible: true, model_id: null };
 
 export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }: {
   connection: Connection;
@@ -26,13 +28,15 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
   const { s, colors } = useUi();
   const [editing, setEditing] = useState<Agent | "new" | null>(null);
   const [form, setForm] = useState<Form>(blank);
+  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
+  const [pickingModel, setPickingModel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   function edit(agent: Agent | "new") {
     setEditing(agent);
     setForm(agent === "new" ? blank : {
       name: agent.name, description: agent.description, instructions: agent.instructions,
-      tools: agent.tools, visible: agent.visible,
+      tools: agent.tools, visible: agent.visible, model_id: agent.model_id ?? null,
     });
     setError("");
   }
@@ -76,6 +80,8 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
           <Field label="名称" value={form.name} onChangeText={(name) => setForm({ ...form, name })} maxLength={200} />
           <Field label="擅长什么" value={form.description} onChangeText={(description) => setForm({ ...form, description })} maxLength={1000} multiline />
           <Field label="具体要求" value={form.instructions} onChangeText={(instructions) => setForm({ ...form, instructions })} maxLength={20000} multiline />
+          <ActionRow icon="sparkles-outline" title="助手模型" description={catalog?.items.find(item => item.id === form.model_id)?.name ?? (form.model_id ? "已指定模型" : "跟随当前任务模型")} onPress={() => { void request<ModelCatalog>(connection, "/models").then(value => { setCatalog(value); setPickingModel(true); }).catch(e => setError(humanError(e))); }} />
+          <ModelPicker visible={pickingModel} title="选择助手模型" connectionUrl={connection.url} models={catalog?.items ?? []} selectedId={form.model_id ?? null} onSelect={async model_id => { setForm(old => ({ ...old, model_id })); }} onUseDefault={async () => { setForm(old => ({ ...old, model_id: null })); }} defaultLabel="跟随当前任务模型" onClose={() => setPickingModel(false)} />
           {editing === "new" || editing.kind === "custom" ? (
             <View style={s.stack}>
               <Text style={s.label}>可用工具</Text>

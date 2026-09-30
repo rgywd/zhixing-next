@@ -9,6 +9,7 @@ export type AgentTool = "inspect_environment" | "list_directory" | "read_text_fi
 export type FinanceObservation = { id: string; kind: "balance" | "income" | "expense"; platform: string; amount: string; note: string; created_at: string };
 export type FinanceSummary = { balances: FinanceObservation[]; recent: FinanceObservation[] };
 export type Agent = {
+  model_id?: string | null;
   id: string;
   kind: "service" | "custom";
   service: string | null;
@@ -34,6 +35,7 @@ export type ModelInfo = {
   image_input: boolean;
   reasoning_levels: ReasoningEffort[];
   default_reasoning_effort: Exclude<ReasoningEffort, "auto"> | null;
+  context_window?: number | null;
 };
 export type ModelCatalog = {
   items: ModelInfo[];
@@ -59,7 +61,7 @@ export type ProviderInput = {
 export type ManagedModelInput = {
   model: string; display_name: string | null; enabled: boolean; image_input: boolean;
   reasoning_levels: ReasoningEffort[]; reasoning_effort: Exclude<ReasoningEffort, "auto"> | null;
-  temperature: number | null; timeout: number;
+  temperature: number | null; timeout: number; context_window?: number | null;
 };
 export type DiscoveredModel = { model: string; name: string };
 export type ModelProbe = { checks: { kind: "reply" | "stream" | "tools"; ok: boolean; elapsed_ms: number; message?: string }[] };
@@ -84,7 +86,7 @@ export type ConversationSearchResult = {
   snippet: string;
 };
 export type Run = {
-  phase?: "normal" | "approval" | "recovering";
+  phase?: "normal" | "approval" | "input" | "recovering";
   recovery_enabled?: number;
   recovery_count?: number;
   id: string;

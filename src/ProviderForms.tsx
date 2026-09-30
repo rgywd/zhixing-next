@@ -52,6 +52,7 @@ export function ManagedModelForm({ model, protocol, onSave }: {
   const [form, setForm] = useState(() => modelInput(model));
   const [advanced, setAdvanced] = useState(false);
   const [temperature, setTemperature] = useState(model?.temperature?.toString() ?? "");
+  const [contextWindow, setContextWindow] = useState(model?.context_window?.toString() ?? "");
   const [timeout, setTimeoutValue] = useState((model?.timeout ?? 60).toString());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -64,9 +65,10 @@ export function ManagedModelForm({ model, protocol, onSave }: {
   async function save() {
     if (busy) return;
     setError("");
-    const next = { ...form, model: form.model.trim(), display_name: form.display_name?.trim() || null, temperature: temperature.trim() ? Number(temperature) : null, timeout: Number(timeout) };
+    const next = { ...form, model: form.model.trim(), display_name: form.display_name?.trim() || null, temperature: temperature.trim() ? Number(temperature) : null, timeout: Number(timeout), context_window: contextWindow.trim() ? Number(contextWindow) : form.context_window === undefined ? undefined : null };
     if (!next.model) { setError("请填写供应商使用的实际模型 ID。"); return; }
     if ((next.temperature !== null && (!Number.isFinite(next.temperature) || next.temperature < 0 || next.temperature > 2)) || !Number.isFinite(next.timeout) || next.timeout <= 0 || next.timeout > 300) { setError("温度应在 0–2 之间，超时应在 1–300 秒之间。"); return; }
+    if (next.context_window != null && (!Number.isInteger(next.context_window) || next.context_window < 4096 || next.context_window > 10000000)) { setError("上下文容量应为 4096–10000000 之间的整数。"); return; }
     setBusy(true);
     try { await onSave(next); } catch (e) { setError(humanError(e)); } finally { setBusy(false); }
   }
@@ -83,6 +85,8 @@ export function ManagedModelForm({ model, protocol, onSave }: {
     <ActionLink icon={advanced ? "chevron-up-outline" : "options-outline"} tone="neutral" onPress={() => setAdvanced(!advanced)}>高级参数</ActionLink>
     {advanced ? <>
       <Field label="温度" value={temperature} onChangeText={setTemperature} placeholder="模型默认" keyboardType="decimal-pad" editable={!busy} />
+      <Field label="上下文容量（token）" value={contextWindow} onChangeText={setContextWindow} placeholder="留空使用模型资料" keyboardType="number-pad" editable={!busy} />
+      <Text style={s.muted}>填写供应商实际支持的容量，供长对话自动压缩使用。</Text>
       <Field label="超时（秒）" value={timeout} onChangeText={setTimeoutValue} keyboardType="number-pad" editable={!busy} />
       {protocol !== "gemini" ? <><Text style={s.label}>默认思考</Text><View style={s.wrap}><Choice label="模型默认" selected={!form.reasoning_effort} disabled={busy} onPress={() => edit({ reasoning_effort: null })} />{form.reasoning_levels.filter((item): item is Exclude<ReasoningEffort, "auto"> => item !== "auto").map((level) => <Choice key={level} label={reasoningLabel[level]} selected={form.reasoning_effort === level} disabled={busy} onPress={() => edit({ reasoning_effort: level })} />)}</View></> : null}
     </> : null}
