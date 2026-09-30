@@ -20,7 +20,7 @@ from zhixing_next.thinking_chat import ThinkingChatOpenAI
         ("QWEN3.8-MAX-0902", "chat_completions", ["auto", "none", "low", "medium", "xhigh"]),
         ("qwen3-235b-a22b-thinking-2507", "chat_completions", ["auto", "low", "medium", "high"]),
         ("qwen3.8-2.4t-a95b", "chat_completions", ["auto", "low", "medium", "xhigh"]),
-        ("qwen3.8-27b", "chat_completions", ["auto", "low", "medium", "xhigh"]),
+        ("qwen3.8-27b", "chat_completions", ["auto", "none", "low", "medium", "xhigh"]),
         ("qwen3-coder-plus", "chat_completions", []),
         ("qwen3-embedding-0.6b", "chat_completions", []),
         ("qwen-plus-2024-12-20", "chat_completions", []),
