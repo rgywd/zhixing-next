@@ -129,7 +129,7 @@ export type MessageInput = {
   search_provider_id?: string;
 };
 export type SearchProvider = { id: string; name: string; kind: "brave" | "tavily" | "serper" };
-export type Resource = { id: string; name: string; path: string; size: number; mime_type: string; conversation_id: string };
+export type Resource = { created_at?: string; id: string; name: string; path: string; size: number; mime_type: string; conversation_id: string };
 export type Approval = {
   id: string;
   run_id: string;
@@ -158,6 +158,8 @@ export type PlanDraft = {
   prompt: string;
   time: string;
   interval: string;
+  conversation_id?: string | null;
+  repeat_mode?: "once" | "daily" | "weekly" | "custom";
   pending: ScheduleInput | null;
 };
 export type RunEvent = {

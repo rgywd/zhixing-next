@@ -1,34 +1,49 @@
-import { Image, StyleSheet, Text, View, useWindowDimensions } from "react-native";
+import { useEffect, useState } from "react";
+import { Keyboard, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import type { Connection, Conversation, FinanceSummary, ModelCatalog } from "./api";
+import type { Connection, Conversation, FinanceObservation, FinanceSummary, ModelCatalog } from "./api";
 import { ChatPanel } from "./ChatPanel";
-import { useUi, BackLink, CardHeader } from "./ui";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { type ThemeColors, typography } from "./theme";
+import { useUi, IconAction, timeLabel } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
+import { type ThemeColors, layout, radius, space, typography } from "./theme";
 
 export function FinancePage({
   connection, conversation, finance, catalog, onBack, onRefresh, onConversationChanged, agentModelId = null,
+  backLabel = "生活", focusMessageSeq = null, onFocusHandled,
 }: {
   connection: Connection;
   conversation: Conversation;
   finance: FinanceSummary;
   catalog: ModelCatalog | null;
   agentModelId?: string | null;
+  backLabel?: string;
+  focusMessageSeq?: number | null;
+  onFocusHandled?: (seq: number) => void;
   onBack: () => void;
   onRefresh: () => void;
   onConversationChanged: (conversation: Conversation) => void;
 }) {
   const { s } = useUi();
-  const { mode } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const { width } = useWindowDimensions();
+  const [keyboardVisible, setKeyboardVisible] = useState(Keyboard.isVisible());
+  const [overviewExpanded, setOverviewExpanded] = useState(false);
+  const [composerContext, setComposerContext] = useState<{ conversationId: string; modelId: string | null; kind: "chat" | "task" } | null>(null);
+  useEffect(() => {
+    const show = Keyboard.addListener("keyboardDidShow", () => { setKeyboardVisible(true); setOverviewExpanded(false); });
+    const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
+    return () => { show.remove(); hide.remove(); };
+  }, []);
+  const context = composerContext?.conversationId === conversation.id ? composerContext : null;
+  const modelId = context ? context.modelId : conversation.model_id ?? agentModelId ?? catalog?.roles.chat;
+  const model = catalog?.items.find((item) => item.id === modelId);
   return (
     <View style={s.body}>
-      <View style={styles.hero}>
-        {mode === "light" && width >= 380 ? <Image source={require("../assets/life-header-red.png")} resizeMode="contain" style={styles.heroArt} accessible={false} /> : null}
-        <BackLink label="生活" onPress={onBack} />
-        <Text accessibilityRole="header" style={styles.title}>财务</Text>
-        <Text style={styles.intro}>账户、收支和扣费问题，直接和财务助手聊。</Text>
+      <View style={styles.header}>
+        <IconAction icon="arrow-back" label={`返回${backLabel}`} onPress={onBack} />
+        <View style={s.headingCopy}>
+          <Text accessibilityRole="header" style={styles.title}>财务</Text>
+          <Text numberOfLines={1} style={s.muted}>{context?.kind === "task" ? "任务 · " : ""}{model?.name ?? "财务助手"}</Text>
+        </View>
       </View>
       <ChatPanel
         connection={connection}
@@ -36,85 +51,57 @@ export function FinancePage({
         assistantName="财务助手"
         catalog={catalog}
         agentModelId={agentModelId}
+        focusMessageSeq={focusMessageSeq}
+        onFocusHandled={onFocusHandled}
         onConversationChanged={onConversationChanged}
+        onComposerContext={setComposerContext}
         onRefresh={onRefresh}
-        intro={<FinanceOverview finance={finance} />}
-        stretchIntro={!finance.balances.length && !finance.recent.length}
+        intro={<FinanceOverview finance={finance} hidden={keyboardVisible} expanded={overviewExpanded} onToggle={() => setOverviewExpanded((value) => !value)} />}
       />
     </View>
   );
 }
 
-function FinanceOverview({ finance }: { finance: FinanceSummary }) {
-  const { s } = useUi();
+function FinanceOverview({ finance, hidden, expanded, onToggle }: { finance: FinanceSummary; hidden: boolean; expanded: boolean; onToggle: () => void }) {
+  const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
-  const emptyOverview = !finance.balances.length && !finance.recent.length;
+  if (hidden) return null;
+  if (!finance.balances.length && !finance.recent.length) return <Text style={s.muted}>发截图或说一笔收支，开始整理。</Text>;
+  const balances = expanded ? finance.balances : finance.balances.slice(0, 1);
+  const recent = expanded ? finance.recent : finance.recent.slice(0, 1);
   return (
-    <View style={[styles.overview, emptyOverview && styles.fill]}>
-      <View style={[s.card, emptyOverview && styles.fill]}>
-        <CardHeader icon="wallet-outline" title="账户一览" tone="gold" />
-        {finance.balances.length ? (
-          <View style={styles.records}>
-            {finance.balances.map((item) => (
-              <View key={item.id} style={styles.recordRow}>
-                <Text style={[styles.recordLabel, s.grow]}>{item.platform}</Text>
-                <Text style={styles.amount}>¥{item.amount}</Text>
-              </View>
-            ))}
-          </View>
-        ) : <FinanceEmpty icon="wallet-outline">{"告诉我账户名称和余额，\n我来帮你整理。"}</FinanceEmpty>}
-      </View>
-      <View style={[s.card, emptyOverview && styles.fill]}>
-        <CardHeader icon="bar-chart-outline" title="最近收支" tone="gold" />
-        {finance.recent.length ? (
-          <View style={styles.records}>
-            {finance.recent.slice(0, 5).map((item) => (
-              <View key={item.id} style={styles.recordRow}>
-                <View style={s.grow}>
-                  <Text style={styles.recordLabel}>{item.platform}</Text>
-                  <Text style={s.muted}>{item.kind === "income" ? "收入" : "支出"}</Text>
-                </View>
-                <Text style={styles.amount}>¥{item.amount}</Text>
-              </View>
-            ))}
-          </View>
-        ) : <FinanceEmpty icon="receipt-outline">{"可以直接说一笔收入或消费，\n也可以聊聊扣费问题。"}</FinanceEmpty>}
-      </View>
+    <View style={styles.overview}>
+      <Pressable accessibilityRole="button" accessibilityLabel={expanded ? "收起财务速览" : "展开财务速览"}
+        accessibilityState={{ expanded }} onPress={onToggle} style={styles.overviewHeading}>
+        <Ionicons name="wallet-outline" size={20} color={colors.gold} />
+        <View style={s.headingCopy}><Text style={s.itemTitle}>账户与收支</Text><Text style={s.muted}>{finance.balances.length} 个账户 · {finance.recent.length} 笔近期收支</Text></View>
+        <Ionicons name={expanded ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
+      </Pressable>
+      {[...balances, ...recent].map((item) => <FinanceRecord key={item.id} item={item} />)}
     </View>
   );
 }
 
-function FinanceEmpty({ icon, children }: { icon: "wallet-outline" | "receipt-outline"; children: string }) {
-  const { colors } = useUi();
-  const { mode } = useTheme();
+function FinanceRecord({ item }: { item: FinanceObservation }) {
+  const { s } = useUi();
   const styles = useThemedStyles(createStyles);
-  return (
-    <View style={styles.emptyState}>
-      <View style={styles.emptyArtwork} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-        {mode === "light" ? <Image source={require("../assets/life-footer-red.png")} resizeMode="contain" style={styles.hills} /> : null}
-        <Ionicons name="leaf-outline" size={27} color={colors.accent} style={styles.sprout} />
-        <View style={styles.emptyObject}><Ionicons name={icon} size={40} color={colors.accent} /></View>
-      </View>
-      <Text style={styles.emptyText}>{children}</Text>
+  const kind = item.kind === "balance" ? "余额" : item.kind === "income" ? "收入" : "支出";
+  return <View style={styles.recordRow}>
+    <View style={s.headingCopy}>
+      <Text style={styles.recordLabel}>{item.platform} · {kind}</Text>
+      {item.note ? <Text numberOfLines={2} style={s.description}>{item.note}</Text> : null}
+      <Text style={s.muted}>{timeLabel(item.created_at)}</Text>
     </View>
-  );
+    <Text style={styles.amount}>{item.kind === "income" ? "+" : item.kind === "expense" ? "−" : ""}¥{item.amount}</Text>
+  </View>;
 }
 
 const createStyles = (colors: ThemeColors) => StyleSheet.create({
-  hero: { paddingHorizontal: 22, paddingTop: 6, paddingBottom: 14, gap: 8, minHeight: 166 },
-  heroArt: { position: "absolute", width: 286, height: 190, right: -30, top: -9 },
-  title: { ...typography.hero, color: colors.ink },
-  intro: { color: colors.muted, fontSize: 13, lineHeight: 21, maxWidth: "76%" },
-  overview: { gap: 14 },
-  fill: { flexGrow: 1 },
-  emptyState: { flexGrow: 1, alignItems: "center", justifyContent: "center", gap: 9, paddingBottom: 5 },
-  emptyArtwork: { width: "100%", maxWidth: 280, height: 96, alignItems: "center", justifyContent: "center" },
-  hills: { position: "absolute", width: "100%", height: 90, bottom: -3, opacity: 0.5 },
-  sprout: { position: "absolute", left: "24%", bottom: 13, opacity: 0.24, transform: [{ rotate: "-25deg" }] },
-  emptyObject: { width: 64, height: 66, borderRadius: 19, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center", opacity: 0.8, transform: [{ rotate: "-5deg" }] },
-  emptyText: { color: colors.muted, fontSize: 13, lineHeight: 21, textAlign: "center" },
-  records: { gap: 8 },
-  recordRow: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8, borderTopWidth: 1, borderTopColor: colors.line },
-  recordLabel: { color: colors.ink, fontSize: 15, lineHeight: 23 },
-  amount: { color: colors.ink, fontSize: 16, lineHeight: 24, fontWeight: "600", flexShrink: 1 },
+  header: { minHeight: 60, paddingHorizontal: space.sm, paddingVertical: space.xs, flexDirection: "row", alignItems: "center", gap: space.sm },
+  title: { ...typography.section, color: colors.ink },
+  overview: { backgroundColor: colors.surfaceRaised, borderRadius: radius.item, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, paddingHorizontal: space.md },
+  overviewHeading: { minHeight: layout.touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.sm },
+  recordRow: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line },
+  recordLabel: { ...typography.body, fontWeight: "600", color: colors.ink },
+  amount: { ...typography.item, color: colors.ink, flexShrink: 1, maxWidth: "45%" },
 });

@@ -1,8 +1,8 @@
 import { availablePreference } from "./providerEditing";
-import type { ThemeColors } from "./theme";
+import { layout, space, type ThemeColors } from "./theme";
 import { useUi, Button, Empty, humanError, runLabels, SheetHeader, timeLabel } from "./ui";
 import { useThemedStyles } from "./ThemeProvider";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { MessageBody } from "./MessageBody";
 import {
   ActivityIndicator,
@@ -13,6 +13,7 @@ import {
   StyleSheet,
   Text,
   View,
+  type ViewToken,
 } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { useSyncStatus } from "./ConnectionStatus";
@@ -28,6 +29,8 @@ import {
   type Page,
   type Run,
   type RunEvent,
+  type Message,
+  type Resource,
 } from "./api";
 import { useChat } from "./useChat";
 import { ModelPicker, reasoningLabel } from "./ModelPicker";
@@ -36,6 +39,8 @@ import { ApprovalCards } from "./ApprovalCards";
 import { RunReport } from "./RunReport";
 import { FilesPanel } from "./FilesPanel";
 import { SearchPicker } from "./SearchPicker";
+
+const searchViewabilityConfig = { itemVisiblePercentThreshold: 1 };
 
 export function ChatPanel({
   connection,
@@ -47,6 +52,7 @@ export function ChatPanel({
   initialTaskEffort = null,
   initialSearchId = null,
   focusMessageSeq = null,
+  onFocusHandled,
   startWithFiles = false,
   onFilesOpened,
   onConversationChanged,
@@ -65,6 +71,7 @@ export function ChatPanel({
   initialTaskEffort?: ReasoningEffort | null;
   initialSearchId?: string | null;
   focusMessageSeq?: number | null;
+  onFocusHandled?: (seq: number) => void;
   startWithFiles?: boolean;
   onFilesOpened?: () => void;
   onConversationChanged: (conversation: Conversation) => void;
@@ -83,6 +90,13 @@ export function ChatPanel({
   const [taskEffort, setTaskEffort] = useState(initialTaskEffort);
   const [searchProviderId, setSearchProviderId] = useState(initialSearchId);
   const [showSearch, setShowSearch] = useState(false);
+  // Keep the loaded history window when navigation consumes the search target.
+  const [focusRequest, setFocusRequest] = useState({ input: focusMessageSeq, seq: focusMessageSeq, id: 0 });
+  if (focusMessageSeq !== focusRequest.input) setFocusRequest({
+    input: focusMessageSeq, seq: focusMessageSeq ?? focusRequest.seq,
+    id: focusMessageSeq === null ? focusRequest.id : focusRequest.id + 1,
+  });
+  const focusAnchor = focusRequest.seq;
   const {
     messages,
     running,
@@ -117,19 +131,34 @@ export function ChatPanel({
     speak,
     pendingRuns,
     updateDraft,
-  } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles, focusMessageSeq });
-  const focused = useRef(false);
-  const focusAttempts = useRef(0);
+  } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles, focusMessageSeq: focusAnchor });
+  const focusState = useRef({ seq: focusAnchor, requested: false, handled: false, attempts: 0 });
   useEffect(() => {
-    if (focused.current || loading || focusMessageSeq === null) return;
-    const index = messages.findIndex((message) => message.seq === focusMessageSeq);
+    focusState.current = { seq: focusAnchor, requested: false, handled: false, attempts: 0 };
+    if (focusAnchor !== null) nearBottomRef.current = false;
+  }, [focusAnchor, focusRequest.id, nearBottomRef]);
+  const focusHandled = useRef(onFocusHandled);
+  useEffect(() => { focusHandled.current = onFocusHandled; }, [onFocusHandled]);
+  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken<Message>[] }) => {
+    const target = focusState.current;
+    if (target.seq === null || target.handled) return;
+    if (viewableItems.some((item) => item.isViewable && item.item.seq === target.seq)) {
+      target.handled = true;
+      focusHandled.current?.(target.seq);
+    }
+  }, []);
+  useEffect(() => {
+    if (focusAnchor === null || focusState.current.requested || focusState.current.handled) return;
+    nearBottomRef.current = false;
+    if (loading) return;
+    const index = messages.findIndex((message) => message.seq === focusAnchor);
     if (index < 0) return;
     const timer = setTimeout(() => {
+      focusState.current.requested = true;
       list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 });
-      focused.current = true;
     }, 180);
     return () => clearTimeout(timer);
-  }, [focusMessageSeq, list, loading, messages]);
+  }, [focusAnchor, focusRequest.id, list, loading, messages, nearBottomRef]);
   useEffect(() => { if (startWithFiles) onFilesOpened?.(); }, [startWithFiles, onFilesOpened]);
   const effectiveCatalog = catalog && agentModelId && catalog.items.some((item) => item.id === agentModelId)
     ? { ...catalog, roles: { ...catalog.roles, chat: agentModelId, task: agentModelId } } : catalog;
@@ -166,11 +195,14 @@ export function ChatPanel({
         ListFooterComponent={<ApprovalCards connection={connection} conversationId={conversation.id} onChanged={() => refresh.current()} />}
         ref={list}
         data={messages}
+        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfig={searchViewabilityConfig}
         keyExtractor={(message) => message.id}
         onScrollToIndexFailed={({ index, averageItemLength }) => {
-          if (focusAttempts.current++ > 3) return;
+          if (focusState.current.attempts++ > 3) return;
           list.current?.scrollToOffset({ offset: averageItemLength * Math.max(0, index - 1), animated: false });
-          setTimeout(() => list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 }), 250);
+          const target = focusState.current.seq;
+          setTimeout(() => { if (focusState.current.seq === target) list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 }); }, 250);
         }}
         contentContainerStyle={{
           paddingHorizontal: 18,
@@ -209,7 +241,7 @@ export function ChatPanel({
               alignSelf: item.role === "user" && !item.origin ? "flex-end" : "stretch",
               maxWidth: item.role === "user" && !item.origin ? "88%" : "100%",
               gap: 5,
-              backgroundColor: item.seq === focusMessageSeq ? colors.pale : "transparent",
+              backgroundColor: item.seq === focusAnchor ? colors.pale : "transparent",
               borderRadius: 14,
             }}
           >
@@ -263,11 +295,11 @@ export function ChatPanel({
               ? `正在${running.kind === "task" ? "处理委托" : "回复"} · ${pendingRuns.filter((run) => run.status === "queued").length} 条等待`
               : pendingRuns.some((run) => run.phase === "input") ? "有问题需要你补充" : pendingRuns.some((run) => run.phase === "approval") ? "有操作需要你的决定" : `${pendingRuns.length} 条等待执行`}
           </Text>
-          <Pressable accessibilityRole="button" accessibilityLabel="查看运行进度" onPress={() => setDetail(running?.id ?? pendingRuns[0].id)}>
+          <Pressable accessibilityRole="button" accessibilityLabel="查看运行进度" style={chatStyles.runAction} onPress={() => setDetail(running?.id ?? pendingRuns[0].id)}>
             <Text style={chatStyles.link}>进度</Text>
           </Pressable>
           {running ? (
-            <Pressable accessibilityRole="button" accessibilityLabel="取消当前运行" accessibilityState={{ disabled: running.cancel_requested }} disabled={running.cancel_requested} onPress={() => { void cancel(running).catch(() => undefined); }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="取消当前运行" style={chatStyles.runAction} accessibilityState={{ disabled: running.cancel_requested }} disabled={running.cancel_requested} onPress={() => { void cancel(running).catch(() => undefined); }}>
               <Text style={[chatStyles.link, { color: colors.red }]}>{running.cancel_requested ? "取消中" : "取消"}</Text>
             </Pressable>
           ) : null}
@@ -331,6 +363,7 @@ export function ChatPanel({
       >
         {detail ? (
           <RunDetail
+            key={detail}
             connection={connection}
             id={detail}
             close={() => setDetail(null)}
@@ -372,37 +405,59 @@ function RunDetail({
   const { s, colors } = useUi();
   const [run, setRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
+  const [showEvents, setShowEvents] = useState(false);
+  const [controlBusy, setControlBusy] = useState(false);
   const retry = useRef<() => void>(() => undefined);
   const reportSync = useSyncStatus(() => retry.current());
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [eventsError, setEventsError] = useState("");
+  const [loading, setLoading] = useState(false);
   useEffect(() => {
     let active = true;
     let polling = false;
     let cursor = 0;
+    let catchUpTimer: ReturnType<typeof setTimeout> | undefined;
     const controller = new AbortController();
     async function poll() {
       if (polling || !active) return;
       polling = true;
+      setLoading(true);
+      let hasMore = false;
       try {
-        const [task, page] = await Promise.all([
+        const results = await Promise.allSettled([
           request<Run>(connection, `/runs/${id}`, {
             signal: controller.signal,
+          }).then((task) => {
+            if (!active) return;
+            setRun(task);
+            setLoadError("");
+          }).catch((e) => {
+            if (active) setLoadError(humanError(e));
+            throw e;
           }),
           request<Page<RunEvent>>(
             connection,
             `/runs/${id}/events?after=${cursor}&limit=100`,
             { signal: controller.signal },
-          ),
+          ).then((page) => {
+            if (!active) return;
+            setEvents((old) => [...old, ...page.items]);
+            if (page.items.length) cursor = page.items[page.items.length - 1].seq;
+            hasMore = !!page.next_cursor;
+            setEventsError("");
+          }).catch((e) => {
+            if (active) setEventsError(humanError(e));
+            throw e;
+          }),
         ]);
         if (!active) return;
-        setRun(task);
-        setEvents((old) => [...old, ...page.items]);
-        if (page.items.length) cursor = page.items[page.items.length - 1].seq;
-        reportSync();
-      } catch (e) {
-        if (active) reportSync(e);
+        const failure = results.find((result) => result.status === "rejected");
+        reportSync(failure?.reason);
       } finally {
         polling = false;
+        if (active) setLoading(false);
+        if (active && hasMore) catchUpTimer = setTimeout(() => { void poll(); }, 100);
       }
     }
     retry.current = () => { void poll(); };
@@ -414,13 +469,32 @@ function RunDetail({
       active = false;
       controller.abort();
       clearInterval(timer);
+      clearTimeout(catchUpTimer);
     };
   }, [connection, id, reportSync]);
+  const artifacts = [...new Map(events.flatMap((event) => {
+    const item = event.data.resource;
+    if (event.type !== "artifact" || !item || typeof item !== "object") return [];
+    const resource = item as Partial<Resource>;
+    return typeof resource.id === "string" && typeof resource.name === "string" && typeof resource.path === "string"
+      && typeof resource.mime_type === "string" && typeof resource.size === "number" && typeof resource.conversation_id === "string"
+      ? [[resource.id, resource as Resource] as const] : [];
+  })).values()];
+  async function control(action: () => Promise<void>) {
+    if (controlBusy) return;
+    setControlBusy(true); setError("");
+    try { await action(); retry.current(); } catch (e) { setError(humanError(e)); }
+    finally { setControlBusy(false); }
+  }
   return (
     <SafeAreaView style={s.root}>
       <SheetHeader title="任务记录" onClose={close} />
       <ScrollView contentContainerStyle={s.content}>
         {error ? <Text style={s.error}>{error}</Text> : null}
+        {loadError ? <View style={s.notice}>
+          <Text accessibilityRole="alert" style={s.error}>{run ? "任务状态暂未更新" : "任务暂时无法读取"}：{loadError}</Text>
+          <Button secondary disabled={loading} onPress={() => retry.current()}>重试读取任务</Button>
+        </View> : null}
         {run ? (
           <>
             <Text style={s.title}>{run.prompt}</Text>
@@ -439,37 +513,48 @@ function RunDetail({
                 </Text>
               </View>
             ) : null}
-            {run.status === "interrupted" && run.recovery_enabled ? <Button onPress={() => {
-              void request<Run>(connection, `/runs/${run.id}/resume`, { method: "POST" }).then(setRun).catch((e) => setError(humanError(e)));
+            {run.status === "interrupted" && run.recovery_enabled ? <Button disabled={controlBusy} onPress={() => {
+              void control(async () => { setRun(await request<Run>(connection, `/runs/${run.id}/resume`, { method: "POST" })); });
             }}>核对已有步骤并继续原任务</Button> : null}
             <ApprovalCards connection={connection} runId={run.id} />
-            <RunReport connection={connection} runId={run.id} />
             {run.result ? (
               <View style={s.card}>
                 <Text style={s.label}>结果</Text>
-                <Text selectable style={s.text}>
-                  {run.result}
-                </Text>
+                <MessageBody>{run.result}</MessageBody>
               </View>
             ) : null}
+            {artifacts.length ? <View style={s.card}>
+              <Text style={s.label}>交付文件</Text>
+              <Attachments connection={connection} items={artifacts} />
+            </View> : null}
+            <RunReport connection={connection} runId={run.id} />
             {run.status === "queued" || run.status === "running" ? (
               <Button
                 secondary
                 danger
-                disabled={run.cancel_requested}
+                disabled={run.cancel_requested || controlBusy}
                 onPress={() => {
-                  void onCancel(run).catch((e) => setError(humanError(e)));
+                  void control(() => onCancel(run));
                 }}
               >
                 {run.cancel_requested ? "已请求取消" : "取消这次运行"}
               </Button>
             ) : null}
           </>
-        ) : (
+        ) : !loadError ? (
           <ActivityIndicator color={colors.accent} />
-        )}
-        <Text style={s.label}>执行轨迹</Text>
-        {events.length ? (
+        ) : null}
+        {eventsError ? <View style={s.notice}>
+          <Text accessibilityRole="alert" style={s.error}>步骤与交付文件暂未更新：{eventsError}</Text>
+          <Button secondary disabled={loading} onPress={() => retry.current()}>重试读取步骤</Button>
+        </View> : null}
+        <Pressable accessibilityRole="button" accessibilityLabel={showEvents ? "收起执行轨迹" : "展开执行轨迹"}
+          accessibilityState={{ expanded: showEvents }} onPress={() => setShowEvents((value) => !value)}
+          style={[s.row, { minHeight: layout.touchTarget }]}>
+          <View style={s.headingCopy}><Text style={s.label}>执行轨迹</Text><Text style={s.muted}>{events.length} 条记录 · 按需查看详细步骤</Text></View>
+          <Ionicons name={showEvents ? "chevron-up" : "chevron-down"} size={18} color={colors.muted} />
+        </Pressable>
+        {showEvents ? events.length ? (
           events.map((event) => (
             <View
               key={event.seq}
@@ -488,9 +573,9 @@ function RunDetail({
               </Text>
             </View>
           ))
-        ) : (
-          <Text style={s.muted}>尚无执行事件。</Text>
-        )}
+        ) : !eventsError ? (
+          <Text style={s.muted}>{loading ? "正在读取执行轨迹…" : "尚无执行事件。"}</Text>
+        ) : null : null}
       </ScrollView>
     </SafeAreaView>
   );
@@ -533,22 +618,23 @@ function eventSummary(event: RunEvent) {
 
 const createChatStyles = (colors: ThemeColors) => StyleSheet.create({
   delivery: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 4, paddingBottom: 5 },
-  deliveryChoice: { minHeight: 36, paddingHorizontal: 9, borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 5 },
+  deliveryChoice: { minHeight: layout.touchTarget, paddingHorizontal: 9, borderRadius: 8, flexDirection: "row", alignItems: "center", gap: 5 },
   pending: { flexDirection: "row", alignItems: "center", marginHorizontal: 18 },
   messageIdentity: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 24 },
   assistantMark: { width: 24, height: 24, borderRadius: 8, backgroundColor: colors.pale, alignItems: "center", justifyContent: "center" },
   userBubble: { backgroundColor: colors.neutral, borderRadius: 17, borderTopRightRadius: 5, paddingHorizontal: 13, paddingVertical: 10 },
   assistantContent: { paddingHorizontal: 2 },
   messageActions: { flexDirection: "row", alignItems: "center", gap: 10 },
-  messageAction: { minHeight: 44, minWidth: 36, alignItems: "center", justifyContent: "center" },
+  messageAction: { minHeight: layout.touchTarget, minWidth: layout.touchTarget, alignItems: "center", justifyContent: "center" },
   actionText: { color: colors.accent, fontSize: 12, fontWeight: "500" },
   runBar: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 16,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.xs,
     backgroundColor: colors.neutral,
   },
+  runAction: { minWidth: layout.touchTarget, minHeight: layout.touchTarget, alignItems: "center", justifyContent: "center" },
   link: { color: colors.accent, fontSize: 12, fontWeight: "600" },
 });

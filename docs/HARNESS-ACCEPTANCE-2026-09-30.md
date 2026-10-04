@@ -1,6 +1,6 @@
 # 主智能体执行闭环验收
 
-基于 `79bc0d1`，实施顺序见 [计划](AGENT-HARNESS-PLAN.md)。以下为已实现及实际验证结果，没有部署到生产，也没有发布原生安装包。
+基于 `79bc0d1`，实施顺序见 [计划](AGENT-HARNESS-PLAN.md)。以下为当次本地验收结果；在该验收时尚未部署生产，也未发布原生安装包。后续 2026-09-30 生产部署与验收摘要见[部署说明](DEPLOYMENT.md)，不改写本次测试的历史范围。
 
 ## 行为变化
 
@@ -59,6 +59,6 @@
 - token 限额按已报告用量阻止下一次调用，无法撤回在途请求或推断缺失消耗。统计覆盖主/子助手循环，不含独立记忆整理及 SDK 内部压缩请求。
 - 历史/资源读取仅提供给单用户主助手；图片/OCR 与复杂格式由已有视觉/执行链路处理。
 - GitLab 更新核对 `updated_at`，但 REST 接口没有原子比较后写入，仍存在短暂并发编辑窗口。OAuth、通用 MCP、评论/合并/仓库写入不在本轮范围。
-- 核验时生产仍为 `093cc305`，API/worker 正常，本轮未改动生产。JS bundle 不等于 APK、iOS 原生构建或新页面真机验收。
+- 本次本地核验时生产仍为 `093cc305`，API/worker 正常，本轮未改动生产。JS bundle 不等于 APK、iOS 原生构建或新页面真机验收。
 
 接口依据：[GitLab Issues API](https://docs.gitlab.com/api/issues/)、[GitLab API 认证](https://docs.gitlab.com/api/rest/authentication/)。

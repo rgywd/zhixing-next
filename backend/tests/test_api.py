@@ -552,3 +552,59 @@ def test_download_and_upload_reject_symlink_parents(client, tmp_path):
         == 403
     )
     assert sorted(p.name for p in outside.iterdir()) == ["hidden.txt"]
+
+
+def test_project_conversations_filter_before_paging_and_keep_global_history(client):
+    project = client.post("/v1/projects", json={"name": "long-running"}).json()
+    assert client.get(f"/v1/projects/{project['id']}").json() == project
+    chosen = []
+    for index in range(7):
+        conversation = client.post(
+            "/v1/conversations",
+            json={"title": f"thread {index}", "project_id": project["id"] if index % 2 == 0 else None},
+        ).json()
+        if index % 2 == 0:
+            chosen.append(conversation["id"])
+    first = client.get("/v1/conversations", params={"project_id": project["id"], "latest": True, "limit": 2}).json()
+    assert [item["id"] for item in first["items"]] == chosen[-2:]
+    second = client.get("/v1/conversations", params={"project_id": project["id"], "before": first["previous_cursor"], "limit": 2}).json()
+    assert [item["id"] for item in second["items"]] == chosen[:2]
+    assert second["previous_cursor"] is None
+    ascending = client.get("/v1/conversations", params={"project_id": project["id"], "limit": 2}).json()
+    following = client.get("/v1/conversations", params={"project_id": project["id"], "cursor": ascending["next_cursor"], "limit": 2}).json()
+    assert [item["id"] for item in ascending["items"] + following["items"]] == chosen
+    assert len(client.get("/v1/conversations").json()["items"]) == 7
+    assert client.get("/v1/conversations?project_id=missing").status_code == 404
+    assert client.get("/v1/projects/missing").status_code == 404
+    assert client.get(f"/v1/projects/{project['id']}", headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert client.get(f"/v1/conversations?project_id={project['id']}", headers={"Authorization": "Bearer wrong"}).status_code == 401
+
+
+def test_recent_conversations_follow_activity_instead_of_creation_window(client):
+    first = client.post("/v1/conversations", json={"title": "ongoing topic"}).json()
+    for index in range(4):
+        client.post("/v1/conversations", json={"title": f"new topic {index}"})
+    with client.app.state.store._connection(write=True) as db:
+        db.execute("UPDATE conversations SET updated_at=? WHERE id=?", ("2099-01-01T00:00:00Z", first["id"]))
+    recent = client.get("/v1/conversations/recent?limit=2").json()
+    assert len(recent["items"]) == 2
+    assert recent["items"][0]["id"] == first["id"]
+    assert first["id"] not in [item["id"] for item in client.get("/v1/conversations?latest=true&limit=2").json()["items"]]
+    assert client.get("/v1/conversations/recent", headers={"Authorization": "Bearer wrong"}).status_code == 401
+
+
+def test_refresh_specific_schedules_beyond_first_page(client):
+    conversation = client.post("/v1/conversations", json={"title": "plans"}).json()
+    ids = []
+    for index in range(102):
+        identifier = str(uuid4())
+        client.post("/v1/schedules", json={"id": identifier, "conversation_id": conversation["id"], "prompt": f"plan {index}", "next_run_at": "2099-01-01T00:00:00Z"}).raise_for_status()
+        ids.append(identifier)
+    assert ids[-1] not in [item["id"] for item in client.get("/v1/schedules?limit=100").json()["items"]]
+    client.patch(f"/v1/schedules/{ids[-1]}", json={"enabled": False}).raise_for_status()
+    page = client.get("/v1/schedules", params=[("ids", ids[-2]), ("ids", ids[-1]), ("limit", 100)]).json()
+    assert [item["id"] for item in page["items"]] == ids[-2:]
+    assert page["items"][-1]["enabled"] is False
+    assert page["next_cursor"] is None
+    assert client.get("/v1/schedules", params=[("ids", item) for item in ids]).status_code == 422
+    assert client.get("/v1/schedules", params={"ids": ids[-1]}, headers={"Authorization": "Bearer wrong"}).status_code == 401
