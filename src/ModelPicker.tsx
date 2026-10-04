@@ -10,14 +10,7 @@ import { BrandIcon } from "./BrandIcon";
 import { radius, space, typography } from "./theme";
 import type { ModelInfo } from "./api";
 
-export const reasoningLabel = {
-  auto: "自动",
-  none: "关闭",
-  low: "低",
-  medium: "中",
-  high: "高",
-  xhigh: "极高",
-} as const;
+export { reasoningLabel } from "./reasoning";
 
 export function ModelPicker({
   visible, title, connectionUrl, models, selectedId, onSelect, onUseDefault, defaultLabel = "跟随默认聊天模型", onClose,

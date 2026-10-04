@@ -1,18 +1,14 @@
-import type { ThemeColors } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
-import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { ApiError } from "./api";
 import { failedSync, syncNotice, type SyncFailure } from "./syncHealth";
-import { space, typography } from "./theme";
+import { useNotice } from "./Notice";
 
 type Reporter = { report: (id: string, error?: unknown) => void; register: (id: string, retry: () => void) => () => void };
 const Context = createContext<Reporter | null>(null);
 
 export function ConnectionStatusProvider({ children }: { children: ReactNode }) {
-  const { colors } = useTheme();
-  const styles = useThemedStyles(createStyles);
+  const { show, dismiss } = useNotice();
+  const noticeId = useId();
   const [failures, setFailures] = useState<Record<string, SyncFailure>>({});
   const [now, setNow] = useState(() => Date.now());
   const retries = useRef(new Map<string, () => void>());
@@ -36,14 +32,13 @@ export function ConnectionStatusProvider({ children }: { children: ReactNode }) 
   }, [hasFailures]);
   const value = useMemo(() => ({ report, register }), [report, register]);
   const message = syncNotice(Object.values(failures), now);
+  useEffect(() => {
+    if (message) show({ id: noticeId, message, icon: "cloud-offline-outline", tone: "warning", duration: null,
+      action: { label: "重新连接", icon: "refresh-outline", onPress: () => retries.current.forEach((retry) => retry()) } });
+    else dismiss(noticeId);
+    return () => dismiss(noticeId);
+  }, [message, noticeId, show, dismiss]);
   return <Context.Provider value={value}>
-    {message ? <View style={styles.notice} accessibilityLiveRegion="polite">
-      <Ionicons name="cloud-offline-outline" size={17} color={colors.muted} />
-      <Text style={styles.message}>{message}</Text>
-      <Pressable accessibilityRole="button" accessibilityLabel="重新连接" onPress={() => retries.current.forEach((retry) => retry())} style={styles.retry}>
-        <Ionicons name="refresh-outline" size={18} color={colors.ink} />
-      </Pressable>
-    </View> : null}
     {children}
   </Context.Provider>;
 }
@@ -57,9 +52,3 @@ export function useSyncStatus(retry?: () => void) {
   useEffect(() => context?.register(id, () => retryRef.current?.()), [context, id]);
   return useCallback((error?: unknown) => context?.report(id, error), [context, id]);
 }
-
-const createStyles = (colors: ThemeColors) => StyleSheet.create({
-  notice: { flexDirection: "row", alignItems: "center", gap: space.sm, marginHorizontal: space.lg, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
-  message: { flex: 1, ...typography.caption, color: colors.muted },
-  retry: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-});

@@ -9,6 +9,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
+from .reasoning import ReasoningLevel, ThinkingLevel, reasoning_profile
+
 
 class ModelConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -21,8 +23,8 @@ class ModelConfig(BaseModel):
     api_key: SecretStr | None = Field(default=None, repr=False, exclude=True)
     base_url: str | None = None
     temperature: float | None = None
-    reasoning_effort: Literal["none", "low", "medium", "high", "xhigh"] | None = None
-    reasoning_levels: list[Literal["auto", "none", "low", "medium", "high", "xhigh"]] = Field(default_factory=list, max_length=6)
+    reasoning_effort: ThinkingLevel | None = None
+    reasoning_levels: list[ReasoningLevel] = Field(default_factory=list, max_length=8)
     timeout: float = Field(default=60, gt=0, le=300)
     image_input: bool = False
     context_window: int | None = Field(default=None, ge=4096, le=10_000_000)
@@ -45,12 +47,19 @@ class ModelConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_reasoning_protocol(self):
-        if self.reasoning_effort is not None and self.protocol == "gemini":
-            raise ValueError("reasoning_effort is only supported by OpenAI-compatible protocols")
         if len(self.reasoning_levels) != len(set(self.reasoning_levels)):
             raise ValueError("reasoning_levels must be unique")
-        if self.protocol == "gemini" and set(self.reasoning_levels) & {"none", "xhigh"}:
-            raise ValueError("Gemini thinking levels cannot promise off or xhigh")
+        profile = reasoning_profile(self.model, self.protocol)
+        if profile is not None:
+            self.reasoning_levels = list(profile.levels)
+            # Legacy defaults may no longer be meaningful for a binary-only model.
+            if self.reasoning_effort not in self.reasoning_levels:
+                self.reasoning_effort = None
+        else:
+            if self.reasoning_effort is not None and self.protocol == "gemini":
+                raise ValueError("reasoning_effort requires a recognized Gemini model")
+            if self.protocol == "gemini" and set(self.reasoning_levels) & {"none", "xhigh", "max"}:
+                raise ValueError("Gemini thinking levels cannot promise off or xhigh")
         return self
 
 

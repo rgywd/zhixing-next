@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING, Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
+from .reasoning import reasoning_options, reasoning_profile
+
 if TYPE_CHECKING:
     from .config import Settings
 
@@ -66,17 +68,27 @@ def create_model(
     effort = config.reasoning_effort if reasoning_effort is None else (
         None if reasoning_effort == "auto" else reasoning_effort
     )
+    options.update(reasoning_options(config, effort))
+    profile = reasoning_profile(config.model, config.protocol)
+    if profile:
+        if profile.kind == "openai" and effort != "none":
+            options.pop("temperature", None)
+        if config.model.lower().rsplit("/", 1)[-1].startswith("kimi-k2."):
+            options["temperature"] = 0.6 if effort == "none" else 1.0
     if config.protocol in {"chat_completions", "responses"}:
         from langchain_openai import ChatOpenAI
 
-        if effort is not None:
-            options["reasoning_effort"] = effort
-        return ChatOpenAI(**options, use_responses_api=config.protocol == "responses")
+        client_class = ChatOpenAI
+        if config.protocol == "chat_completions" and re.search(r"(?:^|/)(?:qwen|qwq|deepseek|glm|kimi|moonshot)[-.\d]", config.model, re.I):
+            from .thinking_chat import ThinkingChatOpenAI
+
+            client_class = ThinkingChatOpenAI
+            if config.model.lower().rsplit("/", 1)[-1].startswith(("qwen", "qwq")):
+                options["streaming"] = True
+        return client_class(**options, use_responses_api=config.protocol == "responses")
     if config.protocol == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
 
-        if effort is not None:
-            options["reasoning_effort"] = effort
         if config.base_url and re.search(r"/v\d+(?:beta\d*)?$", config.base_url):
             options["api_version"] = ""
         return ChatGoogleGenerativeAI(**options, vertexai=False)

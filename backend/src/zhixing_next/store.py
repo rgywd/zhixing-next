@@ -748,6 +748,10 @@ class Store:
             conversation["reasoning_effort"]
             if kind == "chat" else None
         )
+        if reasoning_override is None and reasoning_effort is not None:
+            config = self.runtime_settings(db).models.get(model_id)
+            if config is not None and reasoning_effort not in config.reasoning_levels:
+                reasoning_effort = None
         db.execute(
             "INSERT INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at,request_json) VALUES(?,?,'user',?,'queue',?,'accepted',?,?)",
             (message_id, conversation_id, content, run_id, now, request_json),

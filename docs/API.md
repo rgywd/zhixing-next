@@ -19,7 +19,7 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 ## HTTP 接口
 
 - `GET /v1/status`: `{model_ready: bool, worker_online: bool, execution_available: bool, execution_reason: string|null, file_tools_available: bool}`；`model_ready` 按当前聊天/执行默认模型及服务端密钥判断，不代表供应商已通过调用。`execution_available` 检查启用配置及 Docker 镜像可见性，实际启动仍可能失败，以执行回执为准。
-- `GET /v1/models`：返回 `{items,roles}`。每个模型只公开 `id,name,model,provider,protocol,ready,image_input,reasoning_levels,default_reasoning_effort`；`image_input` 是服务端对端点能力的声明，不是实时探测。不返回密钥、环境变量名或 Base URL。`roles` 为聊天、执行、记忆整理的当前默认模型 ID。
+- `GET /v1/models`：返回 `{items,roles}`。每个模型只公开 `id,name,model,provider,protocol,ready,image_input,reasoning_levels,default_reasoning_effort,reasoning_kind,reasoning_labels`；`image_input` 是服务端对端点能力的声明，不是实时探测。不返回密钥、环境变量名或 Base URL。`roles` 为聊天、执行、记忆整理的当前默认模型 ID。
 - `PUT /v1/models/roles/{role} {model_id}`：`role` 为 `chat|task|memory`，保存角色默认模型。模型须已在服务端配置；未配置专用记忆模型时，整理使用当前聊天默认模型。
 - `GET /v1/memories?cursor=&limit=`：返回个人语义记忆 `{items,next_cursor}`；每项含 `id,content,source_message_id,created_at,updated_at,seq`。只读当前记忆，不返回原始聊天或内部去重键。
 - `POST /v1/memories {content}`、`PATCH /v1/memories/{id} {content}`、`DELETE /v1/memories/{id}`：后端直接写入、纠正或忘记；内容最多 500 字，凭据类内容拒绝写入。删除记忆不删除原会话或文件。
@@ -36,11 +36,11 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 - `GET /v1/conversations`, `POST /v1/conversations {title,project_id?: string|null,agent_id?: string|null}`:
   会话 `{id,title,project_id,agent_id,blocked: bool,created_at,updated_at}`；`agent_id=null` 为主知行。
 - `GET /v1/conversations/{id}`：单个会话及当前 blocked 状态。
-- `PUT /v1/conversations/{id}/model {model_id:string|null,reasoning_effort:auto|none|low|medium|high|xhigh|null}`：主知行与绑定专用助手的会话均可设置聊天模型和思考档位；null 表示继承助手配置或角色默认模型。单次请求模型优先于会话模型，再继承助手配置与角色默认模型。档位必须在模型声明的 `reasoning_levels` 内。设置只影响之后入队的聊天，已提交的运行保留入队时的模型快照。
+- `PUT /v1/conversations/{id}/model {model_id:string|null,reasoning_effort:auto|none|minimal|low|medium|high|xhigh|max|null}`：主知行与绑定专用助手的会话均可设置聊天模型和思考档位；null 表示继承助手配置或角色默认模型。单次请求模型优先于会话模型，再继承助手配置与角色默认模型。档位必须在模型声明的 `reasoning_levels` 内。设置只影响之后入队的聊天，已提交的运行保留入队时的模型快照。
 - `GET /v1/conversations/{id}/messages?cursor=&limit=`: 按序号升序，消息
   `{id,conversation_id,role: user|assistant,content,attachments: Resource[],intent: queue|steer,run_id,status: accepted|applied|rejected,created_at,seq}`。
   自动转交的任务输入额外带 `origin:assistant_task`，手机显示为后台任务，不作为用户事实提取记忆；此字段只由服务端设置。内部转交可汇集多次 Steer 的附件，外部每条消息仍最多 8 份。
-- `POST /v1/conversations/{id}/messages {id,content?: string,attachments?: string[],intent: queue|steer,kind: chat|task,target_run_id?: string,model_id?: string,reasoning_effort?: auto|none|low|medium|high|xhigh,search_provider_id?: string}`:
+- `POST /v1/conversations/{id}/messages {id,content?: string,attachments?: string[],intent: queue|steer,kind: chat|task,target_run_id?: string,model_id?: string,reasoning_effort?: auto|none|minimal|low|medium|high|xhigh|max,search_provider_id?: string}`:
   回执 `{message,run}`；queue 创建 queued 运行，主知行与专用助手均可为单条聊天或任务覆盖模型与思考档位并选择联网搜索服务，保持原会话的助手身份与工具范围（选中的搜索工具仅对该次运行开放）；steer 必须绑定实际 running 运行，不接受这些覆盖字段，也不创建新运行。同一消息 ID 重试必须保持所有字段一致。
   `content` 默认空串，文字和附件至少提供一项；`attachments` 为最多 8 个不重复资源 ID，必须属于当前会话或同项目工作目录。引用越界返回 403，当前模型明确不支持图片返回 422，校验失败不落入队消息。Steer 图片使用目标运行模型校验。旧客户端不传附件仍兼容。
 - `POST /v1/conversations/{id}/resume`: 清除失败/取消后的队列阻塞，允许尚未开始的排队消息继续。
@@ -144,7 +144,7 @@ emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可�
 - `DELETE /v1/providers/{id}/models/{modelId}?revision=` → Provider。删除/停用后清理无效引用，已入队配置保留。
 - `POST /v1/providers/{id}/models/{modelId}/test` → `{checks:[{kind:reply|stream|tools,ok,elapsed_ms,message?}]}`。每项单独报告，不把 HTTP 200 当作测试通过；最多三个各 15 秒、256 输出 token 的请求，不执行探针请求的工具。
 
-ModelInput 为 `{model,display_name?,enabled?,image_input?,reasoning_levels?,reasoning_effort?,temperature?,timeout?}`；默认启用、文本输入、不声明思考档位、模型默认温度、60 秒超时。温度 0–2，超时大于 0 且不超过 300 秒；默认思考档位必须在支持列表内。Gemini 不允许 none/xhigh 及全局默认思考值。ManagedModel 在原 ModelInfo 上增加 `enabled,temperature,timeout`。
+ModelInput 为 `{model,display_name?,enabled?,image_input?,reasoning_levels?,reasoning_effort?,temperature?,timeout?}`；默认启用、文本输入、模型默认温度、60 秒超时。已识别模型按实际 ID 自动匹配思考档位，未知模型使用显式 `reasoning_levels`；空列表表示不可调整。温度 0–2，超时大于 0 且不超过 300 秒；默认思考值必须可用（省略支持列表时由服务端匹配）。已识别的 Gemini 可设置默认思考，2.5 Flash 可关闭，Pro 与 3 系列不能关闭；未知 Gemini 不接受默认思考及 none/xhigh/max。`reasoning_kind` 和 `reasoning_labels` 是可选展示元数据，开关模型的 `high` 显示“开启”。规则与请求转换见[模型思考适配](MODEL-THINKING.md)。ManagedModel 在原 ModelInfo 上增加 `enabled,temperature,timeout`。
 
 配置和凭据保存在服务端 `app.sqlite`；API 与 worker 按操作读取新配置。私有运行快照独立于公开运行记录，完成、失败、取消后清除；可恢复中断任务保留。v9 现有 TOML 条目仅在迁移时导入一次，详见[升级说明](PROVIDER-MANAGEMENT.md)。
 
