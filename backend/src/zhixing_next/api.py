@@ -268,6 +268,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def projects(cursor: Cursor = 0, limit: Limit = 50):
         return store.list_projects(cursor, limit)
 
+    @router.get("/projects/{project_id}")
+    def project(project_id: str):
+        return store.get_project(project_id)
+
     @router.post("/projects", status_code=201)
     def create_project(body: ProjectInput):
         return store.create_project(body.name)
@@ -278,9 +282,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         limit: Limit = 50,
         before: Annotated[int | None, Query(ge=1)] = None,
         latest: bool = False,
+        project_id: str | None = None,
     ):
         check_window(cursor, before, latest)
-        return store.list_conversations(cursor, limit, before=before, latest=latest)
+        return store.list_conversations(cursor, limit, before=before, latest=latest, project_id=project_id)
+
+    @router.get("/conversations/recent")
+    def recent_conversations(limit: Limit = 10):
+        return store.recent_conversations(limit)
 
     @router.get("/conversations/search")
     def conversation_search(
@@ -386,8 +395,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 temporary.unlink(missing_ok=True)
 
     @router.get("/resources")
-    def resource_list(conversation_id: str | None = None, cursor: Cursor = 0, limit: Limit = 50):
-        return store.list_resources(conversation_id, cursor, limit)
+    def resource_list(
+        conversation_id: str | None = None, cursor: Cursor = 0, limit: Limit = 50,
+        query: Annotated[str, Query(max_length=200)] = "",
+        before: Cursor | None = None, latest: bool = False,
+    ):
+        check_window(cursor, before, latest)
+        return store.list_resources(conversation_id, cursor, limit, query, before=before, latest=latest)
 
     @router.get("/input-requests")
     def input_requests(conversation_id: str | None = None, run_id: str | None = None):
@@ -441,6 +455,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.post("/conversations/{conversation_id}/resources")
     def capture_resource(conversation_id: str, body: ResourceInput):
         return resources.capture_file(settings, conversation_id, body.path)
+
+    @router.get("/resources/{resource_id}")
+    def resource(resource_id: UUID):
+        return store.get_resource(str(resource_id))
 
     @router.get("/resources/{resource_id}/content")
     def resource_content(resource_id: UUID, preview: bool = False):
@@ -499,8 +517,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return store.list_events(run_id, after, limit)
 
     @router.get("/schedules")
-    def schedules(cursor: Cursor = 0, limit: Limit = 50):
-        return store.list_schedules(cursor, limit)
+    def schedules(cursor: Cursor = 0, limit: Limit = 50, ids: Annotated[list[str] | None, Query(max_length=100)] = None):
+        return store.list_schedules(cursor, limit, ids=ids)
 
     @router.post("/schedules", status_code=201)
     def create_schedule(body: ScheduleInput):

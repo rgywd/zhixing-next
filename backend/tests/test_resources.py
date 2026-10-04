@@ -275,3 +275,93 @@ async def test_finance_image_reaches_model_and_observation_service(setup):
     assert human.content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     assert store.list_finance_observations()["balances"][0]["amount"] == "123.45"
     assert "view_image" in model.bound_names and "execute" not in model.bound_names
+
+
+async def test_resource_name_search_filters_the_whole_library_before_paging(setup):
+    settings, store, app = setup
+    conversation = store.create_conversation("资料检索")["id"]
+
+    def add(name):
+        identifier = str(uuid4())
+        return store.register_resource(
+            identifier, conversation, path=f"uploads/{identifier}/{name}", name=name,
+            mime_type="text/plain", size=20, sha256="a" * 64,
+        )
+
+    unrelated = [add(f"其他资料-{index}.txt") for index in range(55)]
+    matches = [add(name) for name in ["行程 Report.csv", "行程 report.pdf", "行程 REPORT.txt"]]
+    percent = add("budget_100%.csv")
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test",
+        headers={"Authorization": "Bearer " + settings.api_token},
+    ) as client:
+        original = (await client.get("/v1/resources", params={"limit": 2})).json()
+        assert [item["id"] for item in original["items"]] == [item["id"] for item in unrelated[:2]]
+        first = (await client.get("/v1/resources", params={"query": "  report  ", "limit": 2})).json()
+        assert [item["id"] for item in first["items"]] == [item["id"] for item in matches[:2]]
+        second = (await client.get("/v1/resources", params={
+            "query": "report", "limit": 2, "cursor": first["next_cursor"],
+        })).json()
+        assert [item["id"] for item in second["items"]] == [matches[2]["id"]]
+        assert second["next_cursor"] is None
+        for query in ["_", "%", "_100%"]:
+            literal = (await client.get("/v1/resources", params={"query": query})).json()
+            assert [item["id"] for item in literal["items"]] == [percent["id"]]
+        assert (await client.get("/v1/resources", params={"query": "不存在"})).json()["items"] == []
+
+
+async def test_resource_latest_search_keeps_workspace_scope_and_backward_cursor(setup):
+    settings, store, app = setup
+    project = store.create_project("共享资料")
+    owner = store.create_conversation("项目一", project_id=project["id"])["id"]
+    same_project = store.create_conversation("项目二", project_id=project["id"])["id"]
+    other = store.create_conversation("独立对话")["id"]
+    records = []
+    for index, conversation in enumerate([owner, same_project, other, owner, same_project]):
+        identifier = str(uuid4())
+        records.append(store.register_resource(
+            identifier, conversation, path=f"uploads/{identifier}/note-{index}.txt",
+            name=f"note-{index}.txt", mime_type="text/plain", size=10, sha256="a" * 64,
+        ))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app), base_url="http://test",
+        headers={"Authorization": "Bearer " + settings.api_token},
+    ) as client:
+        first = (await client.get("/v1/resources", params={
+            "conversation_id": owner, "query": "NOTE", "latest": True, "limit": 2,
+        })).json()
+        assert [item["id"] for item in first["items"]] == [item["id"] for item in records[3:]]
+        assert first["next_cursor"] is None
+        older = (await client.get("/v1/resources", params={
+            "conversation_id": owner, "query": "note", "before": first["previous_cursor"], "limit": 2,
+        })).json()
+        assert [item["id"] for item in older["items"]] == [item["id"] for item in records[:2]]
+        assert older["previous_cursor"] is None
+        assert (await client.get("/v1/resources", params={"conversation_id": "missing"})).status_code == 404
+
+
+async def test_resource_search_is_authenticated_and_rejects_ambiguous_windows(setup):
+    settings, _, app = setup
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test") as client:
+        assert (await client.get("/v1/resources", params={"query": "private", "latest": True})).status_code == 401
+        client.headers["Authorization"] = "Bearer " + settings.api_token
+        for params in [
+            {"query": "x" * 201}, {"cursor": 1, "latest": True},
+            {"before": 4, "latest": True}, {"before": 4, "cursor": 1},
+        ]:
+            assert (await client.get("/v1/resources", params=params)).status_code == 422
+
+
+async def test_resource_metadata_reopens_an_item_outside_the_latest_window(setup):
+    settings, store, app = setup
+    conversation = store.create_conversation("old files")["id"]
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app), base_url="http://test", headers={"Authorization": "Bearer " + settings.api_token}) as client:
+        first = await upload(client, conversation, "old.txt", b"old")
+        await upload(client, conversation, "new.txt", b"new")
+        latest = (await client.get("/v1/resources?latest=true&limit=1")).json()
+        assert first["id"] not in [item["id"] for item in latest["items"]]
+        metadata = await client.get(f"/v1/resources/{first['id']}")
+        assert metadata.status_code == 200
+        assert metadata.json() == first
+        assert (await client.get(f"/v1/resources/{uuid4()}")).status_code == 404
+        assert (await client.get(f"/v1/resources/{first['id']}", headers={"Authorization": "Bearer wrong"})).status_code == 401

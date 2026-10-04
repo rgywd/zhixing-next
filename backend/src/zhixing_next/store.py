@@ -497,6 +497,10 @@ class Store:
             )
             return dict(self._require(db, "projects", identifier))
 
+    def get_project(self, project_id):
+        with self._connection() as db:
+            return dict(self._require(db, "projects", project_id))
+
     def list_projects(self, cursor=0, limit=50):
         with self._connection() as db:
             rows = db.execute(
@@ -647,13 +651,33 @@ class Store:
                 self._check_resource_scope(db, resource, conversation_id)
             return dict(resource)
 
-    def list_resources(self, conversation_id=None, cursor=0, limit=50):
+    def list_resources(self, conversation_id=None, cursor=0, limit=50, query="", *, before=None, latest=False):
         with self._connection() as db:
             if conversation_id:
                 workspace = self._require(db, "conversations", conversation_id)["workspace_path"]
             else:
                 workspace = None
-            rows = db.execute("SELECT r.rowid AS seq,r.* FROM resources r JOIN conversations c ON c.id=r.conversation_id WHERE r.rowid>? AND (? IS NULL OR c.workspace_path=?) ORDER BY r.rowid LIMIT ?", (cursor, workspace, workspace, limit + 1)).fetchall()
+            if latest or before is not None:
+                rows = db.execute(
+                    "SELECT r.rowid AS seq,r.* FROM resources r "
+                    "JOIN conversations c ON c.id=r.conversation_id "
+                    "WHERE (? IS NULL OR r.rowid<?) AND (? IS NULL OR c.workspace_path=?) "
+                    "AND instr(lower(r.name),lower(?))>0 ORDER BY r.rowid DESC LIMIT ?",
+                    (before, before, workspace, workspace, query.strip(), limit + 1),
+                ).fetchall()
+                items = [dict(row) for row in reversed(rows[:limit])]
+                return {
+                    "items": items,
+                    "next_cursor": None,
+                    "previous_cursor": str(items[0]["seq"]) if len(rows) > limit else None,
+                }
+            rows = db.execute(
+                "SELECT r.rowid AS seq,r.* FROM resources r "
+                "JOIN conversations c ON c.id=r.conversation_id "
+                "WHERE r.rowid>? AND (? IS NULL OR c.workspace_path=?) "
+                "AND instr(lower(r.name),lower(?))>0 ORDER BY r.rowid LIMIT ?",
+                (cursor, workspace, workspace, query.strip(), limit + 1),
+            ).fetchall()
             return self._page(rows, limit)
 
     def _check_resource_scope(self, db, resource, conversation_id):
@@ -662,12 +686,14 @@ class Store:
         if owner["workspace_path"] != target["workspace_path"]:
             raise StoreError("attachment_scope", "Choose an attachment from this conversation or project", 403)
 
-    def list_conversations(self, cursor=0, limit=50, *, before=None, latest=False):
+    def list_conversations(self, cursor=0, limit=50, *, before=None, latest=False, project_id=None):
         with self._connection() as db:
+            if project_id is not None:
+                self._require(db, "projects", project_id)
             if latest or before is not None:
                 rows = db.execute(
-                    "SELECT rowid AS seq,* FROM conversations WHERE (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT ?",
-                    (before, before, limit + 1),
+                    "SELECT rowid AS seq,* FROM conversations WHERE (? IS NULL OR project_id=?) AND (? IS NULL OR rowid<?) ORDER BY rowid DESC LIMIT ?",
+                    (project_id, project_id, before, before, limit + 1),
                 ).fetchall()
                 items = [_record(row) for row in reversed(rows[:limit])]
                 return {
@@ -676,10 +702,18 @@ class Store:
                     "previous_cursor": str(items[0]["seq"]) if len(rows) > limit else None,
                 }
             rows = db.execute(
-                "SELECT rowid AS seq,* FROM conversations WHERE rowid>? ORDER BY rowid LIMIT ?",
-                (cursor, limit + 1),
+                "SELECT rowid AS seq,* FROM conversations WHERE (? IS NULL OR project_id=?) AND rowid>? ORDER BY rowid LIMIT ?",
+                (project_id, project_id, cursor, limit + 1),
             ).fetchall()
             return self._page(rows, limit)
+
+    def recent_conversations(self, limit=10):
+        with self._connection() as db:
+            rows = db.execute(
+                "SELECT rowid AS seq,* FROM conversations ORDER BY updated_at DESC,rowid DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+            return {"items": [_record(row) for row in rows], "next_cursor": None}
 
     def search_conversations(self, query, *, sort="relevance", limit=50):
         """Search titles and message text across the complete local history."""
@@ -1129,11 +1163,12 @@ class Store:
             )
             return _record(self._require(db, "schedules", id))
 
-    def list_schedules(self, cursor=0, limit=50):
+    def list_schedules(self, cursor=0, limit=50, *, ids=None):
         with self._connection() as db:
+            clause = " AND id IN (" + ",".join("?" for _ in ids) + ")" if ids else ""
             rows = db.execute(
-                "SELECT rowid AS seq,* FROM schedules WHERE rowid>? ORDER BY rowid LIMIT ?",
-                (cursor, limit + 1),
+                f"SELECT rowid AS seq,* FROM schedules WHERE rowid>?{clause} ORDER BY rowid LIMIT ?",
+                (cursor, *(ids or []), limit + 1),
             ).fetchall()
             page = self._page(rows, limit)
             for item in page["items"]:

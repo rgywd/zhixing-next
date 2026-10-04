@@ -24,6 +24,8 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 - `GET /v1/memories?cursor=&limit=`：返回个人语义记忆 `{items,next_cursor}`；每项含 `id,content,source_message_id,created_at,updated_at,seq`。只读当前记忆，不返回原始聊天或内部去重键。
 - `POST /v1/memories {content}`、`PATCH /v1/memories/{id} {content}`、`DELETE /v1/memories/{id}`：后端直接写入、纠正或忘记；内容最多 500 字，凭据类内容拒绝写入。删除记忆不删除原会话或文件。
 - `GET /v1/memories/status`：返回 `{pending,failed}` 整理运行数；`POST /v1/memories/retry` 将失败的整理重新排队，返回 `{retried}`。手机侧栏可以查看和忘记记忆，整理状态仍由后台处理。
+- `GET /v1/conversations/recent?limit=10`：按 `updated_at` 降序取最近活动会话，覆盖较早建立的话题；不是创建序号窗口。
+- `GET /v1/conversations?project_id=<id>`：在分页前按项目过滤，支持现有 `cursor`、`latest`、`before` 语义；无此项目返回 404。
 - `GET /v1/conversations/search?q=&sort=relevance|newest|oldest&limit=`：认证后搜索全部会话标题和未拒绝消息正文，空格分词取交集，支持中文、部分词和字面量 `%`、`_`。最多返回 100 项 `{items:[{conversation_id,title,agent_id,updated_at,message_id,message_seq,snippet}]}`；标题命中优先于正文命中，同级按更新时间排序。当前单用户 SQLite 直接检索，历史量增长后可再引入全文索引。
 - `GET /v1/search/providers`：列出已配置搜索服务 `{items:[{id,name,kind}],next_cursor:null}`，不返回密钥。`POST /v1/search/providers {name,kind:brave|tavily|serper,api_key}` 在服务端保存密钥并返回 `{id,name,kind}`；`DELETE /v1/search/providers/{id}` 删除服务，若排队或运行中的消息正在引用则返回 409。
 - `GET /v1/assistant`, `PUT /v1/assistant`: `{name, persona}`，人格是用户编辑的持久文本。
@@ -32,6 +34,7 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
   创建/修改输入 `{name,description,instructions,tools,visible}`；固定服务助手不可删除，且工具由服务固定。删除自建助手前需完成其排队或运行中的任务；旧会话保留并转为主知行会话。
   自建助手可选工具仅为 `inspect_environment`、`list_directory`、`read_text_file`、`read_document`、`view_image`、`write_text_file`、`fetch_public_page`；服务器的目录授权仍生效。实际模型未开启图片输入时不提供 `view_image`。
 - `GET /v1/finance/observations`：`{balances: FinanceObservation[],recent: FinanceObservation[]}`。固定财务助手专用工具可记录/列出/删除用户明确提供的 CNY 金额观察值；`balance` 为各平台最后一次观察，`income`/`expense` 取最近 20 条。记录包含 `id,kind,platform,amount,note,conversation_id,created_at`。这不是实时账户查询或自动对账接口。
+- `GET /v1/projects/{id}`：读取指定项目；不存在返回 404。
 - `GET /v1/projects`, `POST /v1/projects {name}`: 项目 `{id,name,workspace_path,created_at}`；路径由服务器创建。
 - `GET /v1/conversations`, `POST /v1/conversations {title,project_id?: string|null,agent_id?: string|null}`:
   会话 `{id,title,project_id,agent_id,blocked: bool,created_at,updated_at}`；`agent_id=null` 为主知行。
@@ -89,7 +92,7 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
   工作副本写入 `uploads/<file_id>/<filename>`，回执扩展为 `Resource`（保留 `path,name,size`）；相同 ID/name/content 重试返回原资源，冲突返回 409。PNG/JPEG/WebP/GIF 解码失败或超过 2400 万像素返回 422；其他图片格式按普通文件处理。
 - `GET /v1/conversations/{id}/files/content?path=...`：认证后下载工作目录内相对路径，最大 20 MiB。
 - `POST /v1/conversations/{id}/resources {path}`：将现有工作文件保存为原始资源快照，返回 `Resource`；同会话同路径同内容重复调用返回同一 ID。
-- `GET /v1/resources?conversation_id=&cursor=&limit=`：按序号升序返回 `{items:Resource[],next_cursor}`；可选会话参数按其工作目录筛选，同项目会话共享资源。
+- `GET /v1/resources?conversation_id=&query=&cursor=&limit=`：认证后按序号升序返回 `{items:Resource[],next_cursor}`；可选会话参数按其工作目录筛选，同项目会话共享资源。`query` 为最多 200 字符的名称子串，去除首尾空格并忽略 ASCII 大小写，`%`、`_` 按字面匹配。先在全部符合范围的资源中过滤，再分页；切换搜索词时从空游标开始，后续页沿用同一搜索词。也支持 `latest=true` 取最近窗口、`before=<previous_cursor>` 继续取更早资源，此时返回 `previous_cursor`、`next_cursor:null`，窗口内仍按序号升序；`cursor`、`before`、`latest` 不可混用。
 - `GET /v1/resources/{UUID}/content?preview=false`：认证下载不可变原件；`preview=true` 返回最长边 2048 的 JPEG 图片预览，非图片返回 422。原件下载验证 SHA-256；设置 `nosniff`、私有且不缓存。此接口无资源删除功能。
 
 `Resource` 为 `{id,conversation_id,path,name,mime_type,size,sha256,created_at}`（列表另含 `seq`）。原件保存在服务数据目录，工作副本可以修改；消息和运行保存资源元数据快照。模型请求临时填充图片 base64，用户附件的 base64 不写入 checkpoint；`view_image` 的工具返回图片属于实际工具历史。
@@ -159,3 +162,7 @@ ModelInput 为 `{model,display_name?,enabled?,image_input?,reasoning_levels?,rea
 - ModelInput、ModelInfo 增加可空 `context_window`（4096–10000000 token）；通过 SDK profile 决定压缩阈值。省略时保持 SDK 模型资料/默认行为。
 
 GitLab 主机、凭据环境变量、项目范围及写开关由服务端配置；模型只能调用已暴露的项目/议题工具。写操作产生 `kind=external_write` 的现有 approval 卡片；它复用 approve/deny 路径。中断后结果无法确认时仍使用 uncertain 的 retry/skip，不能把 HTTP 超时当成未提交。具体配置、迁移及验证限制见[执行闭环验收](HARNESS-ACCEPTANCE-2026-09-30.md)。
+
+`GET /v1/resources/{id}` 返回认证后的单份资源元数据（与列表相同），用于重新打开不在当前分页窗口中的最近文件；无此资源返回 404。
+
+`GET /v1/schedules?ids=<id>&ids=<id>&limit=100` 可按最多 100 个 ID 刷新已加载计划，仍在分页前过滤、受原认证保护；省略 `ids` 保留原游标列表。客户端用它更新首 100 条之外的执行状态。

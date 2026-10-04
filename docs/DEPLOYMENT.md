@@ -3,7 +3,7 @@
 2026-09-23：本页维护 Linux/systemd 部署步骤；是否已上线及实际提交、模型调用结果由部署验收回执记录。
 新助手独立安装，复用现有 HTTPS Nginx 入口的 `/assistant` 路径。旧知行服务与它的数据目录保持独立。
 
-2026-09-29 的图片/隔离执行升级尚未应用到生产。DB v8、原件备份、Docker 镜像与启用步骤见[升级说明](HARNESS-UPGRADE.md)。本页默认 systemd 安装仍关闭 Shell；不要只修改一个 enabled 字段就将原部署视为已验收。
+2026-09-30 的历史生产回执已确认 `da47fa8bb8b12037cf1eaaebf8c3cdaea4baa829`、数据库 v11、API/worker 活跃，以及图片、表格、GitLab 读取、检索与运行中取消的真实验收。回执保存在验收机 `Documents/Codex/acceptance/zhixing-production-20260930/`；本页修订未重新探测生产。下方是首次安装模板，默认关闭 Shell；实际启用和数据库升级需遵循[升级说明](HARNESS-UPGRADE.md)，后续代码合入不等于生产已更新。
 
 ## 布局
 
@@ -136,7 +136,7 @@ ssh -t myVPS "sudo sed -n 's/^ZHIXING_API_TOKEN=//p' /etc/zhixing-next/service.e
 
 它只显示 `ZHIXING_API_TOKEN`，不显示百炼 key；不要将这一步纳入自动验收日志或把输出回传聊天。
 App 填入 HTTPS 基地址和令牌后，确认 `model_ready=true`、`worker_online=true`、`file_tools_available=true`。
-`execution_available=false` 目前是正确状态，表示 Shell 尚未接入。
+未启用 Shell 的首次安装应为 `execution_available=false`；启用 Docker 后还需通过真实执行、文件交付和取消验收，不能只看该状态。
 
 至少完成一次真实聊天，以及一次“上传文本 → 要求读取并写出结果 → 下载结果”的任务；检查产物内容与运行回执。
 再确认 Queue/Steer 的归属和一次性计划能实际执行。验证时保留脱敏的运行 ID、状态、耗时与产物校验值，
@@ -164,8 +164,8 @@ API 访问日志已关闭，worker 将 HTTP 客户端日志限制在 WARNING 及
 systemctl restart zhixing-next-api.service zhixing-next-worker.service
 ```
 
-停止前尽量让正在运行的任务完成。重启会保留 queued 输入，将遗留 running 标成 interrupted 并暂停该会话；
-检查工具回执后由用户继续队列或发送新要求。failed/interrupted 不自动重放，“继续队列”只推进未开始的输入。
+停止前尽量让正在运行的任务完成。重启保留 queued 输入，带恢复记录的 running 会继续原 checkpoint 并核对步骤回执；旧运行、恢复超限或不确定效果进入中断/待决定状态。具体规则见[中断恢复与授权](RECOVERY-AND-AUTHORIZATION.md)。
+failed/interrupted 不由“继续队列”重放；该操作只推进未开始的输入。
 强制停止时外部调用和文件操作的结果可能尚未确认，不能把进程恢复误当任务成功。
 
 ## 备份、升级和回滚
