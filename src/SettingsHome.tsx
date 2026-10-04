@@ -2,7 +2,7 @@ import { AppearanceControl } from "./AppearanceControl";
 import type { Assistant, ModelCatalog } from "./api";
 import { ActionRow, PageHero, PageScrollView, SettingsGroup } from "./ui";
 
-export type SettingsDestination = "providers" | "models" | "search" | "persona" | "agents" | "resources" | "connection";
+export type SettingsDestination = "providers" | "models" | "search" | "persona" | "agents" | "resources" | "connection" | "device";
 
 export function SettingsHome({ assistant, catalog, connectionUrl, onOpen }: {
   assistant?: Assistant | null;
@@ -13,7 +13,9 @@ export function SettingsHome({ assistant, catalog, connectionUrl, onOpen }: {
   const chatModel = catalog?.items.find((item) => item.id === catalog.roles.chat);
   return <PageScrollView tabs>
     <PageHero eyebrow="SETTINGS" title="设置" description="把知行调成你习惯的样子。" />
-    <SettingsGroup title="通用"><AppearanceControl row /></SettingsGroup>
+    <SettingsGroup title="通用"><AppearanceControl row />
+      <ActionRow icon="phone-portrait-outline" title="手机能力" description="通知、系统日历与一次定位" tone="blue" compact last onPress={() => onOpen("device")} />
+    </SettingsGroup>
     <SettingsGroup title="模型与服务">
       <ActionRow icon="server-outline" title="模型供应商" tone="gold" compact
         description="管理供应商、密钥与模型" onPress={() => onOpen("providers")} />

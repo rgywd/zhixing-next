@@ -54,6 +54,7 @@ import { ConnectionForm, ConnectionSettingsPanel, PersonaSettingsPanel } from ".
 import { SettingsHome, type SettingsDestination } from "./SettingsHome";
 import { SearchPicker } from "./SearchPicker";
 import { AgentsPanel } from "./AgentsPanel";
+import { DeviceCapabilitiesPanel } from "./DeviceCapabilitiesPanel";
 import {
   draftKey,
   clearDraft,
@@ -182,18 +183,18 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
   const { s, colors } = useUi();
   const [tab, setTab] = useState<Tab>("home");
   const [lifeView, setLifeView] = useState<"overview" | "finance">("overview");
-  const [showConnection, setShowConnection] = useState(false);
-  const showTabs = tab !== "chat" && (tab !== "life" || lifeView === "overview") && (tab !== "settings" || !showConnection);
+  const [localSettings, setLocalSettings] = useState<"overview" | "connection" | "device">("overview");
+  const showTabs = tab !== "chat" && (tab !== "life" || lifeView === "overview") && (tab !== "settings" || localSettings === "overview");
   useEffect(() => {
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
       if (tab === "chat") { setTab("home"); return true; }
       if (tab === "life" && lifeView !== "overview") { setLifeView("overview"); return true; }
-      if (tab === "settings" && showConnection) { setShowConnection(false); return true; }
+      if (tab === "settings" && localSettings !== "overview") { setLocalSettings("overview"); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, lifeView, showConnection]);
+  }, [tab, lifeView, localSettings]);
   return (
     <View style={s.body}>
       {tab === "home" ? (
@@ -218,11 +219,11 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           onCreateProject={() => setTab("chat")}
           onSchedules={() => setTab("chat")} />
       ) : tab === "settings" ? (
-        showConnection ? <>
-          <BackLink label="设置" onPress={() => setShowConnection(false)} />
+        localSettings !== "overview" ? <>
+          <BackLink label="设置" onPress={() => setLocalSettings("overview")} />
           {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-          <ConnectionSettingsPanel onConnect={onConnect} />
-        </> : <SettingsHome onOpen={() => setShowConnection(true)} />
+          {localSettings === "device" ? <DeviceCapabilitiesPanel /> : <ConnectionSettingsPanel onConnect={onConnect} />}
+        </> : <SettingsHome onOpen={(destination) => setLocalSettings(destination === "device" ? "device" : "connection")} />
       ) : (
         <View style={s.body}>
           <View style={[s.header, s.spread]}>
@@ -236,7 +237,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
           </PageScrollView>
         </View>
       )}
-      {showTabs ? <BottomTabs value={tab} onChange={(next) => { setShowConnection(false); setTab(next); }} /> : null}
+      {showTabs ? <BottomTabs value={tab} onChange={(next) => { setLocalSettings("overview"); setTab(next); }} /> : null}
     </View>
   );
 }
@@ -744,7 +745,12 @@ function ConnectedSession({
       ) : (
         <>
           <BackLink label="设置" onPress={() => setSettingsView("overview")} />
-          {settingsView === "agents" ? (
+          {settingsView === "device" ? (
+            <DeviceCapabilitiesPanel onUseLocation={(text) => {
+              setWelcomeDraft((old) => `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${text}\n\n`);
+              setShowWelcome(true); setReturnTab("settings"); setTab("chat");
+            }} />
+          ) : settingsView === "agents" ? (
             <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />
           ) : settingsView === "models" ? (
             <ModelsPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
