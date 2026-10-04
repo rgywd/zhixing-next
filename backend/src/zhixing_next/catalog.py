@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from .config import ModelConfig
 from .models import model_key
+from .reasoning import reasoning_metadata
 from .store import StoreError
 
 DEFAULT_URLS = {
@@ -73,6 +74,7 @@ def public_model(identifier, config, **extra):
                 provider=config.provider or PROTOCOL_NAMES[config.protocol], protocol=config.protocol,
                 ready=bool(model_key(config)), image_input=config.image_input, context_window=config.context_window,
                 reasoning_levels=config.reasoning_levels, default_reasoning_effort=config.reasoning_effort,
+                **reasoning_metadata(config),
                 **extra)
 
 

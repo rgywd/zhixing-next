@@ -11,6 +11,8 @@
 - [安卓手机能力](ANDROID-CAPABILITIES.md)：通知栏权限与测试、系统日历编辑器、单次定位和实际能力边界。
 - [安卓手机能力验收](ANDROID-CAPABILITIES-ACCEPTANCE-2026-09-30.md)：独立 APK、通知栏实收、日历保存回执、定位生命周期与窄屏验证。
 - [日夜主题验收](THEME-ACCEPTANCE-2026-09-29.md)：全 App 配色、切换持久化、对比度与 Android 系统外观联动。
+- [模型思考与提示栏验收](MODEL-THINKING-ACCEPTANCE-2026-09-30.md)：真实 Qwen 档位与工具回合、六家模型 Android 选项、悬浮提示与恢复边界。
+- [模型思考适配](MODEL-THINKING.md)：名称匹配、模型版本、思考档位与请求参数。
 - [供应商与模型管理](PROVIDER-MANAGEMENT.md)：旧版 RikkaHub 梳理、手机配置、模型发现与测试、v10 迁移和回滚。
 - [设置入口验收](SETTINGS-ACCEPTANCE-2026-09-29.md)：分组设置、模型供应商、搜索服务管理与窄屏返回验证。
 - [对话界面验收](UI-ACCEPTANCE-2026-09-29.md)：品牌工具栏、底部弹层、窄屏键盘和断线注入结果。

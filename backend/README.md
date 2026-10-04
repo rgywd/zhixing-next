@@ -25,7 +25,7 @@ $env:ZHIXING_CONFIG = (Resolve-Path config.local.toml).Path
 myVPS 使用 [百炼新加坡示例](config.bailian.example.toml)，两个角色目前都指向 `qwen3.8-flash`；
 服务进程从环境变量 `ZHIXING_BAILIAN_API_KEY` 读取密钥，配置文件只保存环境变量名。
 `chat_completions`、`responses`、`gemini` 三种协议均有接入，配置 `base_url` 可使用对应兼容端点。
-可在每个 `[models.*]` 中设置 `provider`、`display_name` 和实际支持的 `reasoning_levels`，供手机端展示与选择；未声明档位时不提供思考深度按钮。首次启动将这些配置导入服务端 SQLite；之后在手机“设置 → 模型供应商”中新增、编辑、获取模型和测试连接。密钥不返回手机，目录配置即时生效。手机可更改聊天、执行、记忆整理的默认模型，并给主知行或专用助手的单段对话选择聊天模型与思考档位，或为单条任务选择模型与思考档位；这些选择持久化在 SQLite，已入队任务保持原模型快照。已入队运行保留协议、地址、参数及凭据私有快照，编辑配置不影响它们。首次导入后模型管理以数据库为准，TOML 修改不再覆盖模型；升级、回滚和验收边界见[供应商与模型管理](../docs/PROVIDER-MANAGEMENT.md)。
+可在每个 `[models.*]` 中设置 `provider`、`display_name`。思考控制按实际模型 ID 自动适配 Qwen、DeepSeek、GPT、Gemini、GLM、Kimi 的已知版本；未知模型才使用显式 `reasoning_levels`，未声明时不提供可操作的思考按钮。规则与协议参数见[模型思考适配](../docs/MODEL-THINKING.md)。首次启动将这些配置导入服务端 SQLite；之后在手机“设置 → 模型供应商”中新增、编辑、获取模型和测试连接。密钥不返回手机，目录配置即时生效。手机可更改聊天、执行、记忆整理的默认模型，并给主知行或专用助手的单段对话选择聊天模型与思考档位，或为单条任务选择模型与思考档位；这些选择持久化在 SQLite，已入队任务保持原模型快照。已入队运行保留协议、地址、参数及凭据私有快照，编辑配置不影响它们。首次导入后模型管理以数据库为准，TOML 修改不再覆盖模型；升级、回滚和验收边界见[供应商与模型管理](../docs/PROVIDER-MANAGEMENT.md)。
 记忆整理会在成功对话后由 worker 增量执行。若未配置专用记忆模型，先使用当前聊天默认模型；配置了 `memory` 角色后自动使用该模型。整理失败不把已经完成的聊天改成失败，可由 `/v1/memories/status` 查看并在排除模型故障后调用 `/v1/memories/retry` 重试。
 
 在运行服务的进程环境里设置 `ZHIXING_API_TOKEN`（至少 24 字符的随机服务令牌）与

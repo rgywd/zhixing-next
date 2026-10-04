@@ -56,7 +56,8 @@ export function ManagedModelForm({ model, protocol, onSave }: {
   const [timeout, setTimeoutValue] = useState((model?.timeout ?? 60).toString());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const levels = (Object.keys(reasoningLabel) as ReasoningEffort[]).filter((item) => protocol !== "gemini" || !["none", "xhigh"].includes(item));
+  const detected = model?.model === form.model && model?.reasoning_kind && model.reasoning_kind !== "manual";
+  const levels = detected ? model.reasoning_levels : (Object.keys(reasoningLabel) as ReasoningEffort[]).filter((item) => protocol !== "gemini" || !["none", "xhigh", "max"].includes(item));
   function edit(next: Partial<ManagedModelInput>) { setForm({ ...form, ...next }); }
   function toggleLevel(level: ReasoningEffort) {
     const reasoning_levels = form.reasoning_levels.includes(level) ? form.reasoning_levels.filter((item) => item !== level) : [...form.reasoning_levels, level];
@@ -80,15 +81,15 @@ export function ManagedModelForm({ model, protocol, onSave }: {
       <SwitchRow label="图片理解" value={form.image_input} disabled={busy} onValueChange={(image_input) => edit({ image_input })} />
     </SettingsGroup>
     <Text style={s.label}>支持的思考档位</Text>
-    <View style={s.wrap}>{levels.map((level) => <Choice key={level} multiple accessibilityLabel={`支持${reasoningLabel[level]}思考`} label={reasoningLabel[level]} selected={form.reasoning_levels.includes(level)} disabled={busy} onPress={() => toggleLevel(level)} />)}</View>
-    <Text style={s.muted}>按模型文档设置；全部不选时隐藏思考控制。获取模型列表不会自动验证这些能力。</Text>
+    <View style={s.wrap}>{levels.map((level) => <Choice key={level} multiple accessibilityLabel={`支持${model?.reasoning_labels?.[level] ?? reasoningLabel[level]}思考`} label={model?.reasoning_labels?.[level] ?? reasoningLabel[level]} selected={form.reasoning_levels.includes(level)} disabled={busy || !!detected} onPress={() => toggleLevel(level)} />)}</View>
+    <Text style={s.muted}>{detected ? levels.length ? "已按模型 ID 适配思考选项。" : "此模型没有可调整的思考选项。" : "保存后按模型 ID 自动适配；未识别的模型使用这里的档位设置。模型列表不代表连接测试已通过。"}</Text>
     <ActionLink icon={advanced ? "chevron-up-outline" : "options-outline"} tone="neutral" onPress={() => setAdvanced(!advanced)}>高级参数</ActionLink>
     {advanced ? <>
       <Field label="温度" value={temperature} onChangeText={setTemperature} placeholder="模型默认" keyboardType="decimal-pad" editable={!busy} />
       <Field label="上下文容量（token）" value={contextWindow} onChangeText={setContextWindow} placeholder="留空使用模型资料" keyboardType="number-pad" editable={!busy} />
       <Text style={s.muted}>填写供应商实际支持的容量，供长对话自动压缩使用。</Text>
       <Field label="超时（秒）" value={timeout} onChangeText={setTimeoutValue} keyboardType="number-pad" editable={!busy} />
-      {protocol !== "gemini" ? <><Text style={s.label}>默认思考</Text><View style={s.wrap}><Choice label="模型默认" selected={!form.reasoning_effort} disabled={busy} onPress={() => edit({ reasoning_effort: null })} />{form.reasoning_levels.filter((item): item is Exclude<ReasoningEffort, "auto"> => item !== "auto").map((level) => <Choice key={level} label={reasoningLabel[level]} selected={form.reasoning_effort === level} disabled={busy} onPress={() => edit({ reasoning_effort: level })} />)}</View></> : null}
+      {protocol !== "gemini" || detected ? <><Text style={s.label}>默认思考</Text><View style={s.wrap}><Choice label="模型默认" selected={!form.reasoning_effort} disabled={busy} onPress={() => edit({ reasoning_effort: null })} />{form.reasoning_levels.filter((item): item is Exclude<ReasoningEffort, "auto"> => item !== "auto").map((level) => <Choice key={level} label={model?.reasoning_labels?.[level] ?? reasoningLabel[level]} selected={form.reasoning_effort === level} disabled={busy} onPress={() => edit({ reasoning_effort: level })} />)}</View></> : null}
     </> : null}
     {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
     <Button disabled={busy} onPress={() => { void save(); }}>{busy ? "保存中…" : model ? "保存模型" : "添加模型"}</Button>
