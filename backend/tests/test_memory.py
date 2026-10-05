@@ -183,3 +183,90 @@ async def test_explicit_memory_request_can_reference_last_answer_and_applied_ste
         {"op": "forget", "id": saved["id"]}
     ))
     assert store.list_memories()["items"] == []
+
+
+@pytest.mark.parametrize("operation", ["replace", "forget"])
+def test_direct_memory_change_retires_failed_and_in_flight_extraction(tmp_path, operation):
+    _, store = setup(tmp_path)
+    conversation = store.create_conversation("旧事实")["id"]
+    failed = complete(store, conversation, "failed", "我的代号是蓝莓灯塔")
+    store.fail_memory_run(failed["id"])
+    store.submit_message(conversation, id="in-flight", content="我的代号是蓝莓灯塔", kind="task")
+    in_flight = store.claim_next("task")
+    saved = store.add_memory("用户的代号是蓝莓灯塔", source_message_id="failed")
+    reader = store.create_conversation("读过旧事实")["id"]
+    unrelated = store.create_conversation("未读过旧事实")["id"]
+    store.record_memory_exposure(reader, {saved["id"]: saved["updated_at"]})
+
+    if operation == "replace":
+        store.update_memory(saved["id"], "用户的代号是青山")
+    else:
+        store.delete_memory(saved["id"])
+
+    assert store.retry_memory_runs() == 0
+    store.finish_run(in_flight["id"], "completed", result="旧任务完成")
+    old_actions = [{"op": "add", "content": "用户的代号是蓝莓灯塔"}]
+    assert not store.apply_memory_actions(failed["id"], old_actions)
+    assert not store.apply_memory_actions(in_flight["id"], old_actions)
+    assert store.memory_reset_revision(conversation) == 1
+    assert store.memory_reset_revision(reader) == 1
+    assert store.memory_reset_revision(unrelated) == 0
+    assert [item["content"] for item in store.list_memories()["items"]] == (
+        ["用户的代号是青山"] if operation == "replace" else []
+    )
+
+    new = complete(store, unrelated, "new", "记住我喜欢茶")
+    assert store.apply_memory_actions(new["id"], [{"op": "add", "content": "用户喜欢茶"}])
+    assert any(item["content"] == "用户喜欢茶" for item in store.list_memories()["items"])
+
+
+@pytest.mark.parametrize("operation", ["replace", "forget"])
+async def test_organized_change_retires_older_failed_pass_but_keeps_newer_input(tmp_path, operation):
+    settings, store = setup(tmp_path)
+    conversation = store.create_conversation("旧事实")["id"]
+    failed = complete(store, conversation, "failed", "我的代号是蓝莓灯塔")
+    store.fail_memory_run(failed["id"])
+    saved = store.add_memory("用户的代号是蓝莓灯塔", source_message_id="failed")
+    changed = complete(store, conversation, "change", "忘掉我的代号" if operation == "forget" else "纠正，我的代号是青山")
+    later = complete(store, conversation, "later", "记住我喜欢茶")
+    assert await organize_run(settings, store, changed, model_override=model({
+        "op": operation, "id": saved["id"], "content": "用户的代号是青山",
+    }))
+    assert store.retry_memory_runs() == 0
+    assert store.get_run(failed["id"])["memory_processed"] == 1
+    assert store.get_run(later["id"])["memory_processed"] == 0
+    assert await organize_run(settings, store, later, model_override=model({"op": "add", "content": "用户喜欢茶"}))
+    assert all("蓝莓灯塔" not in item["content"] for item in store.list_memories()["items"])
+
+
+@pytest.mark.parametrize("operation", ["replace", "forget"])
+async def test_memory_change_blocks_extraction_already_waiting_on_model(tmp_path, operation):
+    settings, store = setup(tmp_path)
+    conversation = store.create_conversation("旧事实")["id"]
+    run = complete(store, conversation, "old", "我的代号是蓝莓灯塔")
+    saved = store.add_memory("用户的代号是蓝莓灯塔")
+
+    async def respond(_messages):
+        if operation == "replace":
+            store.update_memory(saved["id"], "用户的代号是青山")
+        else:
+            store.delete_memory(saved["id"])
+        return AIMessage(content=json.dumps({"actions": [
+            {"op": "add", "content": "用户的代号是蓝莓灯塔"},
+        ]}, ensure_ascii=False))
+
+    observer = SimpleNamespace(ainvoke=AsyncMock(side_effect=respond))
+    assert not await organize_run(settings, store, run, model_override=observer)
+    assert all("蓝莓灯塔" not in item["content"] for item in store.list_memories()["items"])
+
+
+def test_retrying_same_correction_keeps_new_input_and_context(tmp_path):
+    _, store = setup(tmp_path)
+    conversation = store.create_conversation("设备")["id"]
+    saved = store.add_memory("用户的 Mac mini 是 16GB")
+    corrected = store.update_memory(saved["id"], "用户的 Mac mini 是 24GB")
+    store.record_memory_exposure(conversation, {corrected["id"]: corrected["updated_at"]})
+    new = complete(store, conversation, "new", "记住我喜欢茶")
+    assert store.update_memory(saved["id"], " 用户的 Mac mini 是 24GB ") == corrected
+    assert store.get_run(new["id"])["memory_processed"] == 0
+    assert store.memory_reset_revision(conversation) == 0

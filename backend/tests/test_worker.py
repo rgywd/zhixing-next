@@ -140,6 +140,52 @@ async def test_worker_organizes_new_memory_and_explicit_forget(tmp_path, monkeyp
         await running
 
 
+@pytest.mark.parametrize("forget", [False, True])
+async def test_worker_drops_in_flight_memory_write_after_direct_change(tmp_path, monkeypatch, forget):
+    settings, store = setup_store(tmp_path)
+    conversation = store.create_conversation("记忆一致性")
+    saved = store.add_memory("用户的代号是蓝莓灯塔")
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    async def runner(_settings, _run, **_callbacks):
+        return "收到。"
+
+    async def scripted_organizer(settings, store, run):
+        if "蓝莓灯塔" in run["prompt"]:
+            entered.set()
+            await release.wait()
+            content = "用户的代号是蓝莓灯塔"
+        else:
+            content = "用户喜欢茶"
+        model = FakeListChatModel(responses=[json.dumps({
+            "actions": [{"op": "add", "content": content}],
+        }, ensure_ascii=False)])
+        return await organize_run(settings, store, run, model_override=model)
+
+    monkeypatch.setattr(worker, "organize_run", scripted_organizer)
+    stop = asyncio.Event()
+    running = asyncio.create_task(Worker(settings, runner).run(stop))
+    try:
+        old = submit(store, conversation, "记住我的代号是蓝莓灯塔")
+        await asyncio.wait_for(entered.wait(), 5)
+        if forget:
+            store.delete_memory(saved["id"])
+        else:
+            store.update_memory(saved["id"], "用户的代号是青山")
+        new = submit(store, conversation, "记住我喜欢茶")
+        release.set()
+        await wait_for(lambda: store.get_run(new["id"])["memory_processed"] == 1)
+        assert store.get_run(old["id"])["memory_processed"] == 1
+        facts = [item["content"] for item in store.list_memories()["items"]]
+        assert "用户喜欢茶" in facts
+        assert "用户的代号是蓝莓灯塔" not in facts
+        assert ("用户的代号是青山" in facts) is not forget
+    finally:
+        release.set()
+        stop.set()
+        await running
+
+
 async def test_explicit_memory_failure_is_not_reported_as_saved(tmp_path):
     settings, store = setup_store(tmp_path)
     conversation = store.create_conversation("记忆")

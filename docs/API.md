@@ -21,8 +21,8 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 - `GET /v1/status`: `{model_ready: bool, worker_online: bool, execution_available: bool, execution_reason: string|null, file_tools_available: bool}`；`model_ready` 按当前聊天/执行默认模型及服务端密钥判断，不代表供应商已通过调用。`execution_available` 检查启用配置及 Docker 镜像可见性，实际启动仍可能失败，以执行回执为准。
 - `GET /v1/models`：返回 `{items,roles}`。每个模型只公开 `id,name,model,provider,protocol,ready,image_input,reasoning_levels,default_reasoning_effort,reasoning_kind,reasoning_labels`；`image_input` 是服务端对端点能力的声明，不是实时探测。不返回密钥、环境变量名或 Base URL。`roles` 为聊天、执行、记忆整理的当前默认模型 ID。
 - `PUT /v1/models/roles/{role} {model_id}`：`role` 为 `chat|task|memory`，保存角色默认模型。模型须已在服务端配置；未配置专用记忆模型时，整理使用当前聊天默认模型。
-- `GET /v1/memories?cursor=&limit=`：返回个人语义记忆 `{items,next_cursor}`；每项含 `id,content,source_message_id,created_at,updated_at,seq`。只读当前记忆，不返回原始聊天或内部去重键。
-- `POST /v1/memories {content}`、`PATCH /v1/memories/{id} {content}`、`DELETE /v1/memories/{id}`：后端直接写入、纠正或忘记；内容最多 500 字，凭据类内容拒绝写入。删除记忆不删除原会话或文件。
+- `GET /v1/memories?cursor=&limit=&query=`：返回个人语义记忆 `{items,next_cursor}`；每项含 `id,content,source_message_id,created_at,updated_at,seq`。`query` 最多 200 字，去除两端空白后按内容字面子串搜索全库，忽略 ASCII 大小写，`%` 和 `_` 不作通配符；先筛选再按原有序号升序分页，空白查询等同未筛选。只读当前记忆，不返回原始聊天或内部去重键。
+- `POST /v1/memories {content}`、`PATCH /v1/memories/{id} {content}`、`DELETE /v1/memories/{id}`：后端直接写入、纠正或忘记；内容最多 500 字，凭据类内容拒绝写入。纠正和遗忘会阻止旧的待整理、运行中或失败整理任务在稍后写回旧说法；之后的新运行仍可形成记忆。删除记忆不删除原会话或文件，旧任务隔离的边界见[记忆说明](MEMORY.md#纠正与遗忘)。
 - `GET /v1/memories/status`：返回 `{pending,failed}` 整理运行数；`POST /v1/memories/retry` 将失败的整理重新排队，返回 `{retried}`。手机侧栏可以查看和忘记记忆，整理状态仍由后台处理。
 - `GET /v1/conversations/recent?limit=10`：按 `updated_at` 降序取最近活动会话，覆盖较早建立的话题；不是创建序号窗口。
 - `GET /v1/conversations?project_id=<id>`：在分页前按项目过滤，支持现有 `cursor`、`latest`、`before` 语义；无此项目返回 404。
