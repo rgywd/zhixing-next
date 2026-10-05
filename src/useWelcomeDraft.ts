@@ -74,7 +74,12 @@ export function useWelcomeDraft(url: string) {
   async function consumeText(expected: string) {
     const source = current.current;
     if (!readable.current) throw new Error("草稿尚未读取，请先重试读取。");
-    if (source.text.trim() !== expected.trim()) return;
+    if (source.text.trim() !== expected.trim()) {
+      // A newer edit may still be waiting for storage (or its autosave may have
+      // failed). Ensure it has durably replaced the submitted text as well.
+      await persist(source);
+      return;
+    }
     const next = { ...source, text: "" };
     // The caller must await this durable handoff before sending the first message.
     await persist(next);

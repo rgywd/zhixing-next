@@ -116,6 +116,17 @@ test("consuming welcome text waits for durable clearing and preserves text chang
   await app.render().consumeText("Old topic"); assert.equal(app.render().value.text, "Next topic"); app.unmount();
 });
 
+test("a newer unsaved welcome edit cannot bypass the durable first-message handoff", async () => {
+  const app = welcomeHarness({ write: async (_key, _value, attempt) => { if (attempt === 2 || attempt === 3) throw new Error("disk busy"); } });
+  app.render(); await settle(); app.render().setText("Original request"); await settle();
+  app.render().setText("New location context"); await settle();
+  assert.equal(JSON.parse([...app.stored.values()][0]).text, "Original request");
+  await assert.rejects(app.render().consumeText("Original request"), /disk busy/);
+  assert.equal(app.render().value.text, "New location context");
+  await app.render().consumeText("Original request");
+  assert.equal(JSON.parse([...app.stored.values()][0]).text, "New location context"); app.unmount();
+});
+
 function chatHarness({ initial = { text: "hello", pending: null }, read, post, clear } = {}) {
   const lifecycle = hooks(), requests = [], writes = [], clears = [], confirmation = [];
   let stored = plain(initial), history = [], readCount = 0, sequence = 0;
