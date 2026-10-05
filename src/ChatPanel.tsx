@@ -103,6 +103,8 @@ export function ChatPanel({
     previous,
     draft,
     draftReady,
+    draftLoadError,
+    retryDraft,
     intent,
     setIntent,
     kind,
@@ -340,6 +342,10 @@ export function ChatPanel({
       >
         <Attachments connection={connection} items={draft.attachments} remove={!draftReady || draft.pending || busy ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
       </ConversationComposer>
+      {draftLoadError ? <View style={{ marginHorizontal: 18, marginBottom: 6 }}>
+        <Text accessibilityRole="alert" style={s.error}>草稿暂时无法读取：{draftLoadError}</Text>
+        <Button secondary small onPress={retryDraft}>重新读取草稿</Button>
+      </View> : null}
       {draft.pending ? <View style={chatStyles.pending}><Text style={[s.muted, s.grow]}>提交尚未确认 · 可重试，内容仍保留</Text>{!busy ? <Pressable accessibilityRole="button" onPress={abandonPending} style={s.linkButton}><Text style={s.link}>编辑草稿</Text></Pressable> : null}</View> : null}
       {error ? <Text accessibilityRole="alert" style={[s.error, { marginHorizontal: 18, marginBottom: 6 }]}>{error}</Text> : null}
       <ModelPicker
