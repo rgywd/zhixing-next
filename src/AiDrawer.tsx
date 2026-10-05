@@ -1,7 +1,7 @@
 import type { ThemeColors } from "./theme";
 import { useUi, humanError, timeLabel } from "./ui";
 import { useThemedStyles } from "./ThemeProvider";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Animated, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
@@ -44,6 +44,7 @@ export function AiDrawer({
   const [results, setResults] = useState<ConversationSearchResult[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const memoryLeaveGuardRef = useRef<((leave: () => void) => void) | null>(null);
   const [slide] = useState(() => new Animated.Value(-380));
   const [cutoff] = useState(() => Date.now() - 7 * 24 * 60 * 60 * 1000);
   useEffect(() => {
@@ -75,7 +76,11 @@ export function AiDrawer({
   function reset() {
     setView("history"); setQuery(""); setResults([]); setSearchBusy(false); setSearchError("");
   }
-  function close() { reset(); onClose(); }
+  function close() {
+    const leave = () => { reset(); onClose(); };
+    if (view === "memory" && memoryLeaveGuardRef.current) memoryLeaveGuardRef.current(leave);
+    else leave();
+  }
   function changeQuery(value: string) {
     setQuery(value); setResults([]); setSearchError(""); setSearchBusy(!!value.trim());
   }
@@ -102,7 +107,7 @@ export function AiDrawer({
       <View style={styles.overlay}>
         <Animated.View style={[styles.panel, { transform: [{ translateX: slide }] }]}>
           <SafeAreaView style={styles.safeArea}>
-            {view === "memory" ? <MemoryPanel connection={connection} onBack={() => setView("history")} /> : view === "search" ? (
+            {view === "memory" ? <MemoryPanel connection={connection} onBack={() => setView("history")} leaveGuardRef={memoryLeaveGuardRef} /> : view === "search" ? (
               <View style={styles.page}>
                 <View style={styles.topLine}>
                   <Pressable accessibilityRole="button" accessibilityLabel="返回对话历史" onPress={() => setView("history")} style={styles.iconButton}><Ionicons name="arrow-back" size={21} color={colors.ink} /></Pressable>

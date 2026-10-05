@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, AppState, type FlatList } from "react-native";
 import * as Crypto from "expo-crypto";
 import * as Speech from "expo-speech";
@@ -60,6 +60,11 @@ export function useChat({
   const [draft, setDraft] = useState<Draft>({ text: "", pending: null });
   const draftRef = useRef(draft);
   const [draftReady, setDraftReady] = useState(false);
+  const [draftLoadError, setDraftLoadError] = useState("");
+  const [draftRevision, setDraftRevision] = useState(0);
+  const sending = useRef(false);
+  const acknowledged = useRef(new Set<string>());
+  const clearing = useRef(new Map<string, Promise<void>>());
   const [intent, setIntent] = useState<"queue" | "steer">("queue");
   const [kind, setKind] = useState<"chat" | "task">(initialKind);
   const [target, setTarget] = useState<string | null>(null);
@@ -78,9 +83,10 @@ export function useChat({
 
   useEffect(() => {
     alive.current = true;
+    let active = true;
     readDraft(key)
       .then((value) => {
-        if (alive.current) {
+        if (active) {
           setDraft(value);
           draftRef.current = value;
           setDraftReady(true);
@@ -92,19 +98,43 @@ export function useChat({
         }
       })
       .catch((e) => {
-        if (alive.current) setError(humanError(e));
+        if (active) setDraftLoadError(humanError(e));
       });
     return () => {
+      active = false;
       alive.current = false;
       void Speech.stop();
     };
-  }, [key]);
+  }, [key, draftRevision]);
 
   function updateDraft(value: Draft) {
     draftRef.current = value;
     setDraft(value);
     return saveDraft(key, value);
   }
+
+  const settleDraft = useCallback((id: string) => {
+    const existing = clearing.current.get(id);
+    if (existing) return existing;
+    const pending = clearDraft(key, id).then(() => {
+      // A late receipt must never erase text edited after abandoning that request.
+      if (!alive.current || draftRef.current.pending?.id !== id) return;
+      draftRef.current = { text: "", pending: null };
+      setDraft(draftRef.current); setIntent("queue"); setTarget(null); setError("");
+    }).finally(() => { clearing.current.delete(id); });
+    clearing.current.set(id, pending);
+    return pending;
+  }, [key]);
+  useEffect(() => {
+    const pending = draft.pending;
+    if (!draftReady || !pending) return;
+    const receipt = messages.find((message) => message.id === pending.id && message.role === "user"
+      && message.conversation_id === conversation.id && message.content === pending.content && message.intent === pending.intent
+      && (message.attachments ?? []).map((item) => item.id).sort().join(",") === [...(pending.attachments ?? [])].sort().join(","));
+    if (!receipt) return;
+    acknowledged.current.add(pending.id);
+    void settleDraft(pending.id).catch((e) => { if (alive.current) setError(humanError(e)); });
+  }, [conversation.id, draft.pending, draftReady, messages, settleDraft]);
 
   useEffect(() => {
     let active = true;
@@ -215,19 +245,23 @@ export function useChat({
   }
 
   async function send(options: Pick<MessageInput, "model_id" | "reasoning_effort" | "search_provider_id"> = {}) {
-    if (busy || !draftReady || (!draft.text.trim() && !draft.attachments?.length)) return;
+    const source = draftRef.current;
+    if (sending.current || busy || !draftReady || (!source.text.trim() && !source.attachments?.length)) return;
+    sending.current = true;
+    let received = false;
     let payload: MessageInput;
     try {
       payload = prepareMessage(
-        draft,
+        source,
         intent,
         kind,
         target,
         running?.id ?? null,
         Crypto.randomUUID,
       );
-      if (!draft.pending && intent === "queue") payload = { ...payload, ...options };
+      if (!source.pending && intent === "queue") payload = { ...payload, ...options };
     } catch (e) {
+      sending.current = false;
       setError(humanError(e));
       return;
     }
@@ -235,28 +269,27 @@ export function useChat({
     setError("");
     try {
       // Persist the immutable request before any network I/O; retries after app restart reuse it.
-      await updateDraft({ ...draft, pending: payload });
+      await updateDraft({ ...source, pending: payload });
       const receipt = await request<{ message: Message; run: Run }>(
         connection,
         `/conversations/${conversation.id}/messages`,
         { method: "POST", body: payload },
       );
-      await clearDraft(key, payload.id);
+      received = true;
+      acknowledged.current.add(payload.id);
+      await settleDraft(payload.id);
       if (!alive.current) return;
-      draftRef.current = { text: "", pending: null };
-      setDraft(draftRef.current);
       setMessages((old) =>
         mergeById(old, [receipt.message]).sort((a, b) => a.seq - b.seq),
       );
       setRuns((old) => mergeById(old, [receipt.run]));
-      setIntent("queue");
-      setTarget(null);
       nearBottomRef.current = true;
       refresh.current();
       onRefresh();
     } catch (e) {
-      if (alive.current) setError(humanError(e));
+      if (alive.current && (received || !acknowledged.current.has(payload.id))) setError(humanError(e));
     } finally {
+      sending.current = false;
       if (alive.current) setBusy(false);
     }
   }
@@ -353,6 +386,8 @@ export function useChat({
     previous,
     draft,
     draftReady,
+    draftLoadError,
+    retryDraft: () => { setDraftReady(false); setDraftLoadError(""); setDraftRevision((old) => old + 1); },
     intent,
     setIntent,
     kind,

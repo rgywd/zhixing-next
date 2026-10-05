@@ -1,10 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { ApiError } from "./api";
+import { ApiError, type ServiceStatus } from "./api";
 import { failedSync, syncNotice, type SyncFailure } from "./syncHealth";
 import { useNotice } from "./Notice";
 
 type Reporter = { report: (id: string, error?: unknown) => void; register: (id: string, retry: () => void) => () => void };
 const Context = createContext<Reporter | null>(null);
+
+/** Server readiness is a floating status too; it must never push the page down. */
+export function ServiceStatusNotice({ status }: { status: Pick<ServiceStatus, "model_ready" | "worker_online"> | null }) {
+  const { show, dismiss } = useNotice();
+  const noticeId = useId();
+  const message = !status ? null : !status.model_ready
+    ? "服务已连接，模型尚未配置。请在设置中添加供应商并选择默认模型。"
+    : !status.worker_online ? "执行服务暂时离线。已接收任务仍保留，等待服务恢复。" : null;
+  useEffect(() => {
+    if (message) show({ id: noticeId, message, icon: "cloud-offline-outline", tone: "warning", duration: null });
+    else dismiss(noticeId);
+    return () => dismiss(noticeId);
+  }, [message, noticeId, show, dismiss]);
+  return null;
+}
 
 export function ConnectionStatusProvider({ children }: { children: ReactNode }) {
   const { show, dismiss } = useNotice();

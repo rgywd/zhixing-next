@@ -38,7 +38,7 @@ import {
   type Schedule,
   type ServiceStatus,
 } from "./api";
-import { ConnectionStatusProvider, useSyncStatus } from "./ConnectionStatus";
+import { ConnectionStatusProvider, ServiceStatusNotice, useSyncStatus } from "./ConnectionStatus";
 import { NoticeProvider } from "./Notice";
 import { ChatPanel } from "./ChatPanel";
 import { AiHome } from "./AiHome";
@@ -51,6 +51,7 @@ import { ProvidersPanel } from "./ProvidersPanel";
 import { ProjectsPanel } from "./ProjectsPanel";
 import { ResourcePreview } from "./ResourcePreview";
 import { useHomePreferences } from "./useHomePreferences";
+import { useWelcomeDraft } from "./useWelcomeDraft";
 import { targetKey } from "./homeEntries";
 import { HomePanel, WorkPanel } from "./OverviewPanels";
 import { LifePanel } from "./LifePanel";
@@ -300,12 +301,10 @@ function ConnectedSession({
   const [showConversationCreator, setShowConversationCreator] = useState(false);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
-  const [welcomeDraft, setWelcomeDraft] = useState("");
+  const welcome = useWelcomeDraft(connection.url);
+  const { text: welcomeDraft, kind: welcomeKind, models: welcomeModels, efforts: welcomeEfforts, searchId: welcomeSearchId } = welcome.value;
+  const { setText: setWelcomeDraft, setKind: setWelcomeKind, setSearch: setWelcomeSearchId } = welcome;
   const lastLifePrompt = useRef("");
-  const [welcomeKind, setWelcomeKind] = useState<"chat" | "task">("chat");
-  const [welcomeModels, setWelcomeModels] = useState<{ chat: string | null; task: string | null }>({ chat: null, task: null });
-  const [welcomeEfforts, setWelcomeEfforts] = useState<{ chat: ReasoningEffort | null; task: ReasoningEffort | null }>({ chat: null, task: null });
-  const [welcomeSearchId, setWelcomeSearchId] = useState<string | null>(null);
   const [chatStart, setChatStart] = useState<{ id: string; kind: "chat" | "task"; taskModelId: string | null; taskEffort: ReasoningEffort | null; searchId: string | null; files: boolean } | null>(null);
   const [showProjectCreator, setShowProjectCreator] = useState(false);
   const [title, setTitle] = useState("");
@@ -313,6 +312,8 @@ function ConnectedSession({
   const [projectId, setProjectId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const creatingConversation = useRef(false);
+  const creationReceipt = useRef<{ key: string; conversation: Conversation } | null>(null);
   const [loading, setLoading] = useState(true);
   const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
   const refreshRef = useRef<() => void>(() => undefined);
@@ -524,29 +525,30 @@ function ConnectedSession({
     quick = false,
     initial?: { text: string; kind: "chat" | "task"; modelId: string | null; effort: ReasoningEffort | null; searchId: string | null; filesOnly?: boolean },
   ) {
-    if (busy) return;
+    if (creatingConversation.current || busy) return;
+    creatingConversation.current = true;
     setBusy(true);
     setError("");
     try {
-      let conversation = await request<Conversation>(
-        connection,
-        "/conversations",
-        {
-          method: "POST",
-          body: {
-            title: explore ? "认识运行环境" : agentId ? `${agents.find((item) => item.id === agentId)?.name ?? "助手"}对话` : initial ? initial.text.trim().split(/\r?\n/)[0].slice(0, 80) || "新的对话" : quick ? "新的对话" : title.trim() || "新的对话",
-            project_id: explore || agentId || quick ? null : projectId,
-            agent_id: agentId,
-          },
-        },
-      );
-      if (initial?.kind === "chat" && (initial.modelId || initial.effort)) {
+      const body = {
+        title: explore ? "认识运行环境" : agentId ? `${agents.find((item) => item.id === agentId)?.name ?? "助手"}对话` : initial ? initial.text.trim().split(/\r?\n/)[0].slice(0, 80) || "新的对话" : quick ? "新的对话" : title.trim() || "新的对话",
+        project_id: explore || agentId || quick ? null : projectId,
+        agent_id: agentId,
+      };
+      const creationKey = JSON.stringify(body);
+      // Reuse a received creation receipt if a later model/draft step failed.
+      const reusing = creationReceipt.current?.key === creationKey;
+      let conversation = reusing ? creationReceipt.current!.conversation
+        : await request<Conversation>(connection, "/conversations", { method: "POST", body });
+      creationReceipt.current = { key: creationKey, conversation };
+      if (initial?.kind === "chat" && (reusing || initial.modelId || initial.effort)) {
         conversation = await request<Conversation>(connection, `/conversations/${conversation.id}/model`, {
           method: "PUT", body: { model_id: initial.modelId, reasoning_effort: initial.effort },
         });
       }
       if (initial?.filesOnly) {
         await saveDraft(draftKey(connection.url, conversation.id), { text: initial.text, pending: null });
+        await welcome.consumeText(initial.text);
       } else if (explore || initial) {
         const payload: MessageInput = {
           id: Crypto.randomUUID(),
@@ -561,6 +563,7 @@ function ConnectedSession({
         };
         const key = draftKey(connection.url, conversation.id);
         await saveDraft(key, { text: payload.content, pending: payload });
+        if (initial) await welcome.consumeText(initial.text);
         try {
           await request(
             connection,
@@ -578,6 +581,7 @@ function ConnectedSession({
         }
       }
       if (!alive.current) return;
+      creationReceipt.current = null;
       setConversations((old) => mergeById(old, [conversation]));
       if (agentId === "finance") {
         setFinanceId(conversation.id);
@@ -590,7 +594,6 @@ function ConnectedSession({
       setShowConversationCreator(false);
       setShowAiDrawer(false);
       setShowWelcome(false);
-      if (initial) setWelcomeDraft("");
       setChatStart(initial ? { id: conversation.id, kind: initial.kind, taskModelId: initial.kind === "task" ? initial.modelId : null, taskEffort: initial.kind === "task" ? initial.effort : null, searchId: initial.searchId, files: !!initial.filesOnly } : null);
       if (agentId !== "finance" && tab !== "chat") setReturnTab(tab);
       setTab(agentId === "finance" ? "life" : "chat");
@@ -598,20 +601,22 @@ function ConnectedSession({
     } catch (e) {
       if (alive.current) setError(humanError(e));
     } finally {
+      creatingConversation.current = false;
       if (alive.current) setBusy(false);
     }
   }
   const welcomePreference = availablePreference(catalog, welcomeKind, welcomeModels[welcomeKind], welcomeEfforts[welcomeKind]);
   function submitWelcome() {
     const text = welcomeDraft.trim();
-    if (text && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
+    if (text && welcome.ready && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
   }
   const welcomeControls = {
     connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchProviderId: welcomeSearchId,
-    onModelId: (id: string | null) => setWelcomeModels((old) => ({ ...old, [welcomeKind]: id })),
-    onEffort: (value: ReasoningEffort | null) => setWelcomeEfforts((old) => ({ ...old, [welcomeKind]: value })),
+    draftReady: welcome.ready, draftError: welcome.error, onRetryDraft: welcome.retry,
+    onModelId: (id: string | null) => welcome.setModel(welcomeKind, id),
+    onEffort: (value: ReasoningEffort | null) => welcome.setEffort(welcomeKind, value),
     onSearchProviderId: setWelcomeSearchId,
-    onFiles: () => { if (!busy) void newConversation(false, null, true, { text: welcomeDraft, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId, filesOnly: true }); },
+    onFiles: () => { if (welcome.ready && !busy) void newConversation(false, null, true, { text: welcomeDraft, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId, filesOnly: true }); },
   };
   function openAgent(agentId: string) {
     const existing = [...conversations].reverse().find((item) => item.agent_id === agentId);
@@ -682,15 +687,7 @@ function ConnectedSession({
   }
   return (
     <View style={s.body}>
-      {status && (!status.model_ready || !status.worker_online) ? (
-        <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
-          <Text style={s.noticeText}>
-            {!status.model_ready
-              ? "服务已连接，模型尚未配置。请在设置中添加供应商并选择默认模型。"
-              : "执行服务暂时离线。已接收任务会保留，等待 worker 恢复。"}
-          </Text>
-        </View>
-      ) : null}
+      <ServiceStatusNotice status={status} />
       {error || connectionError ? (
         <Text
           accessibilityRole="alert"

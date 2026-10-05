@@ -214,6 +214,42 @@ async def test_forget_clears_old_model_context_but_keeps_visible_chat(tmp_path):
                for message in other_later.seen[0])
 
 
+@pytest.mark.parametrize("browse", [False, True])
+async def test_correction_between_memory_read_and_exposure_resets_next_context(tmp_path, monkeypatch, browse):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    saved = store.add_memory("用户的代号是蓝莓灯塔")
+    original_candidates = Store.memory_candidates
+    corrected = False
+
+    def racing_candidates(self, limit=200, offset=0):
+        nonlocal corrected
+        facts = original_candidates(self, limit, offset)
+        if not corrected and (limit == 25 if browse else limit == 200):
+            corrected = True
+            self.update_memory(saved["id"], "用户的代号是青山")
+        return facts
+
+    monkeypatch.setattr(Store, "memory_candidates", racing_candidates)
+    replies = []
+    if browse:
+        replies.append(AIMessage(content="", tool_calls=[{
+            "name": "browse_personal_memories", "args": {"offset": 0},
+            "id": "memory-lookup", "type": "tool_call",
+        }]))
+    replies.append(AIMessage(content="旧的读取结果是蓝莓灯塔。"))
+    first = ScriptedModel(replies=replies)
+    await run_agent(settings, make_run("race-first", "查一条资料" if browse else "我的代号是什么？"),
+                    persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=first)
+    assert corrected
+    assert store.memory_reset_revision("conversation-one") >= 1
+    later = ScriptedModel(replies=[AIMessage(content="现在是青山。")])
+    await run_agent(settings, make_run("race-later", "我的代号是什么？"), persona="",
+                    emit=ignore, controls=no_controls, acknowledge=ignore, model_override=later)
+    assert "蓝莓灯塔" not in str(later.seen[0])
+    assert "青山" in str(later.seen[0])
+
+
 async def test_web_search_tool_is_bound_only_for_selected_run(tmp_path):
     settings = make_settings(tmp_path)
     enabled = make_run("search-on")

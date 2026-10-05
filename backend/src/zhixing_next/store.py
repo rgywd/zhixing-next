@@ -197,11 +197,12 @@ class Store:
             row = db.execute("SELECT name,persona FROM assistant WHERE id=1").fetchone()
             return dict(row)
 
-    def list_memories(self, cursor=0, limit=50):
+    def list_memories(self, cursor=0, limit=50, query=""):
         with self._connection() as db:
             rows = db.execute(
-                "SELECT rowid AS seq,* FROM memories WHERE rowid>? ORDER BY rowid LIMIT ?",
-                (cursor, limit + 1),
+                "SELECT rowid AS seq,* FROM memories WHERE rowid>? "
+                "AND instr(lower(content),lower(?))>0 ORDER BY rowid LIMIT ?",
+                (cursor, query.strip(), limit + 1),
             ).fetchall()
             return self._page(rows, limit)
 
@@ -229,20 +230,24 @@ class Store:
             ).fetchone()
             return row[0] if row else 0
 
-    def record_memory_exposure(self, conversation_id, memory_ids):
-        if not memory_ids:
+    def record_memory_exposure(self, conversation_id, memory_versions):
+        if not memory_versions:
             return
         with self._connection(write=True) as db:
             if not db.execute("SELECT 1 FROM conversations WHERE id=?", (conversation_id,)).fetchone():
                 return
-            for memory_id in memory_ids:
-                if db.execute("SELECT 1 FROM memories WHERE id=?", (memory_id,)).fetchone():
+            for memory_id, read_version in memory_versions.items():
+                current = db.execute(
+                    "SELECT updated_at FROM memories WHERE id=?", (memory_id,)
+                ).fetchone()
+                if current and current["updated_at"] == read_version:
                     db.execute(
                         "INSERT OR IGNORE INTO memory_exposures VALUES(?,?)",
                         (memory_id, conversation_id),
                     )
                 else:
-                    # A forget raced with this read; clear its stale checkpoint next turn.
+                    # A correction or forget raced with this read; clear its stale
+                    # checkpoint next turn even if it was not previously exposed.
                     db.execute(
                         "UPDATE conversations SET memory_reset_revision=memory_reset_revision+1 WHERE id=?",
                         (conversation_id,),
@@ -300,7 +305,9 @@ class Store:
     def update_memory(self, memory_id, content):
         content = _memory_content(content)
         with self._connection(write=True) as db:
-            self._require(db, "memories", memory_id)
+            current = self._require(db, "memories", memory_id)
+            if current["content"] == content:
+                return _record(current)
             targets = self._memory_context_targets(db, memory_id)
             try:
                 db.execute(
@@ -310,14 +317,24 @@ class Store:
             except sqlite3.IntegrityError as exc:
                 raise StoreError("memory_conflict", "Memory already exists") from exc
             self._reset_memory_contexts(db, memory_id, targets)
+            self._retire_memory_runs(db)
             return _record(self._require(db, "memories", memory_id))
 
     def delete_memory(self, memory_id):
         with self._connection(write=True) as db:
             self._require(db, "memories", memory_id)
             self._forget_memory(db, memory_id)
-            # Old in-flight runs must not recreate a fact the user just forgot.
-            db.execute("UPDATE runs SET memory_processed=1 WHERE memory_processed=0")
+            self._retire_memory_runs(db)
+
+    @staticmethod
+    def _retire_memory_runs(db, before_seq=None):
+        # Older extraction, including a failed pass retried later, must not add
+        # back a fact the user corrected or forgot. Newer input remains eligible.
+        db.execute(
+            "UPDATE runs SET memory_processed=1 WHERE memory_processed IN (-1,0) "
+            "AND (? IS NULL OR seq<?)",
+            (before_seq, before_seq),
+        )
 
     def next_memory_run(self):
         with self._connection() as db:
@@ -364,8 +381,8 @@ class Store:
                         (str(uuid4()), content, content.casefold(), run["message_id"], timestamp(), timestamp()),
                     )
                 elif operation == "replace":
-                    existing = db.execute("SELECT id FROM memories WHERE id=?", (action["id"],)).fetchone()
-                    if existing:
+                    existing = db.execute("SELECT content FROM memories WHERE id=?", (action["id"],)).fetchone()
+                    if existing and existing["content"] != content:
                         targets = self._memory_context_targets(
                             db, action["id"], run["conversation_id"]
                         )
@@ -377,16 +394,14 @@ class Store:
                             ).rowcount
                             if changed:
                                 self._reset_memory_contexts(db, action["id"], targets)
+                                self._retire_memory_runs(db, run["seq"])
                         except sqlite3.IntegrityError:
                             pass
                 elif operation == "forget":
                     if self._forget_memory(
                         db, action["id"], action["expected_updated_at"], run["conversation_id"]
                     ):
-                        db.execute(
-                            "UPDATE runs SET memory_processed=1 WHERE seq<? AND memory_processed=0",
-                            (run["seq"],),
-                        )
+                        self._retire_memory_runs(db, run["seq"])
             db.execute("UPDATE runs SET memory_processed=1 WHERE id=?", (run_id,))
             return True
 

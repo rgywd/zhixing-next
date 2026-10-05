@@ -40,7 +40,9 @@ def create_memory_lookup_tool(store: Store, conversation_id: str):
         if offset < 0:
             return '{"error":"invalid_offset"}'
         facts = store.memory_candidates(25, offset)
-        store.record_memory_exposure(conversation_id, [item["id"] for item in facts])
+        store.record_memory_exposure(
+            conversation_id, {item["id"]: item["updated_at"] for item in facts}
+        )
         return json.dumps({
             "facts": [item["content"] for item in facts],
             "next_offset": offset + 25 if len(facts) == 25 else None,

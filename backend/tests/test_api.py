@@ -130,6 +130,30 @@ def test_memory_management_is_authenticated_and_has_no_mobile_dependency(client)
     assert client.get("/v1/memories").json()["items"] == []
 
 
+def test_memory_search_filters_whole_library_before_pagination(client):
+    store = client.app.state.store
+    for index in range(105):
+        store.add_memory(f"用户的其他事实 {index}")
+    first = store.add_memory("用户用 Mac mini 开发")
+    literal = store.add_memory("用户把进度记为 100%_done")
+    second = store.add_memory("用户的 MAC MINI 有 24GB 内存")
+    page = client.get("/v1/memories", params={"query": " mac MINI ", "limit": 1}).json()
+    assert [item["id"] for item in page["items"]] == [first["id"]]
+    assert page["next_cursor"] is not None
+    page = client.get("/v1/memories", params={
+        "query": "mac mini", "limit": 1, "cursor": page["next_cursor"],
+    }).json()
+    assert [item["id"] for item in page["items"]] == [second["id"]]
+    assert page["next_cursor"] is None
+    assert [item["id"] for item in client.get("/v1/memories", params={"query": "%_"}).json()["items"]] == [literal["id"]]
+    assert client.get("/v1/memories", params={"query": "missing"}).json() == {"items": [], "next_cursor": None}
+    assert client.get("/v1/memories", params={"query": "  "}).json() == client.get("/v1/memories").json()
+    assert client.get("/v1/memories", params={"query": "x" * 201}).status_code == 422
+    assert client.get("/v1/memories", params={"query": "mac"}, headers={
+        "Authorization": "Bearer wrong",
+    }).status_code == 401
+
+
 @pytest.mark.parametrize("agent_id", [None, "finance"])
 def test_model_catalog_roles_and_chat_choice_snapshot(settings, monkeypatch, agent_id):
     monkeypatch.setenv("ZHIXING_TEST_MODEL_KEY", "placeholder-for-unit-test-only")

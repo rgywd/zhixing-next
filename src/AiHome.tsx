@@ -1,5 +1,5 @@
 import type { ThemeColors } from "./theme";
-import { useUi } from "./ui";
+import { useUi, ActionLink } from "./ui";
 import { useThemedStyles } from "./ThemeProvider";
 import { useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -26,6 +26,9 @@ export function AiHome({
   draft,
   kind,
   busy,
+  draftReady = true,
+  draftError = "",
+  onRetryDraft,
   connection,
   catalog,
   modelId,
@@ -43,6 +46,9 @@ export function AiHome({
   draft: string;
   kind: Kind;
   busy: boolean;
+  draftReady?: boolean;
+  draftError?: string;
+  onRetryDraft?: () => void;
   connection: Connection;
   catalog: ModelCatalog | null;
   modelId: string | null;
@@ -84,6 +90,8 @@ export function AiHome({
               key={item.title}
               accessibilityRole="button"
               accessibilityLabel={item.title}
+              disabled={busy || !draftReady}
+              accessibilityState={{ disabled: busy || !draftReady }}
               onPress={() => { onDraft(item.prompt); onKind(item.kind); }}
               style={({ pressed }) => [styles.suggestion, pressed && s.pressed]}
             >
@@ -94,7 +102,11 @@ export function AiHome({
           ))}
         </View>
       </ScrollView>
-      <ConversationComposer text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!busy} onText={onDraft} onSend={onSend} onFiles={onFiles} attachmentLocked={busy} canSend={!busy && !!draft.trim()} busy={busy} kind={kind} onKind={onKind} connection={connection} model={model} depth={depth} searchId={searchProviderId} optionsLocked={busy || !catalog} onModel={() => setShowModels(true)} onReasoning={() => setShowReasoning(true)} onSearch={() => setShowSearch(true)} />
+      <ConversationComposer text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={draftReady && !busy} onText={onDraft} onSend={onSend} onFiles={onFiles} attachmentLocked={busy || !draftReady} canSend={draftReady && !busy && !!draft.trim()} busy={busy} kind={kind} onKind={onKind} kindLocked={busy || !draftReady} connection={connection} model={model} depth={depth} searchId={searchProviderId} optionsLocked={busy || !draftReady || !catalog} onModel={() => setShowModels(true)} onReasoning={() => setShowReasoning(true)} onSearch={() => setShowSearch(true)} />
+      {draftError ? <View style={{ paddingHorizontal: 18, paddingBottom: 8 }}>
+        <Text accessibilityRole="alert" style={s.error}>{draftError}</Text>
+        {onRetryDraft ? <ActionLink icon="refresh-outline" onPress={onRetryDraft}>{draftReady ? "重试保存草稿" : "重新读取草稿"}</ActionLink> : null}
+      </View> : null}
       <ModelPicker visible={showModels} title={`选择${kind === "task" ? "任务" : "聊天"}模型`} connectionUrl={connection.url} models={catalog?.items ?? []} selectedId={selectedModelId} onSelect={async (id) => { onModelId(id); onEffort(null); }} onUseDefault={modelId ? async () => { onModelId(null); onEffort(null); } : undefined} defaultLabel={`跟随默认${kind === "task" ? "任务" : "聊天"}模型`} onClose={() => setShowModels(false)} />
       <ReasoningPicker visible={showReasoning} model={model} selected={effort} onSelect={async (value) => onEffort(value)} onClose={() => setShowReasoning(false)} />
       <SearchPicker visible={showSearch} connection={connection} selectedId={searchProviderId} onSelect={onSearchProviderId} onClose={() => setShowSearch(false)} />

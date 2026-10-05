@@ -202,8 +202,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return store.set_model_role(role, body.model_id)
 
     @router.get("/memories")
-    def memories(cursor: Cursor = 0, limit: Limit = 50):
-        return store.list_memories(cursor, limit)
+    def memories(
+        cursor: Cursor = 0, limit: Limit = 50,
+        query: Annotated[str, Query(max_length=200)] = "",
+    ):
+        return store.list_memories(cursor, limit, query)
 
     @router.get("/memories/status")
     def memory_status():
