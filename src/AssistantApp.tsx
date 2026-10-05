@@ -38,7 +38,7 @@ import {
   type Schedule,
   type ServiceStatus,
 } from "./api";
-import { ConnectionStatusProvider, useSyncStatus } from "./ConnectionStatus";
+import { ConnectionStatusProvider, ServiceStatusNotice, useSyncStatus } from "./ConnectionStatus";
 import { NoticeProvider } from "./Notice";
 import { ChatPanel } from "./ChatPanel";
 import { AiHome } from "./AiHome";
@@ -687,15 +687,7 @@ function ConnectedSession({
   }
   return (
     <View style={s.body}>
-      {status && (!status.model_ready || !status.worker_online) ? (
-        <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
-          <Text style={s.noticeText}>
-            {!status.model_ready
-              ? "服务已连接，模型尚未配置。请在设置中添加供应商并选择默认模型。"
-              : "执行服务暂时离线。已接收任务会保留，等待 worker 恢复。"}
-          </Text>
-        </View>
-      ) : null}
+      <ServiceStatusNotice status={status} />
       {error || connectionError ? (
         <Text
           accessibilityRole="alert"

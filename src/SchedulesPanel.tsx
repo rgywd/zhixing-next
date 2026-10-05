@@ -55,8 +55,6 @@ export function SchedulesPanel({ connection, schedules, conversation, conversati
   useEffect(() => {
     let active = true;
     alive.current = true;
-    setReady(false);
-    setDraftReadError("");
     readPlanDraft(connection.url).then((saved) => {
       if (!active) return;
       if (saved) {
@@ -159,7 +157,7 @@ export function SchedulesPanel({ connection, schedules, conversation, conversati
       {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
       {draftReadError ? <View>
         <Text accessibilityRole="alert" style={s.error}>计划草稿未能读取：{draftReadError}</Text>
-        <ActionLink icon="refresh-outline" onPress={() => { setDraftReadError(""); setDraftRevision((value) => value + 1); }}>重试读取草稿</ActionLink>
+        <ActionLink icon="refresh-outline" onPress={() => { setReady(false); setDraftReadError(""); setDraftRevision((value) => value + 1); }}>重试读取草稿</ActionLink>
       </View> : !ready ? <Text style={s.muted}>正在恢复计划草稿…</Text> : null}
       {creating ? <View style={s.card}>
         <Field label="到时要做什么" multiline placeholder="例如：整理这周的资料，给我一份简报" value={prompt} onChangeText={(prompt) => change({ prompt })} maxLength={20000} editable={editable} />
