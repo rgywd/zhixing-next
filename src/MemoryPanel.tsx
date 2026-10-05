@@ -149,10 +149,10 @@ export function MemoryPanel({ connection, onBack, leaveGuardRef }: {
   }
   const locked = !!edit || !!mutating;
 
-  return <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+  return <KeyboardAvoidingView style={styles.root} behavior={Platform.OS === "ios" ? "padding" : "height"}>
     <View style={styles.header}>
       <IconAction icon="arrow-back" label="返回对话历史" onPress={back} disabled={!!mutating} />
-      <View style={s.grow}><Text accessibilityRole="header" style={s.title}>知行记得</Text><Text style={s.muted}>关于你的长期记忆</Text></View>
+      <View style={s.grow}><Text accessibilityRole="header" style={s.title}>知行记得</Text>{!edit ? <Text style={s.muted}>关于你的长期记忆</Text> : null}</View>
     </View>
     <View style={styles.search}>
       <Ionicons name="search-outline" size={19} color={colors.muted} />
@@ -160,8 +160,8 @@ export function MemoryPanel({ connection, onBack, leaveGuardRef }: {
         value={query} editable={!locked} onChangeText={(value) => { if (mutation.current || editing.current) return; setQuery(value); setNotice(""); setForgetError(null); }} maxLength={200} returnKeyType="search" />
       {query ? <IconAction icon="close-circle-outline" label="清除记忆搜索" disabled={locked} onPress={() => { if (mutation.current || editing.current) return; setQuery(""); setNotice(""); setForgetError(null); }} /> : null}
     </View>
-    <ScrollView keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets contentContainerStyle={styles.content}>
-      <Text style={s.description}>可以直接纠正，也可以在聊天中告诉知行。</Text>
+    <ScrollView style={styles.root} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets contentContainerStyle={styles.content}>
+      {!edit ? <Text style={s.description}>可以直接纠正，也可以在聊天中告诉知行。</Text> : null}
       {notice ? <Text accessibilityLiveRegion="polite" style={s.muted}>{notice}</Text> : null}
       {loading ? <View style={styles.state} accessibilityLabel="正在加载记忆"><ActivityIndicator color={colors.accent} /><Text style={s.muted}>{search ? "正在搜索…" : "正在加载记忆…"}</Text></View> : null}
       {!loading && error ? <View style={styles.state}><Text accessibilityRole="alert" style={s.error}>{error}</Text><ActionLink icon="refresh-outline" disabled={loadingMore || locked} onPress={() => { if (items.length) void more(); else setReload((value) => value + 1); }}>重新加载记忆</ActionLink></View> : null}
