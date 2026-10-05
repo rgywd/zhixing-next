@@ -45,24 +45,29 @@ export function SchedulesPanel({ connection, schedules, conversation, conversati
   const [draft, setDraft] = useState<PlanDraft>({ prompt: "", time: nextHour(), interval: "", pending: null });
   const draftRef = useRef(draft);
   const [ready, setReady] = useState(false);
+  const [draftReadError, setDraftReadError] = useState("");
+  const [draftRevision, setDraftRevision] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [picker, setPicker] = useState<"date" | "conversation" | null>(null);
   const operationBusy = useRef(false);
   const alive = useRef(true);
   useEffect(() => {
+    let active = true;
     alive.current = true;
+    setReady(false);
+    setDraftReadError("");
     readPlanDraft(connection.url).then((saved) => {
-      if (!alive.current) return;
+      if (!active) return;
       if (saved) {
         draftRef.current = saved;
         setDraft(saved);
         setCreating(!!saved.pending || !!saved.prompt);
       }
       setReady(true);
-    }).catch((e) => { if (alive.current) setError(humanError(e)); });
-    return () => { alive.current = false; };
-  }, [connection.url]);
+    }).catch((e) => { if (active) setDraftReadError(humanError(e)); });
+    return () => { active = false; alive.current = false; };
+  }, [connection.url, draftRevision]);
 
   const pending = draft.pending;
   const destination = scheduleDestination(draft, conversation?.id ?? null);
@@ -77,7 +82,7 @@ export function SchedulesPanel({ connection, schedules, conversation, conversati
   const editable = ready && !busy && !pending;
 
   function change(value: Partial<PlanDraft>) {
-    if (operationBusy.current || (draftRef.current.pending && value.pending !== null)) return;
+    if (!ready || operationBusy.current || (draftRef.current.pending && value.pending !== null)) return;
     const updated = { ...draftRef.current, conversation_id: scheduleDestination(draftRef.current, conversation?.id ?? null), ...value };
     draftRef.current = updated;
     setDraft(updated);
@@ -152,6 +157,10 @@ export function SchedulesPanel({ connection, schedules, conversation, conversati
         <IconAction icon={creating ? "close" : "add"} label={creating ? "收起新计划" : "新计划"} disabled={!ready || busy} onPress={() => setCreating(!creating)} tone="gold" />
       } />
       {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+      {draftReadError ? <View>
+        <Text accessibilityRole="alert" style={s.error}>计划草稿未能读取：{draftReadError}</Text>
+        <ActionLink icon="refresh-outline" onPress={() => { setDraftReadError(""); setDraftRevision((value) => value + 1); }}>重试读取草稿</ActionLink>
+      </View> : !ready ? <Text style={s.muted}>正在恢复计划草稿…</Text> : null}
       {creating ? <View style={s.card}>
         <Field label="到时要做什么" multiline placeholder="例如：整理这周的资料，给我一份简报" value={prompt} onChangeText={(prompt) => change({ prompt })} maxLength={20000} editable={editable} />
         <View>

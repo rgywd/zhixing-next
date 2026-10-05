@@ -29,15 +29,16 @@ function load(name, dependencies) {
   }).outputText, { exports, require: (name) => { assert.ok(name in dependencies, name); return dependencies[name]; } });
   return exports;
 }
-function screen({ saved = savedDraft(), schedules = [], failures = 0 } = {}) {
+function screen({ saved = savedDraft(), schedules = [], failures = 0, readFailures = 0, read } = {}) {
   const state = [];
   let cursor = 0;
-  let mounted = false;
+  const effects = [];
   let storage = saved;
   let confirmation;
   let ids = 0;
   let failCount = failures;
-  const calls = [], notices = [], opened = [], changes = [], calendar = [];
+  let readCount = 0;
+  const calls = [], notices = [], opened = [], changes = [], calendar = [], writes = [];
   const props = {
     connection: { url: "https://example.com", token: "test" }, schedules,
     conversation: conversation("a"), conversations: [conversation("a"), conversation("b")],
@@ -50,13 +51,13 @@ function screen({ saved = savedDraft(), schedules = [], failures = 0 } = {}) {
     react: {
       useState(initial) { const slot = cursor++; if (!(slot in state)) state[slot] = typeof initial === "function" ? initial() : initial; return [state[slot], (next) => { state[slot] = typeof next === "function" ? next(state[slot]) : next; }]; },
       useRef(initial) { const slot = cursor++; if (!(slot in state)) state[slot] = { current: initial }; return state[slot]; },
-      useEffect(effect) { if (!mounted) { mounted = true; effect(); } },
+      useEffect(effect, deps) { const slot = cursor++; const previous = state[slot]; if (!previous || deps.some((value, index) => value !== previous.deps[index])) { effects.push(() => { previous?.cleanup?.(); state[slot] = { deps, cleanup: effect() }; }); } },
     },
     "react-native": { View: "View", Text: "Text", Pressable: "Pressable", Platform: { OS: "android" }, StyleSheet: { create: (styles) => styles }, Alert: { alert: (_a, _b, options) => { confirmation = options[1].onPress; } } },
     "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
     "expo-crypto": { randomUUID: () => `request-${++ids}` },
     "./api": { prepareSchedule, request: async (_connection, path, options) => { calls.push({ path, options }); if (failCount-- > 0) throw new Error("请求超时"); return { ...options.body, enabled: true, last_run_id: null }; } },
-    "./storage": { readPlanDraft: async () => storage, savePlanDraft: async (_url, value) => { storage = value; }, clearPlanDraft: async (_url, id, empty) => { if (storage.pending?.id === id) storage = empty; } },
+    "./storage": { readPlanDraft: async () => { readCount++; if (readCount <= readFailures) throw new Error("temporary storage failure"); return read ? read(readCount) : storage; }, savePlanDraft: async (_url, value) => { writes.push(value); storage = value; }, clearPlanDraft: async (_url, id, empty) => { if (storage.pending?.id === id) storage = empty; } },
     "./deviceCapabilities": { openSystemCalendar: async (event) => { calendar.push(event); return "已返回知行，请在日历中确认是否保存。"; } },
     "./deviceCapabilityLogic": { scheduleCalendarEvent: (schedule) => ({ title: schedule.prompt, startDate: schedule.next_run_at }) },
     "./Notice": { useNotice: () => ({ show: (notice) => notices.push(notice) }) },
@@ -66,13 +67,31 @@ function screen({ saved = savedDraft(), schedules = [], failures = 0 } = {}) {
     "./ui": { useUi: () => ({ s: {}, colors: {} }), ActionLink: "ActionLink", Button: "Button", Empty: "Empty", Field: "Field", IconAction: "IconAction", PageHeading: "PageHeading", PageScrollView: "PageScrollView", StatusPill: "StatusPill", humanError: (error) => error.message, timeLabel: (value) => value },
   };
   const module = load("SchedulesPanel.tsx", dependencies);
-  function render() { cursor = 0; return nodesOf(module.SchedulesPanel(props)); }
+  function render() { cursor = 0; const nodes = nodesOf(module.SchedulesPanel(props)); effects.splice(0).forEach((effect) => effect()); return nodes; }
   render();
-  return { render, props, calls, notices, opened, changes, calendar, stored: () => storage, confirm: () => confirmation() };
+  return { render, props, calls, notices, opened, changes, calendar, writes, stored: () => storage, confirm: () => confirmation(), unmount: () => state.forEach((slot) => slot?.cleanup?.()) };
 }
 const find = (page, type, match = () => true) => page.render().find((node) => node.type === type && match(node.props));
 const press = (page, label) => find(page, "Pressable", (p) => p.accessibilityLabel === label).props.onPress();
 const submit = (page) => find(page, "Button").props.onPress();
+
+test("failed schedule draft reads retry in place without overwriting the original request", async () => {
+  const payload = { id: "original", conversation_id: "b", prompt: "保留原计划", next_run_at: "2000-01-01T01:00:00Z", interval_seconds: null };
+  const page = screen({ readFailures: 1, saved: savedDraft({ pending: payload }) });
+  await settle();
+  assert.equal(find(page, "IconAction").props.disabled, true);
+  assert.equal(page.writes.length, 0);
+  assert.equal(page.calls.length, 0);
+  const retry = find(page, "ActionLink", (p) => p.children === "重试读取草稿");
+  assert.ok(retry);
+  retry.props.onPress(); page.render(); await settle();
+  assert.equal(find(page, "Field", (p) => p.label === "到时要做什么").props.value, "保留原计划");
+  assert.equal(find(page, "ActionLink", (p) => p.children === "重试读取草稿"), undefined);
+  assert.equal(page.writes.length, 0);
+  submit(page); await settle();
+  assert.deepEqual(page.calls[0].options.body, payload);
+  page.unmount();
+});
 
 test("schedule creation selects its result conversation in place and preserves interval semantics", async () => {
   const page = screen(); await settle();
