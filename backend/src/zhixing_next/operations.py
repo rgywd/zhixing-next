@@ -38,6 +38,14 @@ EFFECT_TOOLS = {
     "gitlab_update_issue",
 }
 READ_TOOLS = {"fetch_public_page", "search_web", "read_document", "read_text_file", "search_history", "read_history", "read_history_message", "find_resources", "read_saved_resource", "gitlab_projects", "gitlab_issues", "gitlab_read_issue"}
+IDEMPOTENT_SERVICE_TOOLS = {
+    "record_finance_transaction", "correct_finance_transaction", "delete_finance_transaction", "update_finance_budget",
+    "save_health_profile", "save_diet_rule", "record_meal", "record_weight", "record_steps",
+    "save_meal_recommendation", "record_recommendation_feedback", "correct_health_record", "delete_health_record", "save_health_reminders",
+    "record_life_meal", "correct_life_meal",
+}
+EFFECT_TOOLS.update(IDEMPOTENT_SERVICE_TOOLS)
+READ_TOOLS.update({"get_finance_summary", "list_finance_transactions", "query_health_context", "query_life_events"})
 LIMIT = 20 * 1024 * 1024
 
 
@@ -532,7 +540,7 @@ class OperationRunner:
             result = ToolMessage(content=_json(receipt), tool_call_id=call["id"])
             self.journal.set_state(identifier, "succeeded", encode_result(result))
             return result
-        if operation["state"] == "started" and name not in READ_TOOLS:
+        if operation["state"] == "started" and name not in READ_TOOLS | IDEMPOTENT_SERVICE_TOOLS:
             receipt = self.journal.reconcile_service(operation)
             if receipt is not None:
                 result = ToolMessage(content=_json(receipt), tool_call_id=call["id"])

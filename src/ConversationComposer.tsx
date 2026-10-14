@@ -20,7 +20,7 @@ type Props = {
 export function ConversationComposer(props: Props) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
-  const { text, placeholder, onText, onSend, onFiles, editable, canSend, busy, pending, kind, onKind,
+  const { text, placeholder, onText, onSend, onFiles, editable, canSend, busy, pending, kind,
     model, depth = "auto", searchId, onModel, onReasoning, onSearch, optionsLocked, children, hint } = props;
   const [provider, setProvider] = useState<SearchProvider | null>(null);
   useEffect(() => {
@@ -33,7 +33,7 @@ export function ConversationComposer(props: Props) {
   return <View style={styles.area}>
     <View style={styles.composer}>
       {children}
-      <TextInput accessibilityLabel="消息或任务要求" multiline maxLength={20000} placeholder={placeholder ?? (kind === "task" ? "交给知行完成…" : "说说你的想法…")} placeholderTextColor={colors.muted} value={text} editable={editable} onChangeText={onText} style={styles.input} />
+      <TextInput accessibilityLabel="消息" multiline maxLength={20000} placeholder={placeholder ?? "说说你的想法…"} placeholderTextColor={colors.muted} value={text} editable={editable} onChangeText={onText} style={styles.input} />
       {hint}
       <View style={styles.toolbar}>
         <View style={styles.choices}>
@@ -45,7 +45,6 @@ export function ConversationComposer(props: Props) {
           {onReasoning ? <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${model?.reasoning_levels.length ? thinkingLabel(model, depth) : "不可调整"}`} accessibilityState={{ disabled: optionsLocked || !model?.reasoning_levels.length }} disabled={optionsLocked || !model?.reasoning_levels.length} onPress={onReasoning} style={[styles.tool, styles.depth, (optionsLocked || !model?.reasoning_levels.length) && styles.disabled]}>
             <Ionicons name={depth === "none" ? "bulb-outline" : "bulb"} size={21} color={depth === "none" ? colors.muted : colors.gold} /><Text style={[styles.depthLabel, depth !== "none" && { color: colors.gold }]}>{model?.reasoning_levels.length ? thinkingLabel(model, depth) : "—"}</Text>
           </Pressable> : null}
-          <Pressable accessibilityRole="button" accessibilityLabel={kind === "chat" ? "当前聊天，切换为任务" : "当前任务，切换为聊天"} accessibilityState={{ selected: kind === "task", disabled: !!pending || busy || props.kindLocked }} disabled={!!pending || busy || props.kindLocked} onPress={() => onKind(kind === "chat" ? "task" : "chat")} style={[styles.tool, kind === "task" && styles.taskOn, (pending || busy || props.kindLocked) && styles.disabled]}><Ionicons name={kind === "task" ? "flash" : "chatbubble-outline"} size={21} color={kind === "task" ? colors.blue : colors.muted} /></Pressable>
         </View>
         <Pressable accessibilityRole="button" accessibilityLabel="添加资料" accessibilityState={{ disabled: props.attachmentLocked }} disabled={props.attachmentLocked} onPress={onFiles} style={[styles.tool, props.attachmentLocked && styles.disabled]}><Ionicons name="add" size={25} color={colors.ink} /></Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel={pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !canSend }} disabled={!canSend} onPress={onSend} style={[styles.send, !canSend && styles.sendDisabled]}>{busy ? <ActivityIndicator size="small" color={colors.onInk} /> : <Ionicons name={pending ? "refresh" : "arrow-up"} size={23} color={canSend ? colors.onInk : colors.muted} />}</Pressable>

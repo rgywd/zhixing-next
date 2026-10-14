@@ -12,7 +12,7 @@ export function ServiceStatusNotice({ status }: { status: Pick<ServiceStatus, "m
   const noticeId = useId();
   const message = !status ? null : !status.model_ready
     ? "服务已连接，模型尚未配置。请在设置中添加供应商并选择默认模型。"
-    : !status.worker_online ? "执行服务暂时离线。已接收任务仍保留，等待服务恢复。" : null;
+    : !status.worker_online ? "知行暂时无法回复。已提交消息仍保留，手工记录仍可使用。" : null;
   useEffect(() => {
     if (message) show({ id: noticeId, message, icon: "cloud-offline-outline", tone: "warning", duration: null });
     else dismiss(noticeId);

@@ -1,19 +1,19 @@
-# 首条实现链路与接口契约
+# HTTP 与运行接口
 
-状态：2026-09-29，已加入资源附件、视觉输入和隔离执行。实际运行能力与限制见[后端说明](../backend/README.md)。
+状态：2026-10-14，当前源码包含数据库 v12 的财务与健康服务。安装、部署及验收状态以[0.2.0 说明](RELEASE-0.2.0.md)为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
 
 ## 交付范围
 
 Python FastAPI + SQLite，API 与 worker 独立进程；React Native 客户端连接真实后端。
-已实现会话、人格、项目、子智能体、消息 Queue/Steer、取消、进度查询、持久计划、Deep Agents 模型/文件工具及轻量个人记忆。
+当前产品提供会话、人格、财务／健康子 Agent、消息 Queue/Steer、取消、服务记录与轻量记忆。旧项目、任务和通用计划 API 保留兼容，手机入口及主 Agent 创建这些工作的工具已移除；v12 迁移停用已有通用计划。
 文件/图片的自动记忆提取、外部 harness 与推送通知留作后续。模型未配置时明确失败，不返回模拟助手回复。
 
 ## 公共约定
 
 接口前缀 `/v1`；除 `/healthz` 外均需要 `Authorization: Bearer <服务访问令牌>`。
-JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next_cursor: null|string}`。
+JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业务日使用 `YYYY-MM-DD`，健康发生／测量时间必须带 UTC offset 并保留所述日期语义。旧分页列表为 `{items: [], next_cursor: null|string}`；新服务列表形态见下文。
 错误 `{error: {code: string, message: string}}`。请求 ID/消息 ID 由客户端生成；重试相同 ID 与相同内容返回原记录，
-相同 ID 不同内容返回 409。限长与枚举由入口校验；列表默认 50，最大 100。
+相同 ID 不同内容返回 409。限长与枚举由入口校验；旧列表默认 50，最大 100，新健康列表默认 100、最大 500。
 用户和模型供应商密钥分离；App 只持有服务访问令牌。
 
 ## HTTP 接口
@@ -32,8 +32,8 @@ JSON 字段使用 snake_case，时间为 UTC ISO 8601；列表 `{items: [], next
 - `GET /v1/agents`, `POST /v1/agents`, `GET/PUT/DELETE /v1/agents/{id}`：子智能体配置
   `{id,kind: service|custom,service: string|null,name,description,instructions,tools: string[],visible,created_at,updated_at}`。
   创建/修改输入 `{name,description,instructions,tools,visible}`；固定服务助手不可删除，且工具由服务固定。删除自建助手前需完成其排队或运行中的任务；旧会话保留并转为主知行会话。
-  自建助手可选工具仅为 `inspect_environment`、`list_directory`、`read_text_file`、`read_document`、`view_image`、`write_text_file`、`fetch_public_page`；服务器的目录授权仍生效。实际模型未开启图片输入时不提供 `view_image`。
-- `GET /v1/finance/observations`：`{balances: FinanceObservation[],recent: FinanceObservation[]}`。固定财务助手专用工具可记录/列出/删除用户明确提供的 CNY 金额观察值；`balance` 为各平台最后一次观察，`income`/`expense` 取最近 20 条。记录包含 `id,kind,platform,amount,note,conversation_id,created_at`。这不是实时账户查询或自动对账接口。
+  自建助手显式选择已注册的物理文件／图片／公开网页及财务／健康服务工具；固定服务助手工具由服务维护。服务器目录授权和运行时工具白名单仍生效，实际模型未开启图片输入时不提供 `view_image`。固定服务包括 `finance` 与 `health`。
+- `GET /v1/finance/observations`（旧观察接口）：`{balances: FinanceObservation[],recent: FinanceObservation[]}`。保留旧 CNY 金额观察值读取；新消费使用下方 transactions 服务，余额继续作为观察值；`balance` 为各平台最后一次观察，`income`/`expense` 取最近 20 条。记录包含 `id,kind,platform,amount,note,conversation_id,created_at`。这不是实时账户查询或自动对账接口。
 - `GET /v1/projects/{id}`：读取指定项目；不存在返回 404。
 - `GET /v1/projects`, `POST /v1/projects {name}`: 项目 `{id,name,workspace_path,created_at}`；路径由服务器创建。
 - `GET /v1/conversations`, `POST /v1/conversations {title,project_id?: string|null,agent_id?: string|null}`:
@@ -99,6 +99,59 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
 
 文件接口均需要服务令牌，拒绝目录穿越、链接和受保护文件；额外执行目录授权不扩大手机文件下载范围。
 
+## 财务服务（v12）
+
+金额使用非负 CNY 十进制字符串，统计由程序计算。以下接口均继承 `/v1` 认证，不依赖模型即可保存。
+
+| 接口 | 输入或结果 |
+| --- | --- |
+| `GET /v1/finance/budget?month=YYYY-MM` | 有效预算；含 `month,source_month,recurring,revision,expected_income,savings_target,daily_budget,commitments,coverage_start,coverage_through` |
+| `PUT /v1/finance/budget` | 完整设置：`month,idempotency_key,recurring`，可空的收入／结余／日常上限、承诺列表与覆盖期；可传 `expected_revision,expected_source_month` 防止覆盖刚发生的修改 |
+| `DELETE /v1/finance/budget?month=&idempotency_key=&recurring=false` | 删除指定月份及沿用类型的配置，保留实际流水；返回 `{deleted:true}` |
+| `GET /v1/finance/transactions?month=&limit=50&offset=0` | `{items:Transaction[],total}`，最大 100；按业务日期分页 |
+| `POST /v1/finance/transactions` | `idempotency_key,kind,amount,occurred_on`，以及可选分类、关联、来源与覆盖字段；返回 Transaction |
+| `PATCH /v1/finance/transactions/{id}` | `idempotency_key,expected_revision?` 加待修改字段；原地纠正并推进 revision |
+| `DELETE /v1/finance/transactions/{id}?idempotency_key=` | 软删除；存在关联退款时先处理退款，返回 `{deleted:true,id}` |
+| `GET /v1/finance/summary?month=&as_of=YYYY-MM-DD` | `{month,budget,totals,reservations,remaining,projection,coverage,daily_average,record_count}` |
+
+`commitments` 每项为 `{key,label,amount,kind:fixed|one_time}`。`recurring=true` 自该月沿用最近设置；单月配置优先。沿用时只保留固定承诺，不把某月大件继续预留到以后。`coverage_start/coverage_through` 必须同时提供且位于当月，只在用户确知记录覆盖时填写。PUT 是完整配置；模型更新工具先读后合并未修改字段，不把省略字段误清空。
+
+Transaction 包含 `id,revision,kind:expense|income|transfer|refund,amount,occurred_on,bucket:daily|fixed|one_time,category,note,commitment_key,related_transaction_id,entry_type:detail|aggregate,period_start,conversation_id,source_id,created_at,updated_at`。退款引用原消费并冲减其口径，不能超出原消费；转账与还款不再当消费。固定／大件付款以 `commitment_key` 抵扣对应预留。累计项给出同月 `period_start` 至 `occurred_on` 范围，与其覆盖明细衔接；累计范围不允许重叠。
+
+`totals` 分列收入、净支出、日常／固定／一次性、退款与转账；`reservations` 为未付承诺。`remaining.daily_budget` 同时受整体结余底线与独立日常上限约束，未知时为 null。`projection` 含预计与已收收入、剩余预计收入、费用／结余、`daily_basis,assumptions,reliable`；预计收入包含实收，不相加两次。`daily_average` 含 `amount,days,from,through,basis`，覆盖未知时不制造日均。`coverage.gaps` 与预测假设必须随结果解释，不把缺记录当零消费。
+
+## 健康服务（v12）
+
+记录、规范、建议与实际摄入独立保存。健康列表返回 `{items:[...]}`，可传 `start/end=YYYY-MM-DD,limit=1..500`；summary 内的记录是直接数组。记录含 `id,revision,created_at,updated_at`，来源可附 `source_id,conversation_id`。
+
+| 接口 | 输入或结果 |
+| --- | --- |
+| `GET /v1/health/summary?date=YYYY-MM-DD` | `{date,revision,profile,rules,all_rules,meals,recent_meals,weights,steps,recommendations,reminders,review}`；省略日期按提醒约定时区取当天 |
+| `GET/PUT /v1/health/profile` | `revision,height_cm?,activity_limitations[],food_allergies[],food_exclusions[],preferences[],goals[],note`；未提供的身体数据保持未知 |
+| `GET/POST /v1/health/rules`，`PUT/DELETE /v1/health/rules/{id}` | `content,kind:restriction|preference|guideline,status:active|paused|proposed,effective_from?,effective_until?,excluded_terms[],origin:user|professional|assistant_proposal,confirmed` |
+| `GET/POST /v1/health/meals`，`PUT/DELETE /v1/health/meals/{id}` | `occurred_at,meal_type:breakfast|lunch|dinner|snack|other,description,portion,status:recorded|skipped,recommendation_id?,note,estimated_energy?` |
+| `GET/POST /v1/health/weights`，`PUT/DELETE /v1/health/weights/{id}` | `measured_at,value,unit:kg|lb,note`；返回另含 `value_kg`，保留原单位 |
+| `GET/POST /v1/health/steps`，`PUT/DELETE /v1/health/steps/{id}` | `measured_at,value` 非负整数、`note`；不自动生成运动目标 |
+| `GET/POST /v1/health/recommendations` | `context_revision,target_date,meal_type,context,options[1..5],note`；保存时重新核对当前约定与记录 |
+| `POST /v1/health/recommendations/{id}/feedback` | `id?,action:accepted|replaced|declined,option_id?,note`；采纳必须选择该建议的 option，困难保存在 note |
+| `GET/PUT /v1/health/reminders` | `revision,enabled,timezone,slots[],quiet_start?,quiet_end?,max_per_day,paused_dates[],tone`；这里只保存偏好，不发送通知 |
+
+POST 可提供稳定 `id`，同 ID 同内容重试不重复；相同来源经主／子 Agent 重试沿用条目标识。PUT 提供完整可编辑对象及当前 `revision`，DELETE 用 `?revision=`；并发修改返回 409 `revision_conflict`。档案／提醒 revision 从 0 开始。工具端对设置、反馈、纠正和删除也保存原输入幂等回执，重放不会覆盖后来的新修改。
+
+规范未给日期即持续沿用；前后日期相同表示只适用一天，`paused` 暂停，`proposed` 不进入有效规范。`assistant_proposal` 未确认时不能自动变为 active。能量估计为 `{minimum,maximum,basis,unit:kcal}`，必须有范围与依据，不能把照片当精确克数；skipped 必须由用户明确提供。漏记是未知，推荐与采纳均不增加摄入。
+
+每个推荐 option 包含 `id,title,description,ingredients[],portion,substitutions[],reason,note`，可附有依据的 `estimated_energy,cost_note`。返回 `basis` 保存档案／规则修订及规则快照、食物与活动限制；`status:current|stale`、`latest_feedback` 区分新建议与历史选择。关键上下文变化、目标日期已过或生成期间修订变化时，旧候选过期／发布被拒绝（409 `stale_health_context`）。已知过敏与排除词进行成分字面匹配；有已知限制却缺成分返回 `ingredients_required`，冲突返回 `health_restriction_conflict`。这不是完整过敏原数据库，也不保证交叉接触安全。
+
+`review` 包含已记／明确跳过餐次、覆盖说明、按有效测量形成的 `weight_trend`、`recent_choices`（含困难反馈与 `actual_meals`）及下一步上下文。多次同日称重不伪装成跨日趋势；纠正后用当前实际记录回顾，不自动降低摄入目标。
+
+提醒 `timezone` 为 IANA 名称，slots 每项为 `{id,time:HH:mm,meal_type,kind:meal|review}`；安静时间须同时提供首尾，支持跨午夜，`paused_dates` 为当地日历日期。手机只排未来 14 天，按每日上限、暂停、已记录餐次和过期时间过滤；下次同步更新，不补发过期提醒。离线“今天不提醒这台手机”先保存在本机并取消当天通知，不冒充服务端偏好已更新。
+
+## 同一顿的餐费与饮食
+
+主知行的 `record_life_meal(entry_key,meal,amount?,occurred_on?,note?)` 通过 `LifeService` 在同一 SQLite 写事务保存两域及其幂等回执，返回 `event_id,atomic:true,finance,meal,payment_recorded`。金额缺失时只保存实际饮食，照片不推断餐费；任何一项失败均回滚。稳定条目标识来自原始消息，不随主／子路由或运行重试变化。
+
+`query_life_events` 读取关联，`correct_life_meal(event_id,entry_key,meal_changes?,finance_changes?)` 同事务纠正原记录。修改共同日期时同时更新 `meal_changes.occurred_at` 与 `finance_changes.occurred_on`；不另建记录。它们是模型服务工具，当前没有另设 life HTTP 路由；手工表单分别通过对应财务／健康 HTTP 服务保存。
+
 ## 内部运行契约
 
 代码在 `backend/src/zhixing_next`。config.py 负责配置，store.py 负责业务事务，api.py 负责 HTTP，
@@ -130,7 +183,7 @@ emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可�
 模型 ID、思考档位和搜索服务 ID 在消息入队时写入运行记录，worker 按快照调用；LangGraph thread 以 conversation_id 标识，checkpoint 使用 data_dir 下独立 SQLite。worker 在运行开始时读取子智能体配置快照；主知行只委派已配置命名助手，直接子智能体会话只获得自己的工具。搜索密钥只存服务端 SQLite，不进入消息、运行记录或 API 回执；联网结果是外部资料，回答应引用来源链接。
 运行时发现原生 interrupt 后抛出 RunPaused，由 worker 保存等待状态并释放执行槽。恢复时复用同一 checkpoint 和步骤回执；模型/权限/助手/记忆重置/SDK 版本变化会拒绝旧恢复。旧版无恢复标记的运行仍保留 interrupted 行为，不宣称任意工具能自动安全续跑。
 
-主知行聊天工具 `start_background_task(instructions)` 通过同一 Store 入队任务，沿用当前用户附件（包括 Steer），返回真实 `run_id/status`；同运行同要求去重。主知行的 `list_scheduled_tasks`、`schedule_task`、`set_schedule_enabled` 操作已有持久计划服务，不发送外部通知。执行任务通过 DockerSandbox 接入 Deep Agents 的 execute/文件工具；`browser_action` 操作任务内 Chromium，`view_image` 查看实际图片，`publish_artifact` 校验并发布产物。主知行的 `copy_file` 在已授权文件目录间搬运最多 20 MiB 二进制文件。子智能体不自动获得 Shell、浏览器、调度或宿主目录挂载权限。
+历史运行底座包含 `start_background_task`、`list_scheduled_tasks`、`schedule_task`、`set_schedule_enabled` 的实现；当前产品不向主知行提供这些创建／管理工具，旧计划在 v12 迁移中停用。它们不是手机远程通知接口。执行任务通过 DockerSandbox 接入 Deep Agents 的 execute/文件工具；`browser_action` 操作任务内 Chromium，`view_image` 查看实际图片，`publish_artifact` 校验并发布产物。主知行的 `copy_file` 在已授权文件目录间搬运最多 20 MiB 二进制文件。子智能体不自动获得 Shell、浏览器、调度或宿主目录挂载权限。
 
 
 ## 供应商管理（v10）

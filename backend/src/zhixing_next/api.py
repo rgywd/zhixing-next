@@ -137,7 +137,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         runtime_settings = store.runtime_settings()
         roles = runtime_settings.roles
-        ready = all(model_ready(runtime_settings, role, roles.get(role)) for role in ("chat", "task"))
+        ready = model_ready(runtime_settings, "chat", roles.get("chat"))
         capability = capability_status(settings)
         return {
             "model_ready": ready,
@@ -531,5 +531,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def update_schedule(schedule_id: str, body: ScheduleUpdate):
         return store.update_schedule(schedule_id, body.enabled)
 
+    from .finance_routes import create_router as finance_router
+    from .health_routes import create_router as health_router
+
+    router.include_router(finance_router(store))
+    router.include_router(health_router(store))
     app.include_router(router)
     return app

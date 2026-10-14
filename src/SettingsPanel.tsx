@@ -18,7 +18,7 @@ export function ConnectionForm({
   onConnect: (connection: Connection) => void;
 }) {
   const { s } = useUi();
-  const [url, setUrl] = useState(initial?.url ?? "");
+  const [url, setUrl] = useState(initial?.url ?? process.env.EXPO_PUBLIC_ZHIXING_SERVER_URL ?? "");
   const [token, setToken] = useState(initial?.token ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");

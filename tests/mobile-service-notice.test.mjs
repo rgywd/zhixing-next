@@ -77,7 +77,7 @@ test("missing model configuration updates the floating message once and healthy 
   app.close(); app.render(app.exports.ServiceStatusNotice, { status: { model_ready: false, worker_online: true } });
   assert.equal(app.shows.length, 1); assert.equal(app.notices.size, 0);
   app.render(app.exports.ServiceStatusNotice, { status: offline });
-  assert.equal(app.shows.length, 2); assert.match(app.shows.at(-1).message, /执行服务暂时离线/);
+  assert.equal(app.shows.length, 2); assert.match(app.shows.at(-1).message, /知行暂时无法回复/);
   app.render(app.exports.ServiceStatusNotice, { status: online }); assert.equal(app.notices.size, 0);
   app.render(app.exports.ServiceStatusNotice, { status: offline });
   app.render(app.exports.ServiceStatusNotice, { status: null }); assert.equal(app.notices.size, 0);

@@ -186,37 +186,45 @@ async def test_crash_reconciles_actual_file_without_repeating_write(setup, monke
     assert receipt["authorization"] == {"required": False}
 
 
-async def test_schedule_commit_is_reconciled_from_real_service_record(setup, monkeypatch):
+async def test_current_runtime_retires_generic_work_tools_but_keeps_named_delegation(setup):
     settings, store, run, _ = setup
-    call = AIMessage(
-        content="",
-        tool_calls=[
-            {
-                "name": "schedule_task",
-                "args": {"prompt": "稍后检查", "next_run_at": "2099-01-01T10:00:00+08:00"},
-                "id": "schedule",
-                "type": "tool_call",
-            }
-        ],
+    run["agents"] = [
+        {
+            "id": "reader",
+            "name": "资料助手",
+            "description": "读取资料",
+            "instructions": "只读",
+            "tools": ["read_text_file"],
+        }
+    ]
+    model = ScriptedModel(
+        replies=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "task",
+                        "args": {"description": "概括已知资料", "subagent_type": "agent_reader"},
+                        "id": "delegate",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(content="资料已概括"),
+            AIMessage(content="委派完成"),
+        ]
     )
-    original = Store.create_schedule
-
-    def created_then_crash(self, **kwargs):
-        original(self, **kwargs)
-        raise Crash()
-
-    monkeypatch.setattr(Store, "create_schedule", created_then_crash)
-    with pytest.raises(Crash):
-        await invoke(settings, run, ScriptedModel(replies=[call]))
-    monkeypatch.setattr(Store, "create_schedule", original)
-    assert len(store.list_schedules()["items"]) == 1
-    store.recover_interrupted()
-    resumed = store.claim_next("task")
-    model = ScriptedModel(replies=[AIMessage(content="核对现有计划后继续")])
-    await invoke(settings, resumed, model)
-    assert Journal(settings).approvals()["items"] == []
-    assert len(store.list_schedules()["items"]) == 1
-    assert store.list_schedules()["items"][0]["id"] in str(model.seen[0])
+    assert await invoke(settings, run, model) == "委派完成"
+    assert "task" in model.bound_names
+    assert not {
+        "schedule_task",
+        "list_scheduled_tasks",
+        "pause_scheduled_task",
+        "start_background_task",
+    } & set(model.bound_names)
+    assert "record_life_meal" in model.bound_names
+    assert store.list_schedules()["items"] == []
+    assert len(model.seen) == 3
 
 
 async def test_steer_after_crash_preserves_real_effect_and_new_instruction(setup, monkeypatch):
@@ -444,3 +452,63 @@ async def test_cancel_pending_approval_revokes_it_and_preserves_queue(setup):
         item["message_id"] == "later" and item["status"] == "queued"
         for item in store.list_runs()["items"]
     )
+
+
+async def test_atomic_life_write_committed_before_journal_crash_replays_without_approval(
+    setup, monkeypatch
+):
+    from zhixing_next.finance_service import FinanceService
+    from zhixing_next.health_service import HealthService
+    from zhixing_next.life_service import LifeService
+
+    settings, store, run, _ = setup
+    arguments = {
+        "entry_key": "lunch-1",
+        "meal": {
+            "occurred_at": "2026-04-09T12:00:00+08:00",
+            "meal_type": "lunch",
+            "description": "鸡腿饭",
+            "portion": "米饭剩一半",
+        },
+        "amount": "26",
+        "occurred_on": "2026-04-09",
+    }
+    call = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "record_life_meal",
+                "args": arguments,
+                "id": "meal-and-cost",
+                "type": "tool_call",
+            }
+        ],
+    )
+    original = LifeService.record_meal
+
+    def committed_then_crash(self, **kwargs):
+        original(self, **kwargs)
+        raise Crash()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LifeService, "record_meal", committed_then_crash)
+        with pytest.raises(Crash):
+            await invoke(settings, run, ScriptedModel(replies=[call]))
+    assert FinanceService(store).list_transactions(month="2026-04")["total"] == 1
+    assert len(HealthService(store).list("meals")["items"]) == 1
+    store.recover_interrupted()
+    resumed = Store(settings).claim_next("task")
+    model = ScriptedModel(replies=[AIMessage(content="两项都已记录")])
+    assert await invoke(settings, resumed, model) == "两项都已记录"
+    assert Journal(settings).approvals()["items"] == []
+    receipts = Journal(settings).receipts(run["id"])["items"]
+    assert len(receipts) == 1 and receipts[0]["state"] == "succeeded"
+    actual = next(
+        json.loads(message.content)
+        for message in model.seen[0]
+        if isinstance(message, ToolMessage) and message.tool_call_id == "meal-and-cost"
+    )
+    assert actual["atomic"] and actual["saved"]
+    assert actual["finance"]["amount"] == "26.00"
+    assert FinanceService(store).list_transactions(month="2026-04")["total"] == 1
+    assert len(HealthService(store).list("meals")["items"]) == 1
