@@ -80,8 +80,8 @@ export function AgentsPanel({ connection, agents, onChanged, onChat, onNewChat }
           <Field label="名称" value={form.name} onChangeText={(name) => setForm({ ...form, name })} maxLength={200} />
           <Field label="擅长什么" value={form.description} onChangeText={(description) => setForm({ ...form, description })} maxLength={1000} multiline />
           <Field label="具体要求" value={form.instructions} onChangeText={(instructions) => setForm({ ...form, instructions })} maxLength={20000} multiline />
-          <ActionRow icon="sparkles-outline" title="助手模型" description={catalog?.items.find(item => item.id === form.model_id)?.name ?? (form.model_id ? "已指定模型" : "跟随当前任务模型")} onPress={() => { void request<ModelCatalog>(connection, "/models").then(value => { setCatalog(value); setPickingModel(true); }).catch(e => setError(humanError(e))); }} />
-          <ModelPicker visible={pickingModel} title="选择助手模型" connectionUrl={connection.url} models={catalog?.items ?? []} selectedId={form.model_id ?? null} onSelect={async model_id => { setForm(old => ({ ...old, model_id })); }} onUseDefault={async () => { setForm(old => ({ ...old, model_id: null })); }} defaultLabel="跟随当前任务模型" onClose={() => setPickingModel(false)} />
+          <ActionRow icon="sparkles-outline" title="助手模型" description={catalog?.items.find(item => item.id === form.model_id)?.name ?? (form.model_id ? "已指定模型" : "跟随当前聊天模型")} onPress={() => { void request<ModelCatalog>(connection, "/models").then(value => { setCatalog(value); setPickingModel(true); }).catch(e => setError(humanError(e))); }} />
+          <ModelPicker visible={pickingModel} title="选择助手模型" connectionUrl={connection.url} models={catalog?.items ?? []} selectedId={form.model_id ?? null} onSelect={async model_id => { setForm(old => ({ ...old, model_id })); }} onUseDefault={async () => { setForm(old => ({ ...old, model_id: null })); }} defaultLabel="跟随当前聊天模型" onClose={() => setPickingModel(false)} />
           {editing === "new" || editing.kind === "custom" ? (
             <View style={s.stack}>
               <Text style={s.label}>可用工具</Text>

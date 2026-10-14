@@ -58,6 +58,7 @@ export function ChatPanel({
   onConversationChanged,
   onComposerContext,
   onRefresh,
+  onRunsChanged,
   intro,
   stretchIntro = false,
   agentModelId = null,
@@ -77,6 +78,7 @@ export function ChatPanel({
   onConversationChanged: (conversation: Conversation) => void;
   onComposerContext?: (value: { conversationId: string; modelId: string | null; kind: "chat" | "task" }) => void;
   onRefresh: () => void;
+  onRunsChanged?: (runs: Run[]) => void;
   intro?: ReactNode;
   stretchIntro?: boolean;
   agentModelId?: string | null;
@@ -99,6 +101,7 @@ export function ChatPanel({
   const focusAnchor = focusRequest.seq;
   const {
     messages,
+    runs = [],
     running,
     previous,
     draft,
@@ -134,6 +137,15 @@ export function ChatPanel({
     pendingRuns,
     updateDraft,
   } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles, focusMessageSeq: focusAnchor });
+  const runStates = useRef<{ conversationId: string; statuses: Map<string, Run["status"]> }>({ conversationId: conversation.id, statuses: new Map() });
+  useEffect(() => {
+    if (!onRunsChanged) return;
+    if (runStates.current.conversationId !== conversation.id) runStates.current = { conversationId: conversation.id, statuses: new Map() };
+    const changed = runs.filter((run) => run.conversation_id === conversation.id && runStates.current.statuses.get(run.id) !== run.status);
+    if (!changed.length) return;
+    changed.forEach((run) => runStates.current.statuses.set(run.id, run.status));
+    onRunsChanged(changed);
+  }, [conversation.id, onRunsChanged, runs]);
   const focusState = useRef({ seq: focusAnchor, requested: false, handled: false, attempts: 0 });
   useEffect(() => {
     focusState.current = { seq: focusAnchor, requested: false, handled: false, attempts: 0 };
@@ -277,7 +289,7 @@ export function ChatPanel({
                 {item.run_id ? (
                   <Pressable
                     accessibilityRole="button"
-                    accessibilityLabel="查看任务记录"
+                    accessibilityLabel="查看处理记录"
                     style={chatStyles.messageAction}
                     onPress={() => setDetail(item.run_id)}
                   >
@@ -336,7 +348,7 @@ export function ChatPanel({
         onSearch={() => setShowSearch(true)}
         onSend={() => { void send({ ...(kind === "task" && taskPreference.modelId ? { model_id: taskPreference.modelId } : {}), ...(kind === "task" && taskPreference.effort ? { reasoning_effort: taskPreference.effort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }}
         hint={(running || intent === "steer") ? <View style={chatStyles.delivery}>
-          {(["queue", "steer"] as const).map((value) => <Pressable key={value} accessibilityRole="radio" accessibilityLabel={value === "queue" ? "排队：当前运行结束后处理" : "引导：发送给当前运行"} accessibilityState={{ checked: intent === value, disabled: !!draft.pending || (value === "steer" && !running) }} disabled={!!draft.pending || (value === "steer" && !running)} onPress={() => { setIntent(value); if (value === "steer" && running) setKind(running.kind); setTarget(value === "steer" ? running?.id ?? null : null); }} style={[chatStyles.deliveryChoice, intent === value && { backgroundColor: colors.neutral }]}><Ionicons name={value === "queue" ? "layers-outline" : "git-branch-outline"} size={13} color={colors.muted} /><Text style={s.caption}>{value === "queue" ? "接着处理" : "调整当前任务"}</Text></Pressable>)}
+          {(["queue", "steer"] as const).map((value) => <Pressable key={value} accessibilityRole="radio" accessibilityLabel={value === "queue" ? "排队：当前运行结束后处理" : "引导：发送给当前运行"} accessibilityState={{ checked: intent === value, disabled: !!draft.pending || (value === "steer" && !running) }} disabled={!!draft.pending || (value === "steer" && !running)} onPress={() => { setIntent(value); if (value === "steer" && running) setKind(running.kind); setTarget(value === "steer" ? running?.id ?? null : null); }} style={[chatStyles.deliveryChoice, intent === value && { backgroundColor: colors.neutral }]}><Ionicons name={value === "queue" ? "layers-outline" : "git-branch-outline"} size={13} color={colors.muted} /><Text style={s.caption}>{value === "queue" ? "接着处理" : "补充当前回复"}</Text></Pressable>)}
           {intent === "steer" && running?.id !== target ? <Text style={s.error}>目标已结束，请切回接着处理</Text> : null}
         </View> : null}
       >
@@ -494,7 +506,7 @@ function RunDetail({
   }
   return (
     <SafeAreaView style={s.root}>
-      <SheetHeader title="任务记录" onClose={close} />
+      <SheetHeader title="处理记录" onClose={close} />
       <ScrollView contentContainerStyle={s.content}>
         {error ? <Text style={s.error}>{error}</Text> : null}
         {loadError ? <View style={s.notice}>

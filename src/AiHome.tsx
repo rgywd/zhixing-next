@@ -16,9 +16,9 @@ const suggestions = [
   { title: "聊聊近况", icon: "chatbubble-ellipses-outline", prompt: "我想和你聊聊最近的事：", kind: "chat" },
   { title: "理清思路", icon: "bulb-outline", prompt: "帮我理清这件事的思路：", kind: "chat" },
   { title: "读懂资料", icon: "document-text-outline", prompt: "请帮我读懂这段资料：", kind: "chat" },
-  { title: "写个计划", icon: "calendar-outline", prompt: "请帮我做一个计划：", kind: "chat" },
+  { title: "看看开销", icon: "wallet-outline", prompt: "帮我看看当前开销和预算，有什么可以调整：", kind: "chat" },
   { title: "解释问题", icon: "help-circle-outline", prompt: "请用简单的话解释：", kind: "chat" },
-  { title: "交给我办", icon: "flash-outline", prompt: "请帮我完成这件事：", kind: "task" },
+  { title: "饮食建议", icon: "restaurant-outline", prompt: "根据我的饮食约定和最近记录，下一餐怎么吃：", kind: "chat" },
 ] as const;
 
 export function AiHome({

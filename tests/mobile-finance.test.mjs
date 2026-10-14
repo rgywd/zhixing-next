@@ -100,7 +100,7 @@ function chatHarness(state = {}, options = {}) {
   for (const name of ["MessageBody", "ConversationComposer", "ReasoningPicker", "ModelPicker", "Attachments", "ApprovalCards", "RunReport", "FilesPanel", "SearchPicker"]) dependencies[`./${name}`] = { [name]: name };
   const { ChatPanel } = load("ChatPanel", dependencies, options.globals);
   const defaults = { connection: {}, conversation: { id: "finance-chat", agent_id: "finance", model_id: null, reasoning_effort: null }, catalog, assistantName: "财务助手", onRefresh() {}, onConversationChanged() {} };
-  return { calls, hookInputs, lifecycle, render: (props = {}) => walk(lifecycle.render(ChatPanel, { ...defaults, ...props })) };
+  return { calls, hookInputs, lifecycle, chat, render: (props = {}) => walk(lifecycle.render(ChatPanel, { ...defaults, ...props })) };
 }
 
 function financeHarness(colors = theme.lightColors) {
@@ -353,4 +353,24 @@ test("collapsed run verification keeps blockers visible and reveals detailed usa
   nodes = render();
   assert.match(text(nodes), /输入 100/);
   assert.match(text(nodes), /核验产物/);
+});
+
+test("chat reports changed run receipts once, including terminal failures after service writes", () => {
+  const app = chatHarness({ runs: [] });
+  const batches = [];
+  const props = { onRunsChanged: (runs) => batches.push(runs.map((run) => `${run.id}:${run.status}`)) };
+  const run = (status, id = "service-run") => ({ id, conversation_id: "finance-chat", status, kind: "chat" });
+  app.render(props); assert.equal(batches.length, 0);
+  app.chat.runs = [run("queued")]; app.render(props);
+  app.chat.runs = [run("queued")]; app.render(props);
+  assert.equal(batches.length, 1);
+  app.chat.runs = [run("running")]; app.render(props);
+  app.chat.runs = [run("completed")]; app.render(props);
+  app.chat.runs = [run("completed")]; app.render(props);
+  assert.equal(batches.length, 3);
+  app.chat.runs = [run("completed"), run("failed", "partial-write")]; app.render(props);
+  app.chat.runs = [run("completed"), run("failed", "partial-write")]; app.render(props);
+  assert.deepEqual(batches, [["service-run:queued"], ["service-run:running"], ["service-run:completed"], ["partial-write:failed"]]);
+  app.chat.runs = [run("completed"), { ...run("completed", "other-chat-run"), conversation_id: "other-conversation" }];
+  app.render(props); assert.equal(batches.length, 4);
 });

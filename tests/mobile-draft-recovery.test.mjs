@@ -242,9 +242,10 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "Notice", "ChatPanel", "AiHome", "AiDrawer", "BottomSheet", "FinancePage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ProjectsPanel", "ResourcePreview", "OverviewPanels", "LifePanel", "SchedulesPanel", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) {
+  for (const name of ["ThemeProvider", "AppearanceControl", "Notice", "ChatPanel", "AiHome", "AiDrawer", "BottomSheet", "FinancePage", "FinanceDashboard", "HealthPage", "LifeSummary", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ProjectsPanel", "ResourcePreview", "OverviewPanels", "LifePanel", "SchedulesPanel", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) {
     dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "WorkPanel", "ConnectionForm", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((component) => [component, component]));
   }
+  dependencies["./useHealthReminders"] = { useHealthReminders() {} };
   const { ConnectedSession } = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession };\n");
   const args = { connection: { url: "https://example.test", token: "test" }, onConnect() {}, onDisconnect() {}, connectionError: "" };
   const render = () => walk(lifecycle.render(() => ConnectedSession(args)));

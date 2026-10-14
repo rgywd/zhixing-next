@@ -127,8 +127,22 @@ class AgentInput(Input):
     name: Title
     description: str = Field(min_length=1, max_length=1000)
     instructions: str = Field(default="", max_length=20_000)
-    tools: list[Literal["inspect_environment", "list_directory", "read_text_file", "read_document", "view_image", "write_text_file", "fetch_public_page", "record_finance_observation", "list_finance_observations", "remove_finance_observation"]] = Field(default_factory=list, max_length=10)
+    tools: list[str] = Field(default_factory=list, max_length=60)
     visible: bool = True
+
+    @field_validator("tools")
+    @classmethod
+    def known_tools(cls, value):
+        from .finance_tools import FINANCE_TOOL_NAMES
+        from .health_tools import HEALTH_TOOL_NAMES
+        from .store import CUSTOM_AGENT_TOOLS
+
+        allowed = CUSTOM_AGENT_TOOLS | set(FINANCE_TOOL_NAMES) | set(HEALTH_TOOL_NAMES) | {
+            "record_finance_observation", "list_finance_observations", "remove_finance_observation",
+        }
+        if set(value) - allowed:
+            raise ValueError("Unknown assistant tool")
+        return sorted(set(value))
 
 
 class AgentUpdate(AgentInput):

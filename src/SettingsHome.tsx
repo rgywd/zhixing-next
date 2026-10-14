@@ -20,7 +20,7 @@ export function SettingsHome({ assistant, catalog, connectionUrl, onOpen }: {
       <ActionRow icon="server-outline" title="模型供应商" tone="gold" compact
         description="管理供应商、密钥与模型" onPress={() => onOpen("providers")} />
       <ActionRow icon="sparkles-outline" title="默认模型" tone="gold" compact
-        description={chatModel ? `聊天 · ${chatModel.name}` : "聊天、执行与记忆整理"} onPress={() => onOpen("models")} />
+        description={chatModel ? `聊天 · ${chatModel.name}` : "聊天与记忆整理"} onPress={() => onOpen("models")} />
       <ActionRow icon="globe-outline" title="搜索服务" description="管理聊天中使用的联网搜索" tone="blue" compact last onPress={() => onOpen("search")} />
     </SettingsGroup>
     <SettingsGroup title="助手">

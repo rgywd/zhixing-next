@@ -3,11 +3,11 @@ import { Pressable, StyleSheet, Text, View, ScrollView } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Conversation, Project, Schedule, Resource } from "./api";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { BottomSheet } from "./BottomSheet";
 import { emptyHomePreferences, homeEntries, targetKey, type HomePreferences, type HomeTarget } from "./homeEntries";
 
-export function HomePanel({ conversations, projects = [], resources = [], preferences = emptyHomePreferences, preferencesReady = false, preferenceError, onPreferenceRetry, onTogglePin, onChat, onOpenConversation, onOpenProject, onOpenResource, onResources, onLife, onWork }: {
+export function HomePanel({ conversations, projects = [], resources = [], preferences = emptyHomePreferences, preferencesReady = false, preferenceError, onPreferenceRetry, onTogglePin, onChat, onOpenConversation, onOpenProject, onOpenResource, onResources, onLife, onWork, intro }: {
   conversations: Conversation[];
   projects?: Project[];
   resources?: Resource[];
@@ -23,6 +23,7 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
   onResources?: () => void;
   onLife: () => void;
   onWork: () => void;
+  intro?: ReactNode;
 }) {
   const { s } = useUi();
   const [managing, setManaging] = useState(false);
@@ -39,7 +40,8 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
   const kindLabel = (item: HomeTarget) => item.kind === "project" ? "项目" : item.kind === "resource" ? "文件" : "对话";
   return (
     <PageScrollView tabs>
-      <PageHero eyebrow="HOME" title="首页" description="常用的留在手边，最近的接着看。" />
+      <PageHero eyebrow="TODAY" title="今天" description="照顾好开销，也照顾好自己。" />
+      {intro}
       <View style={s.sectionHeading}>
         <Text accessibilityRole="header" style={s.title}>常用</Text>
         {onTogglePin ? <ActionLink icon="options-outline" disabled={!preferencesReady} onPress={() => setManaging(true)}>整理</ActionLink> : null}
@@ -49,8 +51,8 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
         {pins.map((item, index) => <ActionRow key={targetKey(item)} icon={icon(item)} title={item.title} description={kindLabel(item)} compact last={index === pins.length - 1} onPress={() => open(item)} tone={item.kind === "project" ? "blue" : "red"} />)}
       </View>
       <View style={s.serviceGrid}>
-        <ServiceTile icon="leaf-outline" title="生活" description="财务与日常" onPress={onLife} tone="gold" />
-        <ServiceTile icon="briefcase-outline" title="工作" description="项目与计划" onPress={onWork} tone="blue" />
+        <ServiceTile icon="wallet-outline" title="财务" description="记录开销，看看还能花多少" onPress={onLife} tone="gold" />
+        <ServiceTile icon="heart-outline" title="健康" description="饮食建议、记录与体重趋势" onPress={onWork} tone="blue" />
       </View>
       {preferenceError ? <View><Text accessibilityRole="alert" style={s.error}>{preferenceError}</Text>{!preferencesReady && onPreferenceRetry ? <ActionLink icon="refresh-outline" onPress={onPreferenceRetry}>重试读取常用</ActionLink> : null}</View> : null}
       <View style={s.sectionHeading}>
@@ -60,7 +62,7 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
       {recent.length ? <View style={s.card}>{recent.map((item, index) => <ActionRow key={targetKey(item)} icon={icon(item)} title={item.title} description={`${kindLabel(item)} · ${timeLabel(item.time)}`} compact last={index === recent.length - 1} onPress={() => open(item)} tone={item.kind === "conversation" ? "red" : "blue"} />)}</View> : <Text style={s.description}>聊过的话题和最近的文件会出现在这里。</Text>}
       <BottomSheet visible={managing} title="整理常用" subtitle="固定在首页，按加入顺序排列；偏好保存在这台设备。" onClose={() => setManaging(false)}>
         <View style={{ paddingHorizontal: 20, paddingBottom: 12 }}>
-          <Field label="查找对话或项目" value={query} onChangeText={setQuery} placeholder="输入名称" />
+          <Field label="查找对话" value={query} onChangeText={setQuery} placeholder="输入名称" />
         </View>
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24 }}>
           {choices.map((item) => {

@@ -8,9 +8,11 @@ import json
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import aiosqlite
 from deepagents import create_deep_agent
@@ -30,7 +32,7 @@ from .models import ModelConfigurationError, configured_model, create_model
 from .resources import create_image_tool, hydrate_messages, input_message
 from .search import create_search_tool
 from .sqlite_policy import safe_journal_mode
-from .store import Store
+from .store import Store, StoreError
 from .tools import create_file_tools, create_finance_tools
 from .webtools import fetch_public_page
 
@@ -298,6 +300,20 @@ class RunControls(AgentMiddleware):
                     "error": type(exc).__name__,
                 },
             )
+            from .operations import IDEMPOTENT_SERVICE_TOOLS
+
+            service_tools = IDEMPOTENT_SERVICE_TOOLS | {
+                "get_finance_summary", "list_finance_transactions",
+                "query_health_context", "query_life_events",
+            }
+            if isinstance(exc, StoreError) and call["name"] in service_tools:
+                # Service errors are curated business feedback, not arbitrary tool
+                # output. Preserve conflicts so the agent can read and retry safely.
+                return ToolMessage(
+                    content=json.dumps({"error": {"code": exc.code, "message": exc.message}}, ensure_ascii=False),
+                    tool_call_id=call["id"],
+                    status="error",
+                )
             # Sandbox diagnostics contain task-local outputs, like execute itself. Give
             # the model enough information to repair selectors and invalid artifacts.
             detail = str(exc)[-2000:] if call["name"] in {"browser_action", "publish_artifact", "start_background_task", "schedule_task"} else "Check the tool's permitted inputs, capability and size limits before retrying."
@@ -397,7 +413,7 @@ async def _run_agent(
     forgetting = forget_memory_request(run["prompt"])
     reset_revision = store.memory_reset_revision(run["conversation_id"])
     direct_agent = run.get("agent")
-    file_settings = settings.model_copy(update={"grants": []}) if direct_agent and direct_agent["id"] == "finance" else settings
+    file_settings = settings.model_copy(update={"grants": []}) if direct_agent and direct_agent["id"] in {"finance", "health"} else settings
     physical_tools = [*create_file_tools(file_settings, workspace), fetch_public_page]
     if sandbox:
         from .artifacts import create_artifact_tool
@@ -424,27 +440,33 @@ async def _run_agent(
             physical_tools.extend(create_gitlab_tools(settings.gitlab))
         physical_tools.extend(create_taskflow_tools(store, run, sandbox))
         physical_tools.append(create_memory_lookup_tool(store, run["conversation_id"]))
-        from .services import create_schedule_tools
-
-        physical_tools.extend(create_schedule_tools(settings, run))
-        if run["kind"] == "chat":
-            from .services import create_background_task_tool
-
-            physical_tools.append(create_background_task_tool(settings, run))
     if search_enabled:
         physical_tools.append(create_search_tool(run["search_provider"]))
     agents = run.get("agents", []) if not direct_agent else []
     unavailable_agents = [item["name"] for item in agents if item.get("model_id") and item["model_id"] not in settings.models]
     agents = [item for item in agents if not item.get("model_id") or item["model_id"] in settings.models]
     finance_tools = create_finance_tools(settings, run["conversation_id"]) if (direct_agent and direct_agent["id"] == "finance") or any(item["id"] == "finance" for item in agents) else []
-    by_name = {tool.name: tool for tool in [*physical_tools, *finance_tools]}
+    from .finance_tools import FINANCE_INSTRUCTIONS, create_finance_service_tools
+    from .health_tools import HEALTH_INSTRUCTIONS, create_health_tools
+
+    service_instructions = {"finance": FINANCE_INSTRUCTIONS, "health": HEALTH_INSTRUCTIONS}
+
+    source_id = run.get("message_id") or run["id"]
+    from .life_tools import LIFE_INSTRUCTIONS, create_life_tools
+
+    if not direct_agent and not forgetting:
+        physical_tools.extend(create_life_tools(settings, run["conversation_id"], source_id))
+    if finance_tools:
+        finance_tools.extend(create_finance_service_tools(settings, run["conversation_id"], source_id))
+    health_tools = create_health_tools(settings, run["conversation_id"], source_id) if (direct_agent and direct_agent["id"] == "health") or any(item["id"] == "health" for item in agents) else []
+    by_name = {tool.name: tool for tool in [*physical_tools, *finance_tools, *health_tools]}
     subagent_names = {"finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}" for item in agents}
     from .operations import OperationRunner, RunPaused
 
     operations = OperationRunner(settings, {**run, "workspace_path": str(workspace)}, sandbox)
     middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"])
     assigned_tools = [by_name[name] for name in direct_agent["tools"] if name in by_name] if direct_agent else physical_tools
-    if direct_agent and direct_agent["id"] == "finance":
+    if direct_agent and direct_agent["id"] in {"finance", "health"}:
         # Finance attachments are readable only inside this conversation's workspace.
         assigned_tools.extend(
             tool for tool in physical_tools
@@ -452,8 +474,13 @@ async def _run_agent(
         )
     if direct_agent and search_enabled:
         assigned_tools.append(by_name["search_web"])
+    business_time_prompt = (
+        f"Current service time: {datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}. "
+        "Resolve relative dates from the user's stated context; ask only for an ambiguity that changes a record. "
+    )
     system_prompt = (
         "You are the user's personal assistant. Be truthful about tool results and capability limits. "
+        + business_time_prompt
         + ("Your filesystem and execute tools operate in an isolated Linux container. /workspace is the persistent project directory shared with physical tools and the App. Use relative paths with physical file tools. /skills contains tested workflows; /tmp is temporary. No host credentials or service databases are mounted. Run scripts to solve tasks, inspect errors and repair them. Read back and validate deliverables before reporting completion. Maintain a concise WORKING.md with the goal, constraints, progress and outstanding issues during long tasks. " if sandbox else
            "The built-in ls/read_file/write_file/edit_file/glob/grep tools are a separate virtual scratch filesystem; do not claim virtual files are host artifacts. Shell execution is disabled. Do not claim that code or shell commands ran. ")
         +
@@ -480,14 +507,23 @@ async def _run_agent(
         )
     if not direct_agent and not forgetting:
         system_prompt += "\nIf asked about a personal fact absent from these notes, call browse_personal_memories before saying you do not know. Use only matching facts from its result."
-        if run["kind"] == "chat":
-            system_prompt += "\nFor multi-step research, scripting, browser or document work, call start_background_task with the user's goal and constraints. The execution model completes it after this chat turn; reply briefly with the accepted task, never claim it is already done. The user does not need to change modes."
+        system_prompt += (
+            "\nFor expense/budget requests delegate to finance; for food, diet agreements, weight, meal recommendations or follow-up delegate to agent_health. "
+            "A single message may need both services: pass the full relevant explicit facts to each, retain the original source, and report their actual receipts separately. "
+            + LIFE_INSTRUCTIONS + " "
+            "Never invent a payment amount, food portion or completed action. Clear requests can be saved immediately; ask only when an ambiguity changes the action. "
+            "Service records override old memories. Budgets and diet agreements are editable data, not permanent instructions. "
+            "Quote service amounts, dates, measurements and computed totals with their original units. Do not invent derived health or financial metrics absent from the service result. "
+            "Work/project/task-management and generic scheduled-work features are retired; do not offer to create them."
+        )
     if direct_agent:
         system_prompt += (
             f"\n\nYou are the dedicated {direct_agent['name']} agent. {direct_agent['description']} "
             f"Only use your assigned physical tools: {', '.join(tool.name for tool in assigned_tools) or 'none'}. "
             f"Cite sources when relevant.\nInstructions:\n{direct_agent['instructions']}"
         )
+        if direct_agent["id"] in service_instructions:
+            system_prompt += "\n" + service_instructions[direct_agent["id"]]
     else:
         system_prompt += (
             "\n\nThe physical file tools access only authorized host directories. "
@@ -499,7 +535,7 @@ async def _run_agent(
         {
             "name": "finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}",
             "description": f"{item['name']}: {item['description']}",
-            "system_prompt": f"You are {item['name']}. {item['description']}\n{item['instructions']}\nOnly use the explicitly assigned physical tools. Do not guess missing financial facts or claim unavailable capabilities.",
+            "system_prompt": (business_time_prompt if item["id"] in service_instructions else "") + f"You are {item['name']}. {item['description']}\n{item['instructions']}\n{service_instructions.get(item['id'], '')}\nOnly use the explicitly assigned physical tools. Do not guess missing service facts or claim unavailable capabilities.",
             "tools": [by_name[name] for name in item["tools"] if name in by_name],
             **({"model": create_model(settings, run["kind"], item["model_id"])} if item.get("model_id") else {}),
             "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=sandbox is not None, operations=operations, budget=budget)],

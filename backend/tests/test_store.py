@@ -14,6 +14,17 @@ def store(tmp_path):
     return Store(Settings(data_dir=tmp_path / "data", workspace_root=tmp_path / "work"))
 
 
+def _remove_v12_schema(db):
+    # Historical upgrade fixtures must actually represent their old schemas.
+    tables = [row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+    for table in tables:
+        if table.startswith(("health_", "life_")) or (
+            table.startswith("finance_") and table != "finance_observations"
+        ):
+            db.execute(f'DROP TABLE "{table}"')
+    db.execute("DELETE FROM agents WHERE id='health'")
+
+
 def enqueue(store, conversation, identifier, kind="task"):
     return store.submit_message(conversation, id=identifier, content=identifier, kind=kind)["run"]
 
@@ -23,7 +34,7 @@ def test_schema_and_persona_survive_reopen(store):
     reopened = Store(store.settings)
     assert reopened.get_assistant()["persona"] == "记得先核实出处"
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
         assert db.execute("PRAGMA journal_mode").fetchone()[0] == safe_journal_mode().lower()
 
 
@@ -33,7 +44,9 @@ def test_existing_v1_database_gains_agents_without_losing_conversations(tmp_path
     with sqlite3.connect(settings.data_dir / "app.sqlite") as db:
         for statement in _SCHEMA:
             db.execute(statement)
-        db.execute("INSERT INTO conversations(id,title,workspace_path,created_at,updated_at) VALUES('old','旧对话','/tmp/old','2026-09-01','2026-09-01')")
+        db.execute(
+            "INSERT INTO conversations(id,title,workspace_path,created_at,updated_at) VALUES('old','旧对话','/tmp/old','2026-09-01','2026-09-01')"
+        )
         db.execute("PRAGMA user_version=1")
     upgraded = Store(settings)
     assert upgraded.get_conversation("old")["agent_id"] is None
@@ -63,7 +76,10 @@ def test_v2_finance_agent_customization_survives_tool_upgrade(store):
         db.execute("ALTER TABLE conversations DROP COLUMN reasoning_effort")
         db.execute("ALTER TABLE conversations DROP COLUMN model_id")
         db.execute("DROP TABLE finance_observations")
-        db.execute("UPDATE agents SET instructions='用户自定要求',tools_json='[]' WHERE id='finance'")
+        db.execute(
+            "UPDATE agents SET instructions='用户自定要求',tools_json='[]' WHERE id='finance'"
+        )
+        _remove_v12_schema(db)
         db.execute("PRAGMA user_version=2")
     upgraded = Store(store.settings)
     finance = upgraded.get_agent("finance")
@@ -92,6 +108,7 @@ def test_v4_upgrade_keeps_old_conversations_without_reprocessing_them(store):
         db.execute("ALTER TABLE runs DROP COLUMN memory_processed")
         db.execute("DROP TABLE search_providers")
         db.execute("ALTER TABLE runs DROP COLUMN search_provider_id")
+        _remove_v12_schema(db)
         db.execute("PRAGMA user_version=4")
     upgraded = Store(store.settings)
     assert upgraded.get_run(run["id"])["memory_processed"] == 1
@@ -114,12 +131,13 @@ def test_v5_memory_database_gains_search_without_losing_memories(store):
         db.execute("ALTER TABLE conversations DROP COLUMN memory_reset_revision")
         db.execute("DROP TABLE search_providers")
         db.execute("ALTER TABLE runs DROP COLUMN search_provider_id")
+        _remove_v12_schema(db)
         db.execute("PRAGMA user_version=5")
     upgraded = Store(store.settings)
     assert upgraded.list_memories()["items"][0]["id"] == memory["id"]
     assert upgraded.list_search_providers()["items"] == []
     with sqlite3.connect(store.db_path) as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 11
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
 
 
 def test_v8_migration_preserves_legacy_crash_behavior_and_queue(store):
@@ -133,6 +151,7 @@ def test_v8_migration_preserves_legacy_crash_behavior_and_queue(store):
         db.execute("ALTER TABLE runs DROP COLUMN recovery_enabled")
         db.execute("ALTER TABLE runs DROP COLUMN recovery_count")
         db.execute("ALTER TABLE runs DROP COLUMN phase")
+        _remove_v12_schema(db)
         db.execute("PRAGMA user_version=8")
     upgraded = Store(store.settings)
     upgraded.recover_interrupted()
@@ -407,3 +426,90 @@ def test_withdrawing_followup_preserves_existing_failure_block(store):
     assert store.claim_next("task") is None
     store.resume_conversation(conversation)
     assert store.claim_next("task")["id"] == retained["id"]
+
+
+def test_v11_service_migration_preserves_history_and_stops_old_schedules(store):
+    from zhixing_next.finance_tools import FINANCE_TOOL_NAMES
+    from zhixing_next.health_tools import HEALTH_TOOL_NAMES
+
+    project = store.create_project("历史项目")
+    conversation = store.create_conversation("旧会话", project["id"])["id"]
+    store.submit_message(conversation, id="legacy-message", content="旧记录", kind="chat")
+    observation = store.record_finance_observation(
+        kind="balance",
+        platform="历史账户",
+        amount="81",
+        note="观察值",
+        conversation_id=conversation,
+    )
+    store.create_schedule(
+        id="old-enabled",
+        conversation_id=conversation,
+        prompt="旧主动计划",
+        next_run_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    with sqlite3.connect(store.db_path) as db:
+        _remove_v12_schema(db)
+        db.execute(
+            "UPDATE agents SET instructions='我的专属财务指令',tools_json='[\"list_finance_observations\",\"view_image\"]' WHERE id='finance'"
+        )
+        db.execute("PRAGMA user_version=11")
+    migrated = Store(store.settings)
+    assert migrated.get_conversation(conversation)["project_id"] == project["id"]
+    assert migrated.list_messages(conversation)["items"][0]["content"] == "旧记录"
+    assert migrated.list_finance_observations()["balances"][0]["id"] == observation["id"]
+    assert migrated.get_agent("finance")["instructions"] == "我的专属财务指令"
+    assert set(FINANCE_TOOL_NAMES) <= set(migrated.get_agent("finance")["tools"])
+    assert "list_finance_observations" in migrated.get_agent("finance")["tools"]
+    assert migrated.get_agent("health")["kind"] == "service"
+    assert set(HEALTH_TOOL_NAMES) <= set(migrated.get_agent("health")["tools"])
+    assert not migrated.list_schedules()["items"][0]["enabled"]
+    migrated.tick_schedules(datetime.now(UTC) + timedelta(days=2))
+    assert len(migrated.list_runs()["items"]) == 1
+    reopened = Store(store.settings)
+    assert reopened.get_agent("finance")["instructions"] == "我的专属财务指令"
+    with reopened._connection() as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 12
+        assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_new_service_tools_remain_fixed_and_custom_agents_cannot_gain_them(store):
+    from zhixing_next.finance_tools import FINANCE_TOOL_NAMES
+    from zhixing_next.health_tools import HEALTH_TOOL_NAMES
+    from zhixing_next.life_tools import LIFE_TOOL_NAMES
+
+    custom = store.create_agent(
+        name="普通助手",
+        description="只读",
+        instructions="读取资料",
+        tools=["read_text_file"],
+        visible=True,
+    )
+    for tool_name in [*FINANCE_TOOL_NAMES, *HEALTH_TOOL_NAMES, *LIFE_TOOL_NAMES]:
+        with pytest.raises(StoreError) as created:
+            store.create_agent(
+                name="越权助手", description="", instructions="", tools=[tool_name], visible=True
+            )
+        assert created.value.code == "tool_not_allowed"
+        with pytest.raises(StoreError) as updated:
+            store.update_agent(
+                custom["id"],
+                name="普通助手",
+                description="",
+                instructions="",
+                tools=[tool_name],
+                visible=True,
+            )
+        assert updated.value.code == "tool_not_allowed"
+    for identifier in ("finance", "health"):
+        service_agent = store.get_agent(identifier)
+        with pytest.raises(StoreError) as raised:
+            store.update_agent(
+                identifier,
+                name=service_agent["name"],
+                description=service_agent["description"],
+                instructions=service_agent["instructions"],
+                tools=[*service_agent["tools"], LIFE_TOOL_NAMES[0]],
+                visible=True,
+            )
+        assert raised.value.code == "tool_not_allowed"

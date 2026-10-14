@@ -76,7 +76,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 11:
+            if version > 12:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -146,6 +146,33 @@ class Store:
                 db.execute("CREATE TABLE IF NOT EXISTS task_steps(run_id TEXT NOT NULL REFERENCES runs(id),id TEXT NOT NULL,description TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',evidence_json TEXT,PRIMARY KEY(run_id,id))")
                 db.execute("CREATE TABLE IF NOT EXISTS processes(id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(id),container TEXT NOT NULL,command TEXT NOT NULL,state TEXT NOT NULL,exit_code INTEGER,created_at TEXT NOT NULL)")
                 db.execute("PRAGMA user_version=11")
+            if version < 12:
+                from .finance_service import migrate as migrate_finance
+                from .finance_tools import FINANCE_TOOL_NAMES
+                from .health_service import migrate as migrate_health
+                from .health_tools import HEALTH_INSTRUCTIONS, HEALTH_TOOL_NAMES
+                from .life_service import migrate as migrate_life
+
+                migrate_finance(db)
+                migrate_health(db)
+                migrate_life(db)
+                now = timestamp()
+                finance = db.execute("SELECT tools_json FROM agents WHERE id='finance'").fetchone()
+                finance_tools = set(json.loads(finance[0])) if finance else set()
+                finance_tools.update(FINANCE_TOOL_NAMES)
+                db.execute(
+                    "UPDATE agents SET tools_json=?,updated_at=? WHERE id='finance'",
+                    (_json(sorted(finance_tools)), now),
+                )
+                db.execute(
+                    "INSERT OR IGNORE INTO agents(id,kind,service,name,description,instructions,tools_json,visible,created_at,updated_at) "
+                    "VALUES('health','service','health','健康助手',?,?,?,1,?,?)",
+                    ("饮食记录、可修改规范、下一餐建议与体重回顾。", HEALTH_INSTRUCTIONS,
+                     _json(sorted(set(HEALTH_TOOL_NAMES) | {"view_image"})), now, now),
+                )
+                # Old generic work schedules must not continue after their UI is removed.
+                db.execute("UPDATE schedules SET enabled=0")
+                db.execute("PRAGMA user_version=12")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)
