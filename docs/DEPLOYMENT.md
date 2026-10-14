@@ -1,9 +1,13 @@
 # myVPS 部署与恢复
 
+2026-10-14 现网已更新为正式版本 [v0.2.0](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.0)，后端链接指向提交 `adeeb65e123989ac3edce4d20cf56165118f3dca`，数据库 v12。此次在停止 API／worker 后完成全量备份、校验与完整解压恢复验证，再在恢复副本验证 v11→v12 迁移；副本及生产数据库完整性、外键检查通过，旧表无丢行，旧通用计划已停用。
+
+本地与公网健康检查为 200，无令牌状态接口为 401，带令牌为 200；API／worker 活跃，真实模型连通检查完成。重启后配置与原有资料保留，`model_ready`、`worker_online` 为 true，无活动运行。公开回执、构建来源及安装说明见[0.2.0 发布验收](RELEASE-0.2.0.md)。私有数据、凭据、备份位置和私有校验值不作为公开附件。下方保留旧生产记录和首次部署模板，旧记录不代表当前 schema。
+
 2026-09-23：本页维护 Linux/systemd 部署步骤；是否已上线及实际提交、模型调用结果由部署验收回执记录。
 新助手独立安装，复用现有 HTTPS Nginx 入口的 `/assistant` 路径。旧知行服务与它的数据目录保持独立。
 
-2026-09-30 的历史生产回执已确认 `da47fa8bb8b12037cf1eaaebf8c3cdaea4baa829`、数据库 v11、API/worker 活跃，以及图片、表格、GitLab 读取、检索与运行中取消的真实验收。回执保存在验收机 `Documents/Codex/acceptance/zhixing-production-20260930/`；本页修订未重新探测生产。下方是首次安装模板，默认关闭 Shell；实际启用和数据库升级需遵循[升级说明](HARNESS-UPGRADE.md)，后续代码合入不等于生产已更新。
+2026-09-30 的历史生产回执已确认 `da47fa8bb8b12037cf1eaaebf8c3cdaea4baa829`、数据库 v11、API/worker 活跃，以及图片、表格、GitLab 读取、检索与运行中取消的真实验收。回执保存在验收机 `Documents/Codex/acceptance/zhixing-production-20260930/`；这条旧回执仅描述当时版本。2026-10-14 当前部署结果见页首。下方是首次安装模板，默认关闭 Shell；实际启用和数据库升级需遵循[升级说明](HARNESS-UPGRADE.md)，后续代码合入不等于生产已更新。
 
 ## 布局
 
