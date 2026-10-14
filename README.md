@@ -6,9 +6,9 @@
 
 同一句中的明确餐费与实际饮食可在一个事务内记录、关联和纠正。旧工作、项目管理、任务模式和通用计划入口已移除；历史与聊天运行底座保留，数据库 v12 迁移会停用已有通用计划。附件、记忆、供应商设置和主／子 Agent 对话继续使用原链路。
 
-本机健康提醒滚动安排未来 14 天，每次同步按当前规则更新；“今天不提醒这台手机”可离线取消当天排期。权限、系统限制和长期不打开 App 会影响提醒，尚需实体手机逐项验收。
+本机健康提醒滚动安排未来 14 天，每次同步按当前规则更新；“今天不提醒这台手机”可离线取消当天排期。权限、系统限制和长期不打开 App 会影响提醒。本次按用户要求完成 Android 模拟器原生验收，已观察到退出后实际通知与点击跳转；投递可能延迟，实体手机与厂商电池策略未覆盖。
 
-**0.2.0 正在完成发布验收，源码实现不代表已经部署或发布。** 独立 Android 安装、签名、后端版本和待回填结果见[发布与安装说明](docs/RELEASE-0.2.0.md)。以前文档中的生产回执只证明当时版本，不能代表本轮已上线。主机迁移不作为本次发布依赖。
+**[0.2.0 已正式发布](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.0)**，标签与现网后端均对应 `adeeb65`，数据库 v12。[下载 ARM64 APK](https://work.8-208-118-119.sslip.io/assistant-downloads/zhixing-next-0.2.0-arm64.apk)，安装与连接步骤、公开哈希、同证书覆盖安装和实际验收边界见[发布与安装说明](docs/RELEASE-0.2.0.md)。安装包内嵌 JS，无需 Metro；首次连接仍需自己的服务访问令牌。
 
 ## 本地开发
 
@@ -32,7 +32,7 @@ npm run bundle:ios
 npx expo-doctor
 ```
 
-后端在 `backend/` 执行 `uv run pytest -q` 与 `uv run ruff check .`。`bundle:*` 只生成 JS/Hermes 产物。正式 APK 通过[签名构建脚本](scripts/build_android_release.py)生成并内嵌 JS，支持 Android API 24 起；本次手机交付以 arm64 APK 为目标。原生安装、真机通知、覆盖升级与发布附件下载校验分别验收，记录在[0.2.0 说明](docs/RELEASE-0.2.0.md)。
+后端在 `backend/` 执行 `uv run pytest -q` 与 `uv run ruff check .`。`bundle:*` 只生成 JS/Hermes 产物。正式 APK 通过[签名构建脚本](scripts/build_android_release.py)生成并内嵌 JS，支持 Android API 24 起；本次交付的 APK 仅包含 arm64。已完成模拟器独立安装、同证书覆盖、实际通知、生产部署和发布附件下载校验，记录在[0.2.0 说明](docs/RELEASE-0.2.0.md)；实体 Android 手机和原生 iOS 未覆盖，不作为此次发布门槛。
 
 ## 入口
 
