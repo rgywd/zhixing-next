@@ -283,7 +283,6 @@ function ConnectedSession({
   const currentComposer = composerContext?.conversationId === selectedId ? composerContext : null;
   const selectedModel = catalog?.items.find((item) => item.id === (currentComposer ? currentComposer.modelId : selected?.model_id ?? catalog.roles.chat));
   const [serviceVersion, setServiceVersion] = useState(0);
-  const [financeEntry, setFinanceEntry] = useState<"record" | undefined>();
   const observedRunStates = useRef(new Map<string, Run["status"]>());
   const showTabs = tab !== "chat" && (tab !== "life" || lifePage === "overview") && (tab !== "settings" || settingsView === "overview");
   useHealthReminders(connection, serviceVersion, () => openLifePage("health"));
@@ -309,9 +308,8 @@ function ConnectedSession({
     setTab(chatReturn.tab);
     setLifePage(chatReturn.lifePage);
   }
-  function openLifePage(page: LifePage, financeAction?: "record") {
+  function openLifePage(page: LifePage) {
     navigation.current++;
-    setFinanceEntry(page === "finance" ? financeAction : undefined);
     setLifePage(page);
     setTab("life");
   }
@@ -581,14 +579,14 @@ function ConnectedSession({
           preferencesReady={home.ready} preferenceError={home.error} onPreferenceRetry={home.retry} onTogglePin={home.toggle}
           onOpenResource={openResource} onResources={openResources} onChat={openMainChat} onOpenConversation={openConversation}
           onLife={() => selectTab("life")} onWork={() => selectTab("work")}
-          onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} onRecordExpense={() => openLifePage("finance", "record")} />
+          onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} onRecordExpense={() => openAgent("finance")} />
       ) : tab === "work" ? (
         <ConstructionPage />
       ) : tab === "life" ? lifePage === "overview" ? (
         <LifePanel onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} onChat={lifeChat}
           intro={<LifeSummary connection={connection} refreshKey={serviceVersion} onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} />} />
       ) : lifePage === "finance" ? (
-        <FinanceDashboard connection={connection} initialAction={financeEntry} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("finance", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
+        <FinanceDashboard connection={connection} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("finance", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
       ) : (
         <HealthPage connection={connection} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("health", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
       ) : tab === "chat" ? (

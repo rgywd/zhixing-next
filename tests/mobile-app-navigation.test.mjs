@@ -78,14 +78,15 @@ test("life services open their own agent chats and return to the exact service b
     const app = appHarness(); app.render(); await settle(); openLifeService(app, agent);
     const service = find(app, pageName); assert.ok(service); assert.equal(app.tabsVisible(), false);
     service.props.onChat(); await settle();
-    const chat = find(app, "ChatPanel"); assert.equal(chat.props.conversation.agent_id, agent); assert.equal(chat.props.initialKind, "chat");
+    const chat = find(app, "ChatPanel"); assert.equal(chat.props.conversation.agent_id, agent); assert.equal(chat.props.conversation.id, `${agent}-history`); assert.equal(chat.props.initialKind, "chat");
     assert.equal(app.tabsVisible(), false);
     app.render().find((node) => node.props?.accessibilityLabel === "返回上一页").props.onPress();
     assert.ok(find(app, pageName));
     find(app, pageName).props.onChat(); await settle(); assert.ok(find(app, "ChatPanel"));
     assert.equal(app.back(), true); assert.ok(find(app, pageName));
     find(app, pageName).props.onBack(); assert.ok(find(app, "LifePanel")); assert.equal(app.tabsVisible(), true);
-    assert.equal(app.calls.filter((call) => call.path === "/conversations" && call.method === "POST").length, 0);
+    assert.equal(app.calls.some((call) => call.method === "POST"), false, "opening an existing agent does not send a message or create a service record");
+    assert.equal(app.welcome.value.text, "hello");
     app.unmount();
   }
 });
@@ -180,17 +181,45 @@ test("today home appends its prepared prompt to the existing main draft without 
   app.unmount();
 });
 
-test("today finance and health shortcuts retain the life return path and record starts explicitly", async () => {
+test("home record opens the existing finance agent without sending and returns directly home", async () => {
   const app = appHarness(); app.render(); await settle();
-  find(app, "HomePanel").props.onRecordExpense();
-  assert.equal(find(app, "FinanceDashboard").props.initialAction, "record");
-  assert.equal(app.back(), true); assert.ok(find(app, "LifePanel"));
-  app.back(); find(app, "HomePanel").props.onFinance();
-  assert.equal(find(app, "FinanceDashboard").props.initialAction, undefined);
-  app.back(); app.render(); app.back(); find(app, "HomePanel").props.onHealth();
-  assert.ok(find(app, "HealthPage")); app.back(); assert.ok(find(app, "LifePanel"));
+  app.welcome.ready = false;
+  for (const exit of ["header", "android"]) {
+    find(app, "HomePanel").props.onRecordExpense(); await settle();
+    const chat = find(app, "ChatPanel");
+    assert.equal(chat.props.conversation.id, "finance-history"); assert.equal(chat.props.conversation.agent_id, "finance");
+    assert.equal(chat.props.initialKind, "chat"); assert.equal(app.tabsVisible(), false);
+    assert.equal(find(app, "FinanceDashboard"), undefined);
+    assert.equal(app.welcome.value.text, "hello", "opening the finance agent does not replace the main draft");
+    if (exit === "header") app.render().find((node) => node.props?.accessibilityLabel === "返回上一页").props.onPress();
+    else assert.equal(app.back(), true);
+    assert.ok(find(app, "HomePanel")); assert.equal(app.tabsVisible(), true);
+  }
   assert.equal(app.calls.some((call) => call.method === "POST"), false);
   app.unmount();
+});
+
+test("home service cards retain the life return path when reusing the same finance chat", async () => {
+  const app = appHarness(); app.render(); await settle();
+  find(app, "HomePanel").props.onRecordExpense(); await settle(); assert.ok(find(app, "ChatPanel"));
+  app.back(); find(app, "HomePanel").props.onFinance();
+  const finance = find(app, "FinanceDashboard"); assert.ok(finance); assert.equal(app.tabsVisible(), false);
+  finance.props.onChat(); await settle(); assert.equal(find(app, "ChatPanel").props.conversation.id, "finance-history");
+  app.back(); assert.ok(find(app, "FinanceDashboard"));
+  find(app, "FinanceDashboard").props.onBack(); assert.ok(find(app, "LifePanel"));
+  app.back(); find(app, "HomePanel").props.onHealth();
+  assert.ok(find(app, "HealthPage")); app.back(); assert.ok(find(app, "LifePanel"));
+  app.back(); find(app, "HomePanel").props.onRecordExpense(); await settle(); assert.ok(find(app, "ChatPanel"));
+  app.back(); assert.ok(find(app, "HomePanel"), "a previous life visit cannot become the shortcut's return destination");
+  assert.equal(app.calls.some((call) => call.method === "POST"), false);
+  app.unmount();
+});
+
+test("home record offers connection settings before a service connection exists", () => {
+  const app = appHarness({ connected: false }); app.render();
+  find(app, "HomePanel").props.onRecordExpense();
+  assert.ok(find(app, "ConnectionSettingsPanel")); assert.equal(find(app, "FinanceDashboard"), undefined);
+  assert.equal(app.calls.length, 0); app.unmount();
 });
 
 test("welcome always starts chat even when a previous installation saved task mode", async () => {
