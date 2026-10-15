@@ -98,6 +98,7 @@ export function useChat({
   const trackedRun = currentRunning
     ?? [...scopedRuns].reverse().find((run) => run.status === "queued") ?? scopedRuns.at(-1) ?? null;
   const trackedRunId = trackedRun?.id ?? null;
+  const trackedRunStatus = trackedRun?.status ?? null;
 
   useEffect(() => {
     alive.current = true;
@@ -300,7 +301,10 @@ export function useChat({
       } finally {
         const accepted = valid();
         if (controller === batch) controller = null;
-        if (accepted && (more || !liveRunFinished(buffer))) timer = setTimeout(() => { void poll(); }, more ? 100 : 800);
+        // A resumed run keeps its ID/cursor. Empty pages can precede the new
+        // runtime's reset, so an old terminal event must not stop its new poll.
+        if (accepted && (more || trackedRunStatus === "running" || trackedRunStatus === "queued" || !liveRunFinished(buffer)))
+          timer = setTimeout(() => { void poll(); }, more ? 100 : 800);
       }
     }
     refreshLive.current = () => { void poll(); };
@@ -310,7 +314,7 @@ export function useChat({
       else { controller?.abort(); controller = null; clearTimeout(timer); }
     });
     return () => { active = false; controller?.abort(); clearTimeout(timer); listener.remove(); refreshLive.current = () => undefined; };
-  }, [connection, streamScope, trackedRunId, reportLiveSync]);
+  }, [connection, streamScope, trackedRunId, trackedRunStatus, reportLiveSync]);
 
   async function loadOlder() {
     if (!previous || busy) return;

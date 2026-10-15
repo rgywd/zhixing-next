@@ -10,6 +10,12 @@ const labels: Record<string, string> = {
   list_directory: "查看文件目录", read_text_file: "读取文件", read_document: "读取资料", view_image: "查看图片",
   write_text_file: "保存文件", fetch_public_page: "读取网页", web_search: "搜索网页", search: "搜索网页",
   record_finance_entry: "记录收支", query_finance: "查看财务记录", record_health_entry: "记录健康信息",
+  get_finance_summary: "查看预算与支出", query_finance_summary: "查看预算与支出", list_finance_transactions: "查看收支记录",
+  record_finance_transaction: "记录收支", correct_finance_transaction: "纠正收支", delete_finance_transaction: "删除收支", update_finance_budget: "调整预算",
+  query_health_context: "查看健康记录", save_health_profile: "更新健康资料", save_diet_rule: "保存饮食约定",
+  record_meal: "记录饮食", record_weight: "记录体重", record_steps: "记录步数", save_meal_recommendation: "保存饮食建议",
+  record_recommendation_feedback: "记录饮食反馈", correct_health_record: "纠正健康记录", delete_health_record: "删除健康记录", save_health_reminders: "调整健康提醒",
+  record_life_meal: "记录餐费与饮食", correct_life_meal: "纠正餐费与饮食", query_life_events: "查看生活记录",
   task: "调用子助手", inspect_environment: "检查运行环境",
 };
 const statusLabels = { started: "进行中", completed: "已完成", failed: "未完成" };

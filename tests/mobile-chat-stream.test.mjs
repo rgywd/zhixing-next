@@ -143,6 +143,23 @@ test("reentering a completed conversation replays actual metadata without render
     assert.ok(![...app.timers.values()].some((timer) => timer.ms === 800)); app.unmount();
   }
 });
+test("resuming the same interrupted run keeps polling through empty pages before fresh model output", async () => {
+  let calls = 0, restarted = false;
+  const app = harness({ events: async ({ path }) => {
+    calls++;
+    if (calls === 1) return { items: [reset(), snapshot(2, "Before interruption"), event(3, "interrupted")], next_cursor: null };
+    assert.match(path, /after=3/);
+    return { items: restarted ? [reset(4, "s2"), event(5, "assistant.snapshot", { stream_id: "s2", message_id: "m2", text: "Resumed reply" })] : [], next_cursor: null };
+  } });
+  app.setRuns([run("r1", "interrupted")]); let value = await app.ready();
+  assert.equal(value.liveRun.content, "Before interruption");
+  assert.ok(![...app.timers.values()].some((timer) => timer.ms === 800));
+  app.setRuns([{ ...run("r1", "queued"), phase: "recovering" }]); value.refresh.current(); await settle(); value = app.render(); await settle();
+  assert.ok([...app.timers.values()].some((timer) => timer.ms === 800), "queued recovery must keep polling even when its event page is still empty");
+  app.setRuns([run("r1")]); value.refresh.current(); await settle(); app.render(); await settle();
+  restarted = true; value = await app.timer(800);
+  assert.equal(value.liveRun.run.id, "r1"); assert.equal(value.liveRun.content, "Resumed reply"); app.unmount();
+});
 test("background cancels incomplete history batches and late unmounted event responses are ignored", async () => {
   const pendingHistory = deferred(); let first = true;
   const app = harness({ read: ({ path }) => { if (first && path.includes("/messages?")) { first = false; return pendingHistory.promise; } } });

@@ -492,3 +492,22 @@ test("settings keep preference retry, global settings and existing pin actions r
   assert.equal(unpin.props.disabled, false); unpin.props.onPress();
   assert.deepEqual(actions, ["retry", "settings", "pin"]);
 });
+
+test("current draft delivery changes explicitly bind the displayed run in the settings sheet", async () => {
+  for (const agentId of [null, "finance", "health"]) {
+    const changes = [];
+    const draft = { text: "保留我的补充", attachments: [], pending: null, delivery: { intent: "queue" } };
+    const app = chatHarness({ draft, running: { id: "current-run", kind: "chat" }, updateDraft: async (value) => changes.push(value) });
+    let nodes = app.render({ conversation: { id: "test", agent_id: agentId }, settingsOpen: true });
+    const supplement = nodes.find((node) => node.props?.accessibilityLabel === "本条补充当前回复");
+    assert.equal(supplement.props.disabled, false); supplement.props.onPress(); await settle();
+    assert.deepEqual(JSON.parse(JSON.stringify(changes.at(-1))), { ...draft, delivery: { intent: "steer", target_run_id: "current-run" } });
+    nodes.find((node) => node.props?.accessibilityLabel === "本条接着处理").props.onPress(); await settle();
+    assert.deepEqual(JSON.parse(JSON.stringify(changes.at(-1))), { ...draft, delivery: { intent: "queue" } });
+    app.chat.draft = { ...draft, pending: { id: "immutable" } };
+    nodes = app.render({ settingsOpen: true });
+    assert.equal(nodes.find((node) => node.props?.accessibilityLabel === "本条补充当前回复").props.disabled, true);
+    const composer = nodes.find((node) => node.type === "ConversationComposer");
+    assert.doesNotMatch(text(composer), /接着处理|补充当前回复/);
+  }
+});
