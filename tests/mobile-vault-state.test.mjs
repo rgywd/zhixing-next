@@ -495,6 +495,27 @@ test("actual hook background/inactive events lock immediately, foreground never 
   assert.equal(hook.privacy.released.length, 1); noUnlockedSecrets(hook.instances[0].getSnapshot());
 });
 
+test("a completed copy survives background locking for pasting, without extending native expiry or unlocking on return", async () => {
+  const hook = vaultHook(); hook.render(); await settle();
+  assert.equal(await hook.render().unlock(FAKE_MASTER), true);
+  assert.equal(await hook.render().copy(FAKE_PASSWORD), true);
+  const clearBefore = hook.app.calls.clear, copiesBefore = hook.app.calls.copy.length;
+  hook.foreground("inactive"); hook.foreground("background"); await settle();
+  noUnlockedSecrets(hook.render()); assert.equal(hook.render().status, "locked");
+  assert.equal(hook.app.calls.clear, clearBefore, "switching apps must not erase the password before it can be pasted");
+  assert.equal(hook.app.calls.copy.length, copiesBefore, "backgrounding must not restart the native copy expiry");
+  hook.foreground("active"); await settle();
+  assert.ok(hook.app.calls.clear > clearBefore); assert.equal(hook.render().status, "locked");
+  assert.equal(await hook.render().unlock(FAKE_MASTER), true);
+  const late = deferred(); hook.app.faults.beforeCopy = () => late.promise;
+  const copying = hook.render().copy(FAKE_PASSWORD); hook.foreground("background");
+  const clearWhilePending = hook.app.calls.clear;
+  late.resolve(); assert.equal(await copying, false);
+  assert.ok(hook.app.calls.clear > clearWhilePending, "a copy that completes only after locking must be discarded");
+  noUnlockedSecrets(hook.render());
+  hook.unmount();
+});
+
 test("hook waits for privacy protection, fails closed on its failure, and late acquisition after unmount cannot read the vault", async () => {
   const gate = deferred(); const hook = vaultHook({ acquire: () => gate.promise });
   hook.render(); assert.equal(hook.app.calls.read, 0); assert.equal(hook.render().status, "loading");

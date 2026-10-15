@@ -34,7 +34,7 @@ export function usePasswordVault() {
     }
     retryPrivacy.current = () => { controller.lock(); void start(); };
     const subscription = AppState.addEventListener("change", (value) => {
-      if (value !== "active") controller.lock();
+      if (value !== "active") controller.lockInBackground();
       else void clearVaultClipboard().catch(() => undefined);
     });
     void start();

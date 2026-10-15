@@ -208,16 +208,20 @@ export class VaultController {
     try { const result = await this.ports.generate(); return !this.disposed && own === this.generation ? result : null; }
     catch { if (!this.disposed && own === this.generation) this.emit({ error: "暂时无法生成密码，请重试。" }); return null; }
   };
-  lock = () => {
+  // A completed copy keeps its native expiry when switching to the app that
+  // needs the password. Decrypted UI/session state is still removed at once.
+  lockInBackground = () => this.endSession(true);
+  lock = () => this.endSession(false);
+  private endSession(preserveCopy: boolean) {
     if (this.disposed) return;
     this.lockEpoch++;
     const session = this.session;
     this.stopDraftTimer(); this.stopIdleTimer();
-    if (this.state.status === "loading") { this.emit({}); void this.ports.clearClipboard().catch(() => undefined); return; }
+    if (this.state.status === "loading") { this.emit({}); if (!preserveCopy) void this.ports.clearClipboard().catch(() => undefined); return; }
     if (session?.dirty && this.committing !== this.generation) void this.flush(session).catch(() => undefined);
     this.generation++; this.session = null;
     const status = this.state.status === "unsupported" ? "unsupported" : this.state.status === "error" ? "error" : this.raw === null ? "create" : "locked";
-    this.emit(initialState(status)); void this.ports.clearClipboard().catch(() => undefined);
-  };
+    this.emit(initialState(status)); if (!preserveCopy) void this.ports.clearClipboard().catch(() => undefined);
+  }
   dispose = () => { if (this.disposed) return; this.lock(); this.disposed = true; this.listeners.clear(); };
 }
