@@ -11,7 +11,7 @@ import { ActionLink, BackLink, Button, CardHeader, Empty, Field, PageHeading, Pa
 const ruleKinds = { guideline: "饮食约定", restriction: "必须遵守的限制", preference: "偏好" };
 const ruleStates = { active: "生效", paused: "暂停", proposed: "待采纳" };
 const feedbackLabels = { accepted: "已采纳", replaced: "希望替换", declined: "这次不采用" };
-export function HealthPage({ connection, onChat, onChanged, refreshKey }: ServicePageProps) {
+export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
   const { s } = useUi();
   const { show } = useNotice();
   const [date, setDate] = useState(localDate());
@@ -62,7 +62,7 @@ export function HealthPage({ connection, onChat, onChanged, refreshKey }: Servic
     const titles: Record<string, string> = { meal: draft.context.record ? "纠正饮食记录" : "记录实际饮食", weight: "记录体重", steps: "记录步数", profile: "身体资料与限制", rule: "饮食规范", reminders: "用餐与回顾提醒", feedback: "这次怎么选择", delete: "删除这条记录" };
     return <View style={s.body}>
       <BackLink label="健康" onPress={editor.close} />
-      <PageScrollView tabs>
+      <PageScrollView tabs={!onBack}>
         <PageHeading title={titles[draft.kind]} description={draft.kind === "feedback" ? "选择建议和实际吃下的食物分别记录。" : "按实际情况填写，之后可以随时调整。"} />
         <View style={s.form}>
           {draft.kind === "meal" ? <>
@@ -123,7 +123,9 @@ export function HealthPage({ connection, onChat, onChanged, refreshKey }: Servic
     </View>;
   }
   const trend = data?.review.weight_trend;
-  return <PageScrollView tabs>
+  return <View style={s.body}>
+    {onBack ? <BackLink label="生活" onPress={onBack} /> : null}
+    <PageScrollView tabs={!onBack}>
     <PageHero eyebrow="HEALTH" title="健康" description="聊出适合你的饮食安排，记录变化，一起调整。" />
     <View style={s.spread}><ActionLink icon="chevron-back" tone="neutral" onPress={() => shiftDate(-1)}>前一天</ActionLink><ActionLink tone="neutral" onPress={() => setDate(localDate())}>{date === localDate() ? "今天" : date}</ActionLink><ActionLink icon="chevron-forward" tone="neutral" onPress={() => shiftDate(1)}>后一天</ActionLink></View>
     {snapshot.loading && !data ? <ActivityIndicator accessibilityLabel="正在读取健康数据" /> : null}
@@ -200,7 +202,7 @@ export function HealthPage({ connection, onChat, onChanged, refreshKey }: Servic
       <Text style={s.muted}>{data?.reminders.enabled ? `已开启 ${data.reminders.slots.length} 个时段；每天最多 ${data.reminders.max_per_day} 次。` : "提醒尚未开启。"}本机权限和排期结果会单独反馈。</Text>
       <ActionLink tone="neutral" disabled={snapshot.loading} onPress={() => void snapshot.reload()}>刷新数据</ActionLink>
     </View>
-  </PageScrollView>;
+  </PageScrollView></View>;
 }
 
 export function buildHealthMutation(draft: ServiceDraft): ServiceMutation {

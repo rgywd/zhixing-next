@@ -13,8 +13,8 @@ const assumptionLabels: Record<string, string> = {
   projection_uses_budget_not_observed_spending_rate: "记录覆盖尚未确认完整，剩余日常支出暂按预算安排估计。",
 };
 const bucketLabels = { daily: "日常", fixed: "固定", one_time: "一次性" } as const;
-export type ServicePageProps = { connection: Connection; onChat: (prompt?: string) => void; onChanged?: () => void; refreshKey?: number };
-export function FinanceDashboard({ connection, onChat, onChanged, refreshKey }: ServicePageProps) {
+export type ServicePageProps = { onBack?: () => void; connection: Connection; onChat: (prompt?: string) => void; onChanged?: () => void; refreshKey?: number };
+export function FinanceDashboard({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
   const { s } = useUi();
   const { show } = useNotice();
   const [month, setMonth] = useState(localDate().slice(0, 7));
@@ -49,7 +49,7 @@ export function FinanceDashboard({ connection, onChat, onChanged, refreshKey }: 
     const title = draft.kind === "budget" ? "预算与结余目标" : draft.kind === "delete" ? "删除这笔记录" : draft.context.record ? "纠正收支" : "记一笔收支";
     return <View style={s.body}>
       <BackLink label="财务" onPress={editor.close} />
-      <PageScrollView tabs>
+      <PageScrollView tabs={!onBack}>
         <PageHeading title={title} description={draft.kind === "budget" ? "金额可留空。修改计划保留历史实际收支。" : "按真实发生日期入账；不依赖模型。"} />
         {draft.kind === "budget" ? <View style={s.form}>
           {input("month", "生效月份（返回财务页可切换）", { editable: false })}
@@ -90,7 +90,9 @@ export function FinanceDashboard({ connection, onChat, onChanged, refreshKey }: 
       </PageScrollView>
     </View>;
   }
-  return <PageScrollView tabs>
+  return <View style={s.body}>
+    {onBack ? <BackLink label="生活" onPress={onBack} /> : null}
+    <PageScrollView tabs={!onBack}>
     <PageHero eyebrow="FINANCE" title="财务" description="记录实际开销，按当前目标安排接下来的生活。" />
     <View style={s.spread}><ActionLink icon="chevron-back" tone="neutral" onPress={() => shiftMonth(-1)}>上个月</ActionLink><Text style={s.itemTitle}>{month}</Text><ActionLink icon="chevron-forward" tone="neutral" onPress={() => shiftMonth(1)}>下个月</ActionLink></View>
     {snapshot.loading && !data ? <ActivityIndicator accessibilityLabel="正在读取财务" /> : null}
@@ -131,7 +133,7 @@ export function FinanceDashboard({ connection, onChat, onChanged, refreshKey }: 
       {data && data.records.total > data.records.items.length ? <Text style={s.muted}>这里显示最近 {data.records.items.length} 笔；可让财务助手查询更早的记录。</Text> : null}
       <ActionLink onPress={() => void snapshot.reload()} disabled={snapshot.loading}>刷新数据</ActionLink>
     </View>
-  </PageScrollView>;
+  </PageScrollView></View>;
 }
 
 export function buildFinanceMutation(draft: ServiceDraft): ServiceMutation {
