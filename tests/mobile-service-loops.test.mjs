@@ -125,7 +125,8 @@ test("an uncertain save is persisted, survives remount, and retries exactly once
   assert.equal(render().locked, true); assert.equal(render().draft.fields.amount, "18");
   render().set("amount", "99"); assert.equal(render().draft.fields.amount, "18");
   app.remount(); render(); await settle();
-  assert.equal(render().visible, true); assert.equal(render().draft.fields.amount, "18");
+  assert.equal(render().visible, false); assert.equal(render().draft.fields.amount, "18");
+  render().resume(); assert.equal(render().visible, true);
   await render().submit(() => assert.fail("must replay saved payload"));
   assert.equal(calls.length, 2); assert.deepEqual(JSON.parse(JSON.stringify(calls[0])), JSON.parse(JSON.stringify(calls[1])));
   assert.equal(saved.length, 1); assert.equal(render().draft, null);
@@ -142,6 +143,76 @@ test("validation or permission failure preserves editable input and never posts 
   render().set("slots", "13:00 午餐"); assert.equal(render().draft.fields.slots, "13:00 午餐");
 });
 
+test("untouched new forms do not become recoverable drafts just because their defaults are populated", async () => {
+  for (const [kind, fields, context] of [
+    ["meal", { date: "2028-06-02", time: "12:10", meal_type: "lunch", status: "recorded", description: "", portion: "", note: "" }, {}],
+    ["weight", { date: "2028-06-02", time: "12:10", value: "", unit: "kg", note: "" }, {}],
+    ["profile", { height_cm: "181", activity_limitations: "原有限制", food_allergies: "", preferences: "", goals: "" }, { profile: { revision: 3 } }],
+  ]) {
+    const app = setup(), notices = [], key = `zhixing.service-draft.v1:${encodeURIComponent(connection.url)}:health`;
+    const render = () => app.render(() => app.forms.useServiceEditor(connection, "health", () => {}, () => notices.push("recovered")));
+    render(); await settle(); render().open(kind, fields, context); render().close(); await settle();
+    assert.equal(render().draft, null, kind); assert.equal(render().visible, false); assert.equal(JSON.parse(app.storage.get(key)), null); assert.equal(notices.length, 0);
+    app.remount(); render(); await settle(); assert.equal(render().draft, null); assert.equal(notices.length, 0);
+  }
+});
+
+test("a changed draft prompts once, remains available, and does not interrupt the overview on reentry", async () => {
+  const app = setup(), notices = [], key = `zhixing.service-draft.v1:${encodeURIComponent(connection.url)}:health`;
+  const render = () => app.render(() => app.forms.useServiceEditor(connection, "health", () => {}, () => notices.push("recovered")));
+  render(); await settle(); render().open("meal", { description: "", date: "2028-06-02", time: "12:10" });
+  render().set("description", "尚未提交的午餐"); const id = render().draft.id;
+  render().close(); await settle(); assert.equal(render().visible, false); assert.equal(notices.length, 1);
+  assert.equal(JSON.parse(app.storage.get(key)).fields.description, "尚未提交的午餐");
+  render().resume(); assert.equal(render().visible, true); render().close(); await settle(); assert.equal(notices.length, 1);
+  app.remount(); render(); await settle(); assert.equal(render().visible, false); assert.equal(render().draft.id, id); assert.equal(notices.length, 1);
+  render().open("weight", { value: "" }); assert.equal(render().visible, true); assert.equal(render().draft.kind, "meal", "ordinary entry still resumes the retained draft");
+  render().discard(); await settle(); assert.equal(render().draft, null);
+  render().open("weight", { value: "" }); render().set("value", "81"); render().close(); await settle(); assert.equal(notices.length, 2, "a new draft can notify again");
+});
+
+test("legacy drafts recover once without automatic navigation or field loss", async () => {
+  const app = setup(), notices = [], key = `zhixing.service-draft.v1:${encodeURIComponent(connection.url)}:health`;
+  app.storage.set(key, JSON.stringify(draft("meal", { description: "旧版本未提交内容" })));
+  const render = () => app.render(() => app.forms.useServiceEditor(connection, "health", () => {}, () => notices.push("recovered")));
+  render(); await settle(); assert.equal(render().ready, true); assert.equal(render().visible, false); assert.equal(notices.length, 1);
+  assert.equal(render().draft.fields.description, "旧版本未提交内容"); render().resume(); render().close(); await settle();
+  assert.notEqual(render().draft, null, "legacy drafts without a baseline are retained conservatively");
+  app.remount(); render(); await settle(); assert.equal(render().visible, false); assert.equal(notices.length, 1);
+  assert.equal(render().draft.fields.description, "旧版本未提交内容");
+});
+
+test("valid zero steps, skipped meals and clearing an existing restriction remain recoverable changes", async () => {
+  for (const [kind, fields, changes, context] of [
+    ["steps", { value: "", date: "2028-06-02" }, { value: "0" }, {}],
+    ["meal", { description: "", status: "recorded" }, { status: "skipped" }, {}],
+    ["profile", { activity_limitations: "旧限制" }, { activity_limitations: "" }, { profile: { revision: 3 } }],
+    ["meal", { description: "建议中的餐食", portion: "" }, { portion: "一碗" }, { recommendation_id: "recommendation-original" }],
+  ]) {
+    const app = setup(), notices = [];
+    const render = () => app.render(() => app.forms.useServiceEditor(connection, "health", () => {}, () => notices.push("recovered")));
+    render(); await settle(); render().open(kind, fields, context);
+    for (const [field, value] of Object.entries(changes)) render().set(field, value);
+    render().close(); await settle(); assert.notEqual(render().draft, null, kind); assert.equal(notices.length, 1);
+    app.remount(); render(); await settle();
+    for (const [field, value] of Object.entries(changes)) assert.equal(render().draft.fields[field], value);
+    if (context.recommendation_id) assert.equal(render().draft.context.recommendation_id, context.recommendation_id);
+  }
+});
+
+test("an untouched pending request survives closing and reentry even when its fields equal the initial baseline", async () => {
+  const calls = [], notices = []; const app = setup(async (_connection, mutation) => { calls.push(mutation); throw new Error("响应丢失"); });
+  const render = () => app.render(() => app.forms.useServiceEditor(connection, "finance", () => {}, () => notices.push("recovered")));
+  render(); await settle(); render().open("transaction", { amount: "18", date: "2028-06-02" });
+  await render().submit((source) => ({ path: "/finance/transactions", method: "POST", body: { idempotency_key: source.id, amount: source.fields.amount } }));
+  render().close(); await settle(); const pending = JSON.parse(JSON.stringify(render().draft.pending));
+  assert.equal(render().locked, true); assert.equal(notices.length, 1);
+  app.remount(); render(); await settle(); assert.equal(render().visible, false); assert.equal(render().locked, true); assert.equal(notices.length, 1);
+  assert.deepEqual(JSON.parse(JSON.stringify(render().draft.pending)), pending);
+  await render().submit(() => assert.fail("pending payload must not be rebuilt")); assert.equal(calls.length, 2);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls[1])), pending);
+});
+
 test("cached service data remains visible when a fresh connection fails", async () => {
   const app = setup(); let fail = false;
   const read = async () => { if (fail) throw new Error("离线"); return { month: "2028-06", total: "32" }; };
@@ -156,21 +227,21 @@ function walk(node) {
   if (Array.isArray(node)) return node.flatMap(walk);
   return [node, ...walk(node.props?.children)];
 }
-function screen(name, data, editing = null) {
-  const opened = [], saved = [], backs = [];
-  const editor = { draft: editing, visible: Boolean(editing), busy: false, ready: true, locked: false, error: "", storageError: "", open: (...args) => opened.push(args), close: () => backs.push(true), resume() {}, discard() {}, set() {}, submit: (...args) => saved.push(args) };
+function screen(name, data, editing = null, { visible = Boolean(editing) } = {}) {
+  const opened = [], saved = [], backs = [], notices = [], recovery = [];
+  const editor = { draft: editing, visible, busy: false, ready: true, locked: false, error: "", storageError: "", open: (...args) => opened.push(args), close: () => backs.push(true), resume() { editor.visible = true; }, discard() {}, set() {}, submit: (...args) => saved.push(args) };
   const lifecycle = hooks(); const actual = setup().forms;
   const component = load(name, {
     ...design, "react/jsx-runtime": jsxRuntime, react: lifecycle.react,
     "react-native": { StyleSheet: { create: (value) => value }, View: "View", Text: "Text", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator", BackHandler: { addEventListener: (_event, callback) => { backs.push(callback); return { remove() {} }; } } },
-    "./api": {}, "./Notice": { useNotice: () => ({ show() {} }) }, "./serviceApi": { readFinanceDashboard() {}, readHealthSummary() {} },
-    "./serviceForms": { ...actual, useServiceEditor: () => editor, useServiceSnapshot: () => ({ data, loading: false, error: "", reload() {} }) }, "./ui": ui,
+    "./api": {}, "./Notice": { useNotice: () => ({ show: (notice) => notices.push(notice), dismiss() {} }) }, "./serviceApi": { readFinanceDashboard() {}, readHealthSummary() {} },
+    "./serviceForms": { ...actual, useServiceEditor: (_connection, _service, _saved, onRecovery) => { recovery.push(onRecovery); return editor; }, useServiceSnapshot: () => ({ data, loading: false, error: "", reload() {} }) }, "./ui": ui,
     "./deviceCapabilities": { allowNotifications: async () => {} }, "./healthNotifications": { pauseHealthNotificationsForToday: async () => {} },
   })[name];
   const chats = [];
   const render = () => walk(lifecycle.render(() => component({ connection, onChat: (prompt) => chats.push(prompt) })));
   const nodes = render();
-  return { nodes, render, opened, saved, backs, chats, editor };
+  return { nodes, render, opened, saved, backs, chats, editor, notices, recovery };
 }
 function healthData(recommendations = []) {
   return { date: "2028-06-02", profile: { revision: 0, height_cm: null, activity_limitations: [], food_allergies: [], food_exclusions: [], preferences: [], goals: [] }, rules: [], all_rules: [], meals: [], weights: [], steps: [], recommendations, reminders: { revision: 0, enabled: false, slots: [], timezone: "Asia/Shanghai", max_per_day: 3, paused_dates: [], quiet_start: null, quiet_end: null }, review: { weight_trend: { count: 0, latest_kg: null, change_kg: null }, recent_choices: [] } };
@@ -193,6 +264,17 @@ test("service form uses shared fields and Android back returns to the overview w
   const back = page.backs.find((entry) => typeof entry === "function");
   assert.equal(back(), true); assert.equal(page.editor.draft.fields.description, "未提交的午饭");
   assert.ok(page.nodes.some((node) => node.type === "Button" && node.props.children === "保存"));
+});
+
+test("health and finance use a temporary recovery action instead of a permanent overview button", () => {
+  for (const [name, data] of [["HealthPage", healthData()], ["FinanceDashboard", null]]) {
+    const editing = draft(name === "HealthPage" ? "meal" : "transaction", { description: "保留的内容", amount: "18", kind: "expense", date: "2028-06-02", bucket: "daily", category: "", note: "", commitment: "", related: "" }, { record: null, commitments: [] });
+    const page = screen(name, data, editing, { visible: false });
+    assert.equal(page.nodes.some((node) => node.type === "Button" && node.props.children === "继续尚未完成的编辑"), false);
+    assert.equal(typeof page.recovery.at(-1), "function"); page.recovery.at(-1)(page.editor.resume);
+    const notice = page.notices.at(-1); assert.equal(notice.duration, 6000); assert.equal(notice.action.label, "继续编辑");
+    notice.action.onPress(); assert.equal(page.editor.visible, true); assert.ok(page.render().some((node) => node.type === "Button" && node.props.children === "保存"));
+  }
 });
 
 test("a recommendation adoption opens feedback instead of silently recording a meal", () => {

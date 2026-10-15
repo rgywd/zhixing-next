@@ -16,7 +16,7 @@ const feedbackLabels = { accepted: "已采纳", replaced: "希望替换", declin
 export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
   const { s } = useUi();
   const v = useServiceStyles();
-  const { show } = useNotice();
+  const { show, dismiss } = useNotice();
   const [date, setDate] = useState(localDate());
   const [showAllWeights, setShowAllWeights] = useState(false);
   const [pausing, setPausing] = useState(false);
@@ -27,7 +27,8 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
     show({ message: saved.kind === "reminders" ? "提醒偏好已保存，正在同步本机排期" : "健康数据已保存", tone: "success" });
     void snapshot.reload(); onChanged?.();
     if (saved.kind === "feedback" && saved.fields.action === "replaced") onChat("请根据我刚保存的替换原因和当前饮食约定，重新推荐这顿饭，并保存新的建议供我选择。");
-  });
+  }, (resume) => show({ id: "health-draft", message: "尚未完成的健康编辑已保留", duration: 6000, action: { label: "继续编辑", onPress: () => { dismiss("health-draft"); resume(); } } }));
+  useEffect(() => () => dismiss("health-draft"), [dismiss]);
   useEffect(() => {
     if (!editor.visible) return;
     const handler = BackHandler.addEventListener("hardwareBackPress", () => { editor.close(); return true; });
@@ -138,7 +139,6 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
       {snapshot.loading && !data ? <ActivityIndicator accessibilityLabel="正在读取健康数据" /> : null}
       {snapshot.error ? <View style={s.notice}><Text accessibilityRole="alert" style={s.error}>{data ? "当前显示上次同步的数据。" : "健康摘要尚未读取。"}{snapshot.error}</Text><ActionLink disabled={snapshot.loading} onPress={() => void snapshot.reload()}>重新连接并刷新</ActionLink></View> : null}
       {editor.storageError ? <View style={s.stack}><Text accessibilityRole="alert" style={s.error}>{editor.storageError}</Text>{!editor.ready ? <ActionLink onPress={editor.retryRead}>重新读取本机草稿</ActionLink> : null}</View> : null}
-      {editor.draft ? <Button secondary onPress={editor.resume}>继续尚未完成的编辑</Button> : null}
 
       <ServiceCard>
         <ServiceSectionHeader icon="restaurant-outline" title="饮食安排" subtitle="根据当前约定，挑选能做到的一顿" action={<ActionLink disabled={!editor.ready} onPress={() => openRule()}>调整</ActionLink>} />

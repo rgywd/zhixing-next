@@ -19,11 +19,13 @@ export type ServicePageProps = { onBack?: () => void; connection: Connection; on
 export function FinanceDashboard({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
   const { s, colors } = useUi();
   const styles = useServiceStyles();
-  const { show } = useNotice();
+  const { show, dismiss } = useNotice();
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const read = useCallback(() => readFinanceDashboard(connection, month), [connection, month]);
   const snapshot = useServiceSnapshot(connection, `finance:${month}`, read, refreshKey);
-  const editor = useServiceEditor(connection, "finance", () => { show({ message: "财务数据已保存", tone: "success" }); void snapshot.reload(); onChanged?.(); });
+  const editor = useServiceEditor(connection, "finance", () => { show({ message: "财务数据已保存", tone: "success" }); void snapshot.reload(); onChanged?.(); },
+    (resume) => show({ id: "finance-draft", message: "尚未完成的财务编辑已保留", duration: 6000, action: { label: "继续编辑", onPress: () => { dismiss("finance-draft"); resume(); } } }));
+  useEffect(() => () => dismiss("finance-draft"), [dismiss]);
   useEffect(() => {
     if (!editor.visible) return;
     const handler = BackHandler.addEventListener("hardwareBackPress", () => { editor.close(); return true; });
@@ -104,7 +106,6 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
       {snapshot.loading && !data ? <ActivityIndicator accessibilityLabel="正在读取财务" /> : null}
       {snapshot.error ? <View style={s.notice}><Text accessibilityRole="alert" style={s.error}>{data ? "当前显示上次同步的数据。" : "财务摘要尚未读取。"}{snapshot.error}</Text><ActionLink onPress={() => void snapshot.reload()} disabled={snapshot.loading}>重新连接并刷新</ActionLink></View> : null}
       {editor.storageError ? <View style={s.stack}><Text accessibilityRole="alert" style={s.error}>{editor.storageError}</Text>{!editor.ready ? <ActionLink onPress={editor.retryRead}>重新读取本机草稿</ActionLink> : null}</View> : null}
-      {editor.draft ? <Button secondary onPress={editor.resume}>继续尚未完成的编辑</Button> : null}
 
       <ServiceCard>
         <ServiceSectionHeader icon="card-outline" title="本月安排" subtitle={budget?.source_month && budget.source_month !== month ? `沿用 ${budget.source_month} 的预算` : budget?.recurring ? "预算会沿用到后续月份" : budget ? "本月独立设置" : "预算可随时调整"} action={<ActionLink disabled={!editor.ready} onPress={openBudget}>调整</ActionLink>} />
