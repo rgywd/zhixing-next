@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, BackHandler, Pressable, Text, View } from "react-native";
 import type { Connection } from "./api";
 import { useNotice } from "./Notice";
@@ -6,7 +6,7 @@ import { readFinanceDashboard, type FinanceBudget, type FinanceCommitment, type 
 import { localDate, moneyInput, moneyLabel, parseCommitments, requireDate, useServiceEditor, useServiceSnapshot, type ServiceDraft } from "./serviceForms";
 import { ActionLink, BackLink, Button, Field, PageHeading, PageScrollView, StatusPill, SwitchRow, useUi } from "./ui";
 
-import { ServiceToolbar, ServiceHeading, ServiceCard, ServiceSectionHeader, ServiceMetric, ServiceChatRow, ServiceEmpty, useServiceStyles } from "./ServicePrimitives";
+import { ServiceToolbar, ServiceHeading, ServiceCard, ServiceSectionHeader, ServiceMetric, ServiceEmpty, useServiceStyles } from "./ServicePrimitives";
 
 const kindLabels = { expense: "支出", income: "收入", transfer: "转账／还款", refund: "退款" } as const;
 const assumptionLabels: Record<string, string> = {
@@ -16,7 +16,7 @@ const assumptionLabels: Record<string, string> = {
 };
 const bucketLabels = { daily: "日常", fixed: "固定", one_time: "一次性" } as const;
 export type ServicePageProps = { onBack?: () => void; connection: Connection; onChat: (prompt?: string) => void; onChanged?: () => void; refreshKey?: number };
-export function FinanceDashboard({ connection, onBack, onChat, onChanged, refreshKey, initialAction }: ServicePageProps & { initialAction?: "record" }) {
+export function FinanceDashboard({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
   const { s, colors } = useUi();
   const styles = useServiceStyles();
   const { show, dismiss } = useNotice();
@@ -33,17 +33,10 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
   }, [editor]);
   const data = snapshot.data;
   const budget = data?.summary.budget;
-  const initialOpened = useRef(false);
   const openTransaction = useCallback((item?: FinanceTransaction) => editor.open("transaction", {
     kind: item?.kind ?? "expense", amount: item?.amount ?? "", date: item?.occurred_on ?? localDate(), bucket: item?.bucket ?? "daily",
     category: item?.category ?? "", note: item?.note ?? "", commitment: item?.commitment_key ?? "", related: item?.related_transaction_id ?? "",
   }, { record: item ?? null, commitments: budget?.commitments ?? [] }), [editor, budget]);
-  useEffect(() => {
-    if (initialAction !== "record" || initialOpened.current || !editor.ready || snapshot.loading) return;
-    initialOpened.current = true;
-    dismiss("finance-draft");
-    openTransaction();
-  }, [initialAction, editor.ready, snapshot.loading, dismiss, openTransaction]);
   const openBudget = () => editor.open("budget", {
     month, income: budget?.expected_income ?? "", savings: budget?.savings_target ?? "", daily: budget?.daily_budget ?? "",
     recurring: (budget?.recurring ?? true) ? "yes" : "no", commitments: (budget?.commitments ?? []).map((item) => `${item.label} | ${item.amount} | ${item.kind === "fixed" ? "固定" : "大件"}`).join("\n"),
@@ -62,7 +55,7 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
     return <View style={s.body}>
       <BackLink label="财务" onPress={editor.close} />
       <PageScrollView tabs={!onBack}>
-        <PageHeading title={title} description={draft.kind === "budget" ? "金额可留空。修改计划保留历史实际收支。" : "按真实发生日期入账；不依赖模型。"} />
+        <PageHeading title={title} description={draft.kind === "budget" ? "金额可留空。修改计划保留历史实际收支。" : "按实际发生的日期和金额修改。"} />
         {draft.kind === "budget" ? <View style={s.form}>
           {input("month", "生效月份（返回财务页可切换）", { editable: false })}
           {input("income", "预计全月到手收入", { keyboardType: "decimal-pad", placeholder: "可暂不设置" })}
@@ -137,8 +130,8 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
           <ServiceMetric label="日常上限" value={moneyLabel(budget?.daily_budget)} detail={budget?.daily_budget == null ? "点击设定上限" : "控制每月日常消费"} actionLabel={budget?.daily_budget == null ? "设定上限" : undefined} onPress={budget?.daily_budget == null ? openBudget : undefined} disabled={!editor.ready} tone="gold" />
         </View>
         {summary?.projection.assumptions.filter((item) => item === "projection_uses_budget_not_observed_spending_rate").map((item) => <Text key={item} style={styles.tiny}>{assumptionLabels[item]}</Text>)}
-        <Button icon="add" style={styles.primaryButton} disabled={!editor.ready} onPress={() => openTransaction()}>记一笔收支</Button>
-        <ServiceChatRow title="和财务助手聊聊" description="发账单截图或说明开销" onPress={() => onChat()} />
+        <Button icon="sparkles-outline" style={styles.primaryButton} onPress={() => onChat()}>记一笔收支</Button>
+        <Text style={styles.tiny}>说一句话或发账单截图，知行帮你记。</Text>
       </ServiceCard>
 
       <ServiceCard>
@@ -162,12 +155,15 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
           <View style={styles.recordRow}><View style={styles.recordMain}><Text style={s.itemTitle}>{item.category || kindLabels[item.kind]}</Text><Text style={styles.tiny}>{item.occurred_on} · {kindLabels[item.kind]} · {bucketLabels[item.bucket]}</Text></View><Text style={styles.recordAmount}>{item.kind === "expense" ? "−" : item.kind === "income" || item.kind === "refund" ? "+" : ""}{moneyLabel(item.amount)}</Text></View>
           {item.note ? <Text style={styles.muted}>{item.note}</Text> : null}
           <View style={s.wrap}><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openTransaction(item)}>纠正</ActionLink>{item.kind === "expense" ? <ActionLink tone="neutral" disabled={!editor.ready} onPress={() => editor.open("transaction", { kind: "refund", amount: "", date: localDate(), bucket: item.bucket, category: item.category, note: "", related: item.id, commitment: "" }, { record: null, commitments: budget?.commitments ?? [] })}>退款</ActionLink> : null}<ActionLink disabled={!editor.ready} onPress={() => editor.open("delete", { description: `${item.occurred_on} ${item.category} ${moneyLabel(item.amount)}` }, { record: item })}>删除</ActionLink></View><View style={styles.divider} />
-        </View>) : <ServiceEmpty icon="create-outline" title={data ? "这个月还没有记录" : "记录尚未读取"} description={data ? "可以直接记一笔，也可以发文字或账单截图给财务助手。" : "先记一笔，或刷新读取已有记录。"}>
-          <View style={styles.emptyActions}><Button small secondary disabled={!editor.ready} onPress={() => openTransaction()}>记一笔</Button><Button small secondary onPress={() => onChat()}>对话录入</Button></View>
+        </View>) : <ServiceEmpty icon="chatbubble-ellipses-outline" title={data ? "这个月还没有记录" : "记录尚未读取"} description="说一笔收支或发账单截图，知行会帮你整理。">
+          <Button small secondary onPress={() => onChat()}>和知行记一笔</Button>
         </ServiceEmpty>}
         {data && data.records.total > data.records.items.length ? <Text style={styles.muted}>这里显示最近 {data.records.items.length} 笔；可让财务助手查询更早的记录。</Text> : null}
         <View style={styles.divider} />
-        <ActionLink icon="refresh-outline" tone="neutral" onPress={() => void snapshot.reload()} disabled={snapshot.loading}>刷新数据</ActionLink>
+        <View style={styles.spread}>
+          <ActionLink icon="refresh-outline" tone="neutral" onPress={() => void snapshot.reload()} disabled={snapshot.loading}>刷新数据</ActionLink>
+          <ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openTransaction()}>手动补记</ActionLink>
+        </View>
       </ServiceCard>
     </PageScrollView>
   </View>;

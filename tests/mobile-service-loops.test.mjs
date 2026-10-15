@@ -227,9 +227,9 @@ function walk(node) {
   if (Array.isArray(node)) return node.flatMap(walk);
   return [node, ...walk(node.props?.children)];
 }
-function screen(name, data, editing = null, { visible = Boolean(editing), initialAction } = {}) {
+function screen(name, data, editing = null, { visible = Boolean(editing), ready = true, serviceEditor } = {}) {
   const opened = [], saved = [], backs = [], notices = [], recovery = [];
-  const editor = { draft: editing, visible, busy: false, ready: true, locked: false, error: "", storageError: "", open: (...args) => opened.push(args), close: () => backs.push(true), resume() { editor.visible = true; }, discard() {}, set() {}, submit: (...args) => saved.push(args) };
+  const editor = serviceEditor ?? { draft: editing, visible, busy: false, ready, locked: false, error: "", storageError: "", open: (...args) => opened.push(args), close: () => backs.push(true), resume() { editor.visible = true; }, discard() {}, set() {}, submit: (...args) => saved.push(args) };
   const lifecycle = hooks(); const actual = setup().forms;
   const component = load(name, {
     ...design, "react/jsx-runtime": jsxRuntime, react: lifecycle.react,
@@ -239,12 +239,15 @@ function screen(name, data, editing = null, { visible = Boolean(editing), initia
     "./deviceCapabilities": { allowNotifications: async () => {} }, "./healthNotifications": { pauseHealthNotificationsForToday: async () => {} },
   })[name];
   const chats = [];
-  const render = () => walk(lifecycle.render(() => component({ connection, initialAction, onChat: (prompt) => chats.push(prompt) })));
+  const render = () => walk(lifecycle.render(() => component({ connection, onChat: (prompt) => chats.push(prompt) })));
   const nodes = render();
   return { nodes, render, opened, saved, backs, chats, editor, notices, recovery };
 }
 function healthData(recommendations = []) {
   return { date: "2028-06-02", profile: { revision: 0, height_cm: null, activity_limitations: [], food_allergies: [], food_exclusions: [], preferences: [], goals: [] }, rules: [], all_rules: [], meals: [], weights: [], steps: [], recommendations, reminders: { revision: 0, enabled: false, slots: [], timezone: "Asia/Shanghai", max_per_day: 3, paused_dates: [], quiet_start: null, quiet_end: null }, review: { weight_trend: { count: 0, latest_kg: null, change_kg: null }, recent_choices: [] } };
+}
+function financeData(items = []) {
+  return { summary: { month: "2028-06", budget: { month: "2028-06", recurring: false, revision: 0, expected_income: null, savings_target: null, daily_budget: null, commitments: [] }, totals: { income: "0.00", expense: "0.00", net: "0.00", daily: "0.00", fixed: "0.00", one_time: "0.00", refund: "0.00", transfer: "0.00" }, reservations: { fixed: "0.00", one_time: "0.00", total: "0.00" }, remaining: { daily_budget: null, total_spend_budget: null, savings_target_headroom: null }, projection: { income: null, expense: null, savings: null, assumptions: [] }, daily_average: { amount: null, days: null, from: null, through: null, basis: "unknown" }, coverage: { recorded_days: 0, from: null, through: null, complete: false, gaps: [] } }, records: { total: items.length, items } };
 }
 test("health empty state starts manual records without personal numeric defaults or a model", () => {
   const page = screen("HealthPage", healthData());
@@ -257,15 +260,53 @@ test("health empty state starts manual records without personal numeric defaults
   assert.equal(page.chats.length, 0);
 });
 
-test("the explicit home expense shortcut opens a manual form once and never posts automatically", () => {
-  const page = screen("FinanceDashboard", null, null, { initialAction: "record" });
-  assert.equal(page.opened.length, 1);
-  assert.equal(page.opened[0][0], "transaction");
-  assert.equal(page.opened[0][1].kind, "expense");
-  assert.equal(page.opened[0][1].amount, "");
-  page.render(); page.render();
-  assert.equal(page.opened.length, 1);
-  assert.equal(page.saved.length, 0);
+test("finance record actions open an unprefilled agent even before the manual draft is ready", () => {
+  for (const ready of [false, true]) {
+    for (const data of [null, financeData()]) {
+      const page = screen("FinanceDashboard", data, null, { ready });
+      const primary = page.nodes.find((node) => node.type === "Button" && node.props.children === "记一笔收支");
+      assert.ok(primary); assert.equal(Boolean(primary.props.disabled), false); primary.props.onPress();
+      const empty = page.nodes.find((node) => node.type === "ServiceEmpty");
+      const actions = walk(empty.props.children).filter((node) => node.type === "Button" || node.type === "ActionLink");
+      assert.equal(actions.length, 1); assert.equal(actions[0].props.children, "和知行记一笔");
+      assert.equal(Boolean(actions[0].props.disabled), false); actions[0].props.onPress();
+      assert.deepEqual(page.chats, [undefined, undefined], "recording actions supply neither a prompt nor an automatic message");
+      assert.equal(page.nodes.some((node) => node.type === "ServiceChatRow"), false);
+      assert.equal(page.nodes.find((node) => node.type === "ActionLink" && node.props.children === "手动补记").props.disabled, !ready);
+      page.render(); page.render(); assert.equal(page.opened.length, 0); assert.equal(page.saved.length, 0);
+    }
+  }
+});
+
+test("manual finance entry remains available with blank actual amounts", () => {
+  const page = screen("FinanceDashboard", financeData());
+  const manual = page.nodes.find((node) => node.type === "ActionLink" && node.props.children === "手动补记");
+  assert.equal(manual.props.disabled, false); manual.props.onPress();
+  assert.equal(page.opened.length, 1); assert.equal(page.opened[0][0], "transaction");
+  assert.equal(page.opened[0][1].kind, "expense"); assert.equal(page.opened[0][1].amount, "");
+  assert.equal(page.opened[0][2].record, null); assert.equal(page.saved.length, 0); assert.equal(page.chats.length, 0);
+});
+
+test("finance AI entry leaves retained edits untouched and manual entry resumes their exact draft", async () => {
+  for (const pending of [null, { method: "POST", path: "/finance/transactions", body: { idempotency_key: "stable-request", amount: "18.00", kind: "expense" } }]) {
+    const calls = [], app = setup(async (_connection, mutation) => calls.push(mutation));
+    const key = `zhixing.service-draft.v1:${encodeURIComponent(connection.url)}:finance`;
+    const retained = { ...draft("transaction", { kind: "expense", amount: "18.00", date: "2028-06-02", bucket: "daily", category: "餐饮", note: "旧版本未提交的晚饭", commitment: "", related: "" }, { record: null, commitments: [] }), pending };
+    app.storage.set(key, JSON.stringify(retained));
+    const renderEditor = () => app.render(() => app.forms.useServiceEditor(connection, "finance", () => assert.fail("entry must not save")));
+    renderEditor(); await settle(); const restored = renderEditor(); assert.equal(restored.visible, false);
+    const page = screen("FinanceDashboard", financeData(), null, { serviceEditor: restored });
+    page.nodes.find((node) => node.type === "Button" && node.props.children === "记一笔收支").props.onPress();
+    assert.deepEqual(page.chats, [undefined]); assert.equal(renderEditor().visible, false);
+    assert.deepEqual(JSON.parse(JSON.stringify(renderEditor().draft)), retained);
+    page.nodes.find((node) => node.type === "ActionLink" && node.props.children === "手动补记").props.onPress();
+    const resumed = renderEditor(); assert.equal(resumed.visible, true); assert.equal(resumed.locked, Boolean(pending));
+    assert.deepEqual(JSON.parse(JSON.stringify(resumed.draft)), retained, "manual entry cannot replace an existing edit or uncertain request");
+    const form = screen("FinanceDashboard", financeData(), null, { serviceEditor: resumed });
+    assert.equal(form.nodes.find((node) => node.type === "Field" && node.props.label === "金额（元）").props.value, "18.00");
+    assert.ok(form.nodes.some((node) => node.type === "Button" && node.props.children === (pending ? "重试原请求" : "保存")));
+    assert.equal(calls.length, 0);
+  }
 });
 
 test("service form uses shared fields and Android back returns to the overview while preserving its draft", () => {

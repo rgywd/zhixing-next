@@ -375,10 +375,18 @@ test("chat reports changed run receipts once, including terminal failures after 
   app.render(props); assert.equal(batches.length, 4);
 });
 
-test("main conversations keep the welcome composer while service conversations keep their own layout", () => {
-  const main = chatHarness();
-  const mainComposer = main.render({ conversation: { id: "main-chat", agent_id: null, model_id: null, reasoning_effort: null } }).find((node) => node.type === "ConversationComposer");
-  assert.equal(mainComposer.props.appearance, "welcome");
-  const service = chatHarness();
-  assert.equal(service.render().find((node) => node.type === "ConversationComposer").props.appearance, "default");
+test("main, finance and health conversations use the same composer contract with their own assistant placeholder", () => {
+  let sharedType, sharedKeys;
+  for (const [agentId, name] of [[null, "知行"], ["finance", "财务助手"], ["health", "健康助手"]]) {
+    const app = chatHarness();
+    const composer = app.render({ conversation: { id: `${agentId ?? "main"}-chat`, agent_id: agentId, model_id: null, reasoning_effort: null }, assistantName: name, agentModelId: "assigned" }).find((node) => node.type === "ConversationComposer");
+    sharedType ??= composer.type; sharedKeys ??= Object.keys(composer.props).sort();
+    assert.equal(composer.type, sharedType);
+    assert.deepEqual(Object.keys(composer.props).sort(), sharedKeys);
+    assert.equal(Object.hasOwn(composer.props, "appearance"), false);
+    assert.equal(composer.props.placeholder, `和${name}聊聊，或交代一件事…`);
+    assert.equal(composer.props.model.id, "assigned");
+    assert.equal(composer.props.children.type, "Attachments");
+    for (const action of ["onText", "onSend", "onFiles", "onModel", "onReasoning", "onSearch"]) assert.equal(typeof composer.props[action], "function");
+  }
 });

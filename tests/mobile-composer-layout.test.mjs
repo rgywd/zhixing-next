@@ -36,17 +36,22 @@ function harness({ colors = darkColors, request = async () => ({ items: [] }), .
 }
 const control = (nodes, label) => nodes.find((node) => node.type === "Pressable" && node.props.accessibilityLabel?.startsWith(label));
 
-test("the default composer retains its existing layout unless welcome appearance is requested", () => {
-  const app = harness(); const ordinary = app.render(), explicit = app.render({ appearance: "default" });
-  assert.deepEqual(ordinary.map((node) => node.type), explicit.map((node) => node.type));
-  assert.equal(ordinary[0].props.style.paddingHorizontal, 12);
-  assert.equal(content(ordinary[0]).includes(model.name), false, "current chat keeps its compact model control");
-  const welcome = app.render({ appearance: "welcome" }); assert.equal(content(welcome[0]).includes(model.name), true);
+test("the shared default composer places real choices above the attachment, input and send row", () => {
+  const app = harness(); const nodes = app.render();
+  assert.match(content(nodes[0]), new RegExp(model.name));
+  const options = nodes[0].props.children[0], editor = nodes[0].props.children[1];
+  assert.ok(walk(options).includes(control(nodes, "选择聊天模型")));
+  assert.ok(walk(options).includes(control(nodes, "思考深度")));
+  assert.ok(walk(options).includes(control(nodes, "联网搜索")));
+  assert.equal(walk(options).some((node) => node.type === "TextInput"), false);
+  assert.ok(walk(editor).includes(control(nodes, "添加资料")));
+  assert.ok(walk(editor).some((node) => node.type === "TextInput"));
+  assert.ok(walk(editor).includes(control(nodes, "发送消息")));
   app.unmount();
 });
 
-test("welcome controls show real model, reasoning and search states, wrap naturally, and expose no fake microphone", () => {
-  const app = harness({ appearance: "welcome" }); const nodes = app.render();
+test("shared controls show real model, reasoning and search states, wrap naturally, and expose no fake microphone", () => {
+  const app = harness(); const nodes = app.render();
   assert.match(content(control(nodes, "选择聊天模型")), /我选的真实模型/);
   assert.match(content(control(nodes, "思考深度")), /深度/);
   assert.equal(content(control(nodes, "联网搜索")), "联网搜索"); assert.match(control(nodes, "联网搜索").props.accessibilityLabel, /已关闭/);
@@ -57,9 +62,9 @@ test("welcome controls show real model, reasoning and search states, wrap natura
   app.unmount();
 });
 
-test("welcome preserves attachments, hints, multiline edits, locked controls and pending retry", () => {
+test("the shared composer preserves attachments, hints, multiline edits, locked controls and pending retry", () => {
   for (const colors of [lightColors, darkColors]) {
-    const app = harness({ appearance: "welcome", colors, children: "attachment preview", hint: "queue hint", pending: true, attachmentLocked: true, optionsLocked: true, editable: false, canSend: false });
+    const app = harness({ colors, children: "attachment preview", hint: "queue hint", pending: true, attachmentLocked: true, optionsLocked: true, editable: false, canSend: false });
     const nodes = app.render(); assert.match(content(nodes[0]), /attachment preview/); assert.match(content(nodes[0]), /queue hint/);
     const input = nodes.find((node) => node.type === "TextInput"); assert.equal(input.props.value, "草稿"); assert.equal(input.props.multiline, true); assert.equal(input.props.maxLength, 20000); assert.equal(input.props.editable, false);
     for (const label of ["添加资料", "选择聊天模型", "思考深度", "联网搜索", "重试发送"]) assert.equal(control(nodes, label).props.disabled, true);
@@ -70,7 +75,7 @@ test("welcome preserves attachments, hints, multiline edits, locked controls and
 });
 
 test("reasoning controls reflect unsupported, auto and disabled depths", () => {
-  const app = harness({ appearance: "welcome" });
+  const app = harness();
   const unavailable = app.render({ model: { ...model, reasoning_levels: [] } }); assert.equal(control(unavailable, "思考深度").props.disabled, true); assert.match(content(control(unavailable, "思考深度")), /不可调整/);
   const automatic = app.render({ model, depth: "auto" }); assert.match(content(control(automatic, "思考深度")), /自动/);
   const disabled = app.render({ depth: "none" }); assert.match(content(control(disabled, "思考深度")), /关闭/); assert.equal(control(disabled, "思考深度").props.disabled, false);
@@ -79,7 +84,7 @@ test("reasoning controls reflect unsupported, auto and disabled depths", () => {
 
 test("search provider labels never carry over across connections and late requests cannot restore an old provider", async () => {
   const calls = [], connectionA = { url: "https://a.example", token: "a" }, connectionB = { url: "https://b.example", token: "b" };
-  const app = harness({ appearance: "welcome", connection: connectionA, searchId: "same-id", request(connection, path, options) { return new Promise((resolve) => calls.push({ connection, path, options, resolve })); } });
+  const app = harness({ connection: connectionA, searchId: "same-id", request(connection, path, options) { return new Promise((resolve) => calls.push({ connection, path, options, resolve })); } });
   app.render(); calls[0].resolve({ items: [{ id: "same-id", name: "旧服务搜索", kind: "tavily" }] }); await settle(); assert.match(content(control(app.render(), "联网搜索")), /旧服务搜索/);
   const switching = app.render({ connection: connectionB }); assert.doesNotMatch(content(control(switching, "联网搜索")), /旧服务搜索/); assert.equal(calls[0].options.signal.aborted, true);
   calls[1].resolve({ items: [{ id: "same-id", name: "新服务搜索", kind: "brave" }] }); await settle(); assert.match(content(control(app.render(), "联网搜索")), /新服务搜索/);
