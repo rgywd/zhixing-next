@@ -380,7 +380,7 @@ function ConnectedSession({
         ]);
         if (!active) return;
         setStatus(health);
-        setLastSyncFailed(false);
+        setLastSyncFailed(!modelPage);
         setAssistant(person);
         if (resources) setRecentResources(resources.items);
         setConversations((old) =>
@@ -506,7 +506,7 @@ function ConnectedSession({
   }
   const welcomePreference = availablePreference(catalog, welcomeKind, welcomeModels[welcomeKind], welcomeEfforts[welcomeKind]);
   const welcomeModel = catalog?.items.find((item) => item.id === (welcomePreference.modelId ?? catalog.roles.chat));
-  const welcomeStatus = lastSyncFailed ? "重新连接" : !status || !catalog ? "连接中" : !status.worker_online ? "服务离线" : !status.model_ready || !welcomeModel?.ready ? "未就绪" : busy ? "处理中" : "待命中";
+  const welcomeStatus = lastSyncFailed ? "重新连接" : !status || !catalog ? "连接中" : !status.worker_online ? "服务离线" : (!welcomePreference.modelId && !status.model_ready) || !welcomeModel?.ready ? "未就绪" : busy ? "处理中" : "待命中";
   function submitWelcome() {
     const text = welcomeDraft.trim();
     if (text && welcome.ready && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });

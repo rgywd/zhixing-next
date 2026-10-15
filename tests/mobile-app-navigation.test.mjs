@@ -29,12 +29,12 @@ function load(filename, dependencies, suffix = "") {
   });
   return exports;
 }
-function appHarness({ connected = true, modelPage = { items: [], roles: { chat: null } }, serviceStatus = { model_ready: true, worker_online: true }, failStatus = false } = {}) {
+function appHarness({ connected = true, modelPage = { items: [], roles: { chat: null } }, serviceStatus = { model_ready: true, worker_online: true }, failStatus = false, failModels = false, chosenModelId = null } = {}) {
   const lifecycle = hooks(), calls = [], reminderVersions = [], backHandlers = new Set(); let uuid = 0, reminderOpen = () => {}, keyboardVisible = false, keyboardDismisses = 0;
   const sync = () => {};
   const conversations = ["finance", "health"].map((agent_id) => ({ id: `${agent_id}-history`, title: `${agent_id} history`, agent_id, model_id: null, reasoning_effort: null, project_id: null, updated_at: "2028-06-02T10:00:00Z" }));
   const preferences = { pins: [{ kind: "project", id: "legacy-project", title: "旧项目" }, { kind: "conversation", id: "finance-history", title: "财务历史" }], visited: [{ kind: "project", id: "legacy-project", title: "旧项目" }], opened: { "project:legacy-project": "2028-06-02T11:00:00Z" } };
-  const welcome = { value: { text: "hello", kind: "task", models: { chat: null, task: null }, efforts: { chat: null, task: null }, searchId: null }, ready: true, error: "", consumeText: async () => {}, retry() {}, setText(next) { welcome.value.text = typeof next === "function" ? next(welcome.value.text) : next; }, setKind() {}, setSearch() {}, setModel() {}, setEffort() {} };
+  const welcome = { value: { text: "hello", kind: "task", models: { chat: chosenModelId, task: null }, efforts: { chat: null, task: null }, searchId: null }, ready: true, error: "", consumeText: async () => {}, retry() {}, setText(next) { welcome.value.text = typeof next === "function" ? next(welcome.value.text) : next; }, setKind() {}, setSearch() {}, setModel() {}, setEffort() {} };
   const native = { ...Object.fromEntries(["ActivityIndicator", "Image", "KeyboardAvoidingView", "Modal", "Pressable", "Text", "View"].map((name) => [name, name])), StyleSheet: { create: (value) => value }, Platform: { OS: "android" }, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: (_event, callback) => { backHandlers.add(callback); return { remove: () => backHandlers.delete(callback) }; } }, Keyboard: { isVisible: () => keyboardVisible, dismiss() { keyboardVisible = false; keyboardDismisses++; }, addListener: () => ({ remove() {} }) } };
   const dependencies = {
     "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "react-native": native,
@@ -47,7 +47,7 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
       calls.push({ path, ...options });
       if (path === "/status") { if (failStatus) throw new Error("status unavailable"); return serviceStatus; }
       if (path === "/assistant") return { name: "知行" };
-      if (path === "/models") return modelPage;
+      if (path === "/models") { if (failModels) throw new Error("models unavailable"); return modelPage; }
       if (path === "/agents") return { items: ["finance", "health"].map((id) => ({ id, name: id === "finance" ? "财务助手" : "健康助手", model_id: null })) };
       if (path === "/conversations" && options?.method === "POST") return { ...options.body, id: `${options.body.agent_id}-created`, model_id: null, reasoning_effort: null };
       if (path.startsWith("/conversations/") && !path.includes("?") && !path.endsWith("/messages")) return conversations.find((item) => path === `/conversations/${item.id}`) ?? { id: "loaded", agent_id: null };
@@ -213,6 +213,8 @@ test("welcome readiness follows the service, selected model, and latest sync ins
     [{ modelPage, serviceStatus: { model_ready: false, worker_online: true } }, "未就绪"],
     [{ modelPage: { ...modelPage, items: [{ ...modelPage.items[0], ready: false }] } }, "未就绪"],
     [{ modelPage, failStatus: true }, "重新连接"],
+    [{ modelPage, failModels: true }, "重新连接"],
+    [{ modelPage, chosenModelId: "ready-model", serviceStatus: { model_ready: false, worker_online: true } }, "待命中"],
   ]) {
     const app = appHarness(options);
     app.render(); find(app, "HomePanel").props.onChat();
