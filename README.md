@@ -8,7 +8,9 @@
 
 本机健康提醒滚动安排未来 14 天，每次同步按当前规则更新；“今天不提醒这台手机”可离线取消当天排期。权限、系统限制和长期不打开 App 会影响提醒。本次按用户要求完成 Android 模拟器原生验收，已观察到退出后实际通知与点击跳转；投递可能延迟，实体手机与厂商电池策略未覆盖。
 
-**[0.2.2 发布](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.2)** 汇总今天首页、AI-first 记账、主／子 Agent 共用界面与仅本机密码管理。[下载最新 ARM64 APK](https://work.8-208-118-119.sslip.io/assistant-downloads/zhixing-next-0.2.2-arm64.apk)，安装与覆盖升级见[0.2.2 发布说明](docs/RELEASE-0.2.2.md)。沿用正式签名，可覆盖 0.2.1 与同签预览，保留本机数据和密码库；请勿先卸载。安装包内嵌 JS，无需 Metro；首次连接仍需自己的服务访问令牌。后端代码与 0.2.1 相同，现网继续使用 `adeeb65`／数据库 v12。正式 APK 的构建、安装与下载校验结果以 Release 附件为准。
+**[0.2.2 发布](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.2)** 汇总今天首页、AI-first 记账、主／子 Agent 共用界面与仅本机密码管理。正式安装包统一从 [GitHub Releases](https://github.com/rgywd/zhixing-next/releases/latest) 下载，安装与覆盖升级见[0.2.2 发布说明](docs/RELEASE-0.2.2.md)。沿用正式签名，可覆盖 0.2.1 与同签预览，保留本机数据和密码库；请勿先卸载。安装包内嵌 JS，无需 Metro；首次连接仍需自己的服务访问令牌。0.2.2 发布时后端代码与 0.2.1 相同；后续源码与部署状态以实际验收回执为准。正式 APK 的构建、安装与下载校验结果以 Release 附件为准。
+
+后续正式发版由 GitHub Actions 在推送正式版本标签时执行检查、签名构建和 Release 附件发布，普通提交和 PR 不消耗 Actions 运行时间；日常验证在本地完成。流程见[GitHub 发布](docs/DEPLOYMENT.md#客户端-github-发布)。设置中的“检查更新”手动读取公开 GitHub 正式版本，可查看发布说明和下载新 APK，无需连接知行服务。
 
 首页新增位置天气、只读今日日程与财务／健康速览，手机信息按需授权，时间跟随手机时钟。“开始”只追加到可编辑的主 Agent 草稿；新增收支优先进入财务 AI，不自动发送模板，手动补记与已有记录纠正仍保留。具体使用与验证见[今天首页说明](docs/TODAY-HOME.md)。
 

@@ -9,6 +9,20 @@
 
 2026-09-30 的历史生产回执已确认 `da47fa8bb8b12037cf1eaaebf8c3cdaea4baa829`、数据库 v11、API/worker 活跃，以及图片、表格、GitLab 读取、检索与运行中取消的真实验收。回执保存在验收机 `Documents/Codex/acceptance/zhixing-production-20260930/`；这条旧回执仅描述当时版本。2026-10-14 当前部署结果见页首。下方是首次安装模板，默认关闭 Shell；实际启用和数据库升级需遵循[升级说明](HARNESS-UPGRADE.md)，后续代码合入不等于生产已更新。
 
+## 客户端 GitHub 发布
+
+Android 正式安装包由 [Android release](../.github/workflows/release.yml) 构建并保存到 [GitHub Releases](https://github.com/rgywd/zhixing-next/releases/latest)。工作流只响应正式 `vMAJOR.MINOR.PATCH` 标签推送，普通分支提交和 PR 不运行 Actions；日常检查按 [协作规则](../AGENTS.md) 在本地完成。后端服务部署继续遵循本页其余步骤，不随 APK 发布自动变更。
+
+正式发版先同步 `package.json`、`package-lock.json` 和 `app.json` 的版本，并将 Android `versionCode` 增加到高于此前所有正式标签的值。完成本地验证并通过 PR 合入 `main` 后，在用户明确要求发版时推送对应正式标签。工作流核对标签、来源提交、`main` 祖先关系和版本，再执行客户端、后端及 Docker 回归，最后生成签名 ARM64 APK。
+
+签名沿用既有正式证书，仓库 Actions Secrets 使用 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEY_ALIAS`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_PASSWORD`。凭据通过受控标准输入设置，不进入 Git、命令参数或发布附件。构建时仅在 runner 临时目录中以私有权限还原，结束后清理；缺少签名输入会失败。发布步骤使用当前仓库的 `GITHUB_TOKEN`，只授予所需的 `contents: write`。
+
+发布先建立草稿，上传并校验 `zhixing-next-<version>-arm64.apk`、对应 `.apk.build.json` 构建回执及 `SHA256SUMS`，准备完整后再公开 Release。回执包含源码提交、原生版本、ABI、正式签名证书摘要和 APK SHA-256；公开后再次核对下载内容。失败草稿可在同标签工作流中重试；已公开版本保持附件内容，后续修改使用新版本。
+
+“设置 → 关于 → 检查更新”由用户手动请求公开 GitHub 最新正式 Release，不访问知行服务、不发送访问令牌或个人资料。应用按语义版本比较，展示发布说明并将 APK 下载交给系统浏览器；安装由 Android 系统处理。当前安装包内嵌 JS、未启用 OTA，设置版本来自与原生构建校验一致的 `package.json`。网络失败或 GitHub 限流可重试；只有测试版、暂无正式版或新版本缺少 APK 时显示对应状态。
+
+修改发布配置与完成本地验证不等于完成云端发版。只有用户要求的新正式标签实际触发、工作流成功、Release 附件可下载且哈希一致，才记录为 Actions 发布验收；本轮不为测试流程额外创建版本。
+
 ## 布局
 
 | 内容 | 路径或约定 |
