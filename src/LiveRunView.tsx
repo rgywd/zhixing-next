@@ -24,15 +24,16 @@ function RunContent({ value }: { value: LiveRunState }) {
   const [reasoningExpanded, setReasoningExpanded] = useState<boolean | null>(null);
   const [toolsExpanded, setToolsExpanded] = useState(false);
   const showReasoning = reasoningExpanded ?? value.active;
+  const terminalLabel = value.run.status === "failed" ? "回复未完成" : value.run.status === "cancelled" ? "回复已停止"
+    : value.run.status === "interrupted" ? "回复已中断" : "";
   const phase = value.run.cancel_requested ? "正在停止" : value.phase === "approval" ? "等待你的决定"
     : value.phase === "input" ? "等待补充信息" : value.phase === "recovering" ? "正在恢复进度"
     : value.run.status === "queued" ? "等待回复" : value.tools.some((tool) => tool.status === "started") ? "正在使用工具"
-    : value.active ? "正在回复" : value.run.status === "failed" ? "回复未完成" : value.run.status === "cancelled" ? "回复已停止"
-    : value.run.status === "interrupted" ? "回复已中断" : "回复已完成";
+    : value.active ? "正在回复" : "回复已完成";
   return <View style={{ gap: 10, minWidth: 0 }}>
-    {value.active || (!value.answerCommitted && !value.content) || value.connectionIssue ? <View style={[s.row, { gap: 8 }]}>
+    {terminalLabel || value.active || (!value.answerCommitted && !value.content) || value.connectionIssue ? <View style={[s.row, { gap: 8 }]}>
       {value.active ? <ActivityIndicator size="small" color={colors.gold} /> : null}
-      <Text style={s.muted}>{value.connectionIssue ? "连接恢复后继续显示进度" : phase}</Text>
+      <Text style={s.muted}>{terminalLabel || (value.connectionIssue ? "连接恢复后继续显示进度" : phase)}</Text>
     </View> : null}
     {value.reasoning ? <View style={{ gap: 6 }}>
       <Pressable accessibilityRole="button" accessibilityLabel={showReasoning ? "收起思考" : "展开思考"} accessibilityState={{ expanded: showReasoning }}
