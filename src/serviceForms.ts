@@ -67,7 +67,10 @@ export function parseReminderSlots(value: string, previous: { id: string; time: 
 }
 export const mealLabels = { breakfast: "早餐", lunch: "午餐", dinner: "晚餐", snack: "加餐", other: "其他" } as const;
 export const moneyLabel = (value: string | number | null | undefined) => value == null ? "待补充" : `¥${Number(value).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-export type ServiceDraft = { kind: string; id: string; fields: Record<string, string>; context: Record<string, unknown>; pending: ServiceMutation | null };
+export type ServiceDraft = { kind: string; id: string; fields: Record<string, string>; context: Record<string, unknown>; pending: ServiceMutation | null; initialFields?: Record<string, string>; recoveryNoticeSeen?: boolean };
+const unchangedDraft = (draft: ServiceDraft) => !draft.pending && draft.initialFields &&
+  Object.keys(draft.fields).length === Object.keys(draft.initialFields).length &&
+  Object.entries(draft.fields).every(([name, value]) => draft.initialFields![name] === value);
 let saving = Promise.resolve();
 const persist = (key: string, value: unknown) => {
   const next = saving.catch(() => undefined).then(() => AsyncStorage.setItem(key, JSON.stringify(value)));
@@ -75,7 +78,7 @@ const persist = (key: string, value: unknown) => {
   return next;
 };
 /** Keep the exact request until its receipt is known; a retry after timeout must not create another record. */
-export function useServiceEditor(connection: Connection, service: string, onSaved: (saved: ServiceDraft) => void) {
+export function useServiceEditor(connection: Connection, service: string, onSaved: (saved: ServiceDraft) => void, onRecovery?: (resume: () => void) => void) {
   const key = `zhixing.service-draft.v1:${encodeURIComponent(connection.url)}:${service}`;
   const [draft, setDraft] = useState<ServiceDraft | null>(null);
   const current = useRef<ServiceDraft | null>(null);
@@ -86,20 +89,30 @@ export function useServiceEditor(connection: Connection, service: string, onSave
   const [error, setError] = useState("");
   const [storageError, setStorageError] = useState("");
   const [readAttempt, setReadAttempt] = useState(0);
+  const recoveryCallback = useRef(onRecovery);
+  useEffect(() => { recoveryCallback.current = onRecovery; }, [onRecovery]);
+  const update = useCallback((next: ServiceDraft | null) => {
+    current.current = next; setDraft(next);
+    void persist(key, next).then(() => setStorageError("")).catch(() => setStorageError("本机草稿尚未保存，请保持页面打开；提交前会再次尝试保存。"));
+  }, [key]);
+  const offerRecovery = useCallback((source: ServiceDraft) => {
+    if (source.recoveryNoticeSeen || !recoveryCallback.current) return;
+    update({ ...source, recoveryNoticeSeen: true });
+    recoveryCallback.current(() => { if (current.current?.id === source.id && !busyRef.current) setVisible(true); });
+  }, [update]);
   useEffect(() => {
     let active = true;
     Promise.resolve().then(() => { if (active) setReady(false); return AsyncStorage.getItem(key); }).then((value) => {
       if (!active) return;
-      const parsed = value ? JSON.parse(value) : null;
+      const parsed: ServiceDraft | null = value ? JSON.parse(value) : null;
       if (parsed && (typeof parsed.kind !== "string" || typeof parsed.id !== "string" || !parsed.fields || !parsed.context)) throw new Error("invalid draft");
-      current.current = parsed; setDraft(parsed); setVisible(Boolean(parsed)); setReady(true); setStorageError("");
+      const restored = parsed && !unchangedDraft(parsed) ? parsed : null;
+      current.current = restored; setDraft(restored); setVisible(false); setReady(true); setStorageError("");
+      if (parsed && !restored) update(null);
+      if (restored) offerRecovery(restored);
     }).catch(() => { if (active) { setReady(false); setStorageError("本机草稿尚未读取，请重试后继续；原草稿不会被覆盖。"); } });
     return () => { active = false; };
-  }, [key, readAttempt]);
-  const update = (next: ServiceDraft | null) => {
-    current.current = next; setDraft(next);
-    void persist(key, next).then(() => setStorageError("")).catch(() => setStorageError("本机草稿尚未保存，请保持页面打开；提交前会再次尝试保存。"));
-  };
+  }, [key, readAttempt, update, offerRecovery]);
   const submit = async (build: (draft: ServiceDraft) => ServiceMutation, beforeSubmit?: (draft: ServiceDraft) => Promise<void>) => {
     if (busyRef.current || !ready || !current.current) return;
     busyRef.current = true; setBusy(true); setError("");
@@ -125,10 +138,17 @@ export function useServiceEditor(connection: Connection, service: string, onSave
     open(kind: string, fields: Record<string, string>, context: Record<string, unknown> = {}) {
       if (!ready || busyRef.current) return;
       if (current.current) { setVisible(true); return; }
-      update({ kind, id: randomUUID(), fields, context, pending: null }); setError(""); setVisible(true);
+      update({ kind, id: randomUUID(), fields: { ...fields }, initialFields: { ...fields }, context, pending: null }); setError(""); setVisible(true);
     },
     set(name: string, value: string) { if (current.current && !busyRef.current && !current.current.pending) update({ ...current.current, fields: { ...current.current.fields, [name]: value } }); },
-    close() { if (!busyRef.current) setVisible(false); }, resume() { setVisible(true); },
+    close() {
+      if (!ready || busyRef.current) return;
+      setVisible(false);
+      const source = current.current;
+      if (source && unchangedDraft(source)) { update(null); setError(""); }
+      else if (source) offerRecovery(source);
+    },
+    resume() { if (ready && current.current && !busyRef.current) setVisible(true); },
     discard() { if (!busyRef.current && !current.current?.pending) { update(null); setVisible(false); setError(""); } }, submit,
   };
 }
