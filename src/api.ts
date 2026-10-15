@@ -88,6 +88,10 @@ export type ConversationSearchResult = {
   snippet: string;
 };
 export type Run = {
+  message_id?: string;
+  seq?: number;
+  started_at?: string | null;
+  attachments?: Resource[];
   phase?: "normal" | "approval" | "input" | "recovering";
   recovery_enabled?: number;
   recovery_count?: number;
@@ -105,6 +109,7 @@ export type Run = {
   created_at: string;
 };
 export type Message = {
+  submitted_intent?: "queue" | "steer";
   id: string;
   conversation_id: string;
   role: "user" | "assistant";

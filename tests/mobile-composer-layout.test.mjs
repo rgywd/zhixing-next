@@ -87,6 +87,29 @@ test("long real labels stay complete in an unshrinking horizontal row at narrow 
   app.unmount();
 });
 
+test("queued content floats above the model viewport without adding a persistent input row", () => {
+  const app = harness({ floating: "queued preview" });
+  const nodes = app.render();
+  const anchor = nodes[0].props.children[0];
+  const floating = anchor.props.children[0];
+  assert.equal(anchor.props.style[0].position, "relative");
+  assert.equal(anchor.props.style[1].paddingTop, 50);
+  assert.equal(nodes[0].props.style[1].marginTop, -50);
+  assert.equal(anchor.props.style[1].paddingTop + nodes[0].props.style[1].marginTop, 0);
+  assert.equal(floating.props.style.position, "absolute");
+  assert.equal(floating.props.style.top, 0);
+  assert.equal(floating.props.style.bottom, undefined);
+  assert.equal(floating.props.style.left, 0);
+  assert.equal(floating.props.style.right, 0);
+  assert.equal(floating.props.pointerEvents, "box-none");
+  assert.equal(content(floating), "queued preview");
+  assert.equal(anchor.props.children[1].type, "ScrollView");
+  const empty = app.render({ floating: undefined });
+  assert.equal(empty[0].props.children[0].props.children[0], null);
+  assert.equal(empty[0].props.children.length, 2);
+  app.unmount();
+});
+
 test("the shared composer preserves attachments, hints, multiline edits, locked controls and pending retry", () => {
   for (const colors of [lightColors, darkColors]) {
     const app = harness({ colors, children: "attachment preview", hint: "queue hint", pending: true, attachmentLocked: true, optionsLocked: true, editable: false, canSend: false });

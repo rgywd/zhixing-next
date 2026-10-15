@@ -175,7 +175,7 @@ export function useChat({
     const pending = draft.pending;
     if (!draftReady || !pending || runScope !== streamScope) return;
     const receipt = messages.find((message) => message.id === pending.id && message.role === "user"
-      && message.conversation_id === conversation.id && message.content === pending.content && message.intent === pending.intent
+      && message.conversation_id === conversation.id && message.content === pending.content && (message.submitted_intent ?? message.intent) === pending.intent
       && (message.attachments ?? []).map((item) => item.id).sort().join(",") === [...(pending.attachments ?? [])].sort().join(","));
     if (!receipt) return;
     acknowledged.current.add(pending.id);

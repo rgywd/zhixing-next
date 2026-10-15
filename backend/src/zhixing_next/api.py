@@ -38,6 +38,7 @@ from .schemas import (
     ProjectInput,
     ProviderInput,
     ProviderUpdate,
+    QueuedSteerInput,
     ResourceInput,
     ScheduleInput,
     ScheduleUpdate,
@@ -514,6 +515,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.post("/runs/{run_id}/cancel")
     def cancel(run_id: str):
         return store.cancel_run(run_id)
+
+    @router.post("/runs/{run_id}/queued/withdraw")
+    def withdraw_queued(run_id: str):
+        return store.withdraw_queued(run_id)
+
+    @router.post("/runs/{run_id}/queued/steer")
+    def steer_queued(run_id: str, body: QueuedSteerInput):
+        return store.steer_queued(run_id, body.target_run_id)
 
     @router.get("/runs/{run_id}/events")
     def events(run_id: str, after: Cursor = 0, limit: Limit = 100):

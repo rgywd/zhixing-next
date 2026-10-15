@@ -14,7 +14,7 @@ type Props = {
   kind: "chat" | "task"; kindLocked?: boolean; onKind: (kind: "chat" | "task") => void;
   connection?: Connection; model?: ModelInfo; depth?: ReasoningEffort; searchId?: string | null;
   optionsLocked?: boolean; onModel?: () => void; onReasoning?: () => void; onSearch?: () => void;
-  children?: ReactNode; hint?: ReactNode;
+  children?: ReactNode; hint?: ReactNode; floating?: ReactNode;
 };
 
 export function ConversationComposer(props: Props) {
@@ -35,7 +35,9 @@ export function ConversationComposer(props: Props) {
   const reasoningText = canReason ? thinkingLabel(model, depth) : "不可调整";
   const reasoningColor = !canReason || depth === "none" ? colors.strongLine : depth === "auto" ? colors.gold : colors.green;
   const searchText = searchId ? `搜索 · ${provider?.name ?? "已开启"}` : "联网搜索";
-  return <View style={styles.area}>
+  return <View style={[styles.area, !!props.floating && styles.areaFloating]}>
+    <View style={[styles.optionsAnchor, !!props.floating && styles.optionsFloating]}>
+    {props.floating ? <View pointerEvents="box-none" style={styles.floating}>{props.floating}</View> : null}
     <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.optionsViewport} contentContainerStyle={styles.options}>
       {onModel ? <Pressable accessibilityRole="button" accessibilityLabel={`选择${kind === "task" ? "任务" : "聊天"}模型，当前${model?.name ?? "未配置"}`} accessibilityState={{ disabled: optionsLocked }} disabled={optionsLocked} onPress={onModel} style={[styles.chip, optionsLocked && styles.disabled]}><View style={[styles.chipSurface, styles.modelChip]}>
         <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={17} /><Text numberOfLines={1} style={styles.chipText}>{model?.name ?? "选择模型"}</Text><Ionicons name="chevron-down" size={12} color={colors.muted} />
@@ -48,6 +50,7 @@ export function ConversationComposer(props: Props) {
         <Text numberOfLines={1} style={[styles.chipText, searchId && { color: colors.blue }]}>{searchText}</Text>
       </View></Pressable> : null}
     </ScrollView>
+    </View>
     <View style={styles.composer}>
       {children ? <View style={styles.attachments}>{children}</View> : null}
       <View style={styles.inputRow}>
@@ -62,6 +65,12 @@ export function ConversationComposer(props: Props) {
 
 const createStyles = (colors: ThemeColors) => StyleSheet.create({
   area: { paddingHorizontal: space.lg, paddingBottom: space.sm, paddingTop: space.sm, gap: space.sm },
+  // Keep every native parent's touch bounds around the floating strip. The negative
+  // margin offsets its padding, so the model row and input keep their usual position.
+  areaFloating: { marginTop: -50 },
+  optionsAnchor: { position: "relative", zIndex: 1 },
+  optionsFloating: { paddingTop: 50 },
+  floating: { position: "absolute", left: 0, right: 0, top: 0, paddingBottom: 6, zIndex: 2 },
   optionsViewport: { flexGrow: 0, flexShrink: 0 },
   options: { flexDirection: "row", flexWrap: "nowrap", alignItems: "center", gap: space.sm },
   chip: { minHeight: 44, minWidth: 40, flexShrink: 0, justifyContent: "center" },

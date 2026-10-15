@@ -41,8 +41,13 @@ def _record(row):
         return None
     result = dict(row)
     request_json = result.pop("request_json", None)
-    if "role" in result and request_json and json.loads(request_json).get("source_run_id"):
-        result["origin"] = "assistant_task"
+    if "role" in result and request_json:
+        submitted = json.loads(request_json)
+        if submitted.get("source_run_id"):
+            result["origin"] = "assistant_task"
+        if result.get("intent") == "steer" and submitted.get("intent") == "queue":
+            # Delivery may change; the original request remains immutable for retries.
+            result["submitted_intent"] = "queue"
     result.pop("workspace_path", None)
     result.pop("content_key", None)
     for key in ("blocked", "cancel_requested", "enabled", "visible"):
@@ -1161,6 +1166,65 @@ class Store:
                 if run["status"] == "queued":
                     self._finish(db, run, "cancelled")
             return _record(self._require(db, "runs", run_id))
+
+    def _queued_user_input(self, db, run_id):
+        run = self._require(db, "runs", run_id)
+        message = self._require(db, "messages", run["message_id"])
+        submitted = json.loads(message["request_json"] or "null")
+        if (run["kind"] != "chat" or run["phase"] != "normal" or run["started_at"] is not None
+                or message["role"] != "user" or message["conversation_id"] != run["conversation_id"]
+                or not isinstance(submitted, dict) or submitted.get("intent") != "queue"
+                or submitted.get("kind") != "chat" or submitted.get("source_run_id")):
+            raise StoreError("stale_queue", "This input is no longer an unstarted chat in the queue")
+        return run, message
+
+    def withdraw_queued(self, run_id):
+        """Withdraw only an unclaimed user input, never a run already taken by the worker."""
+        with self._connection(write=True) as db:
+            run, message = self._queued_user_input(db, run_id)
+            if message["run_id"] != run_id or message["intent"] != "queue":
+                raise StoreError("stale_queue", "This input has already been delivered elsewhere")
+            if not (run["status"] == "cancelled" and run["cancel_requested"] and message["status"] == "rejected"):
+                if run["status"] != "queued" or run["cancel_requested"] or message["status"] != "accepted":
+                    raise StoreError("stale_queue", "This input is no longer waiting in the queue")
+                db.execute("UPDATE runs SET cancel_requested=1 WHERE id=?", (run_id,))
+                self._finish(db, run, "cancelled")
+            return {"message": _record(self._require(db, "messages", message["id"])),
+                    "run": _record(self._require(db, "runs", run_id))}
+
+    def steer_queued(self, run_id, target_run_id):
+        """Atomically move the same queued message into an existing running reply."""
+        with self._connection(write=True) as db:
+            run, message = self._queued_user_input(db, run_id)
+            if message["intent"] == "steer" and message["run_id"] != run_id:
+                if (message["run_id"] != target_run_id or run["status"] != "cancelled"
+                        or not run["cancel_requested"]):
+                    raise StoreError("stale_queue", "This input has already been delivered elsewhere")
+                # Return a durable success even after acknowledgement or target termination.
+                return {"message": _record(message),
+                        "run": _record(self._require(db, "runs", target_run_id)), "source_run": _record(run)}
+            if (run["status"] != "queued" or run["cancel_requested"] or message["run_id"] != run_id
+                    or message["intent"] != "queue" or message["status"] != "accepted"):
+                raise StoreError("stale_queue", "This input is no longer waiting in the queue")
+            target = self._require(db, "runs", target_run_id)
+            if (target["conversation_id"] != run["conversation_id"] or target["status"] != "running"
+                    or target["cancel_requested"]):
+                raise StoreError("stale_steer", "The target run is no longer accepting guidance")
+            attachments = json.loads(message["attachments_json"])
+            if any(item["mime_type"].startswith("image/") for item in attachments):
+                from .config import ModelConfig
+
+                saved = db.execute("SELECT config_json FROM run_model_configs WHERE run_id=?", (target_run_id,)).fetchone()
+                config = ModelConfig.model_validate_json(saved[0]) if saved and saved[0] != "null" else None
+                if config is not None and not config.image_input:
+                    raise StoreError("image_not_supported", "当前回复的模型不支持图片，请保留排队或选择其他回复。", 422)
+            db.execute("UPDATE runs SET cancel_requested=1 WHERE id=?", (run_id,))
+            self._finish(db, run, "cancelled")
+            db.execute("UPDATE messages SET intent='steer',run_id=?,status='accepted' WHERE id=?", (target_run_id, message["id"]))
+            self._event(db, target_run_id, "queue_promoted", {"message_id": message["id"], "source_run_id": run_id})
+            return {"message": _record(self._require(db, "messages", message["id"])),
+                    "run": _record(self._require(db, "runs", target_run_id)),
+                    "source_run": _record(self._require(db, "runs", run_id))}
 
     def resume_conversation(self, conversation_id):
         with self._connection(write=True) as db:
