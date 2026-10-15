@@ -15,12 +15,12 @@ export function BrandIcon({ name = "", size = 25, search = false }: { name?: str
   else if (/openai|gpt|o[134]-/.test(value)) key = "openai";
   else if (/阿里|bailian|alibaba/.test(value)) key = "alibabacloud-color";
   else if (/brave/.test(value)) key = "brave";
-  // This supplied Qwen gradient starts almost black. Keep the artwork intact on
-  // a small neutral plate so its silhouette remains visible at night.
-  const plate = mode === "dark" && key === "qwen-color";
-  return <View accessible={false} style={{ width: size + (plate ? 4 : 0), height: size + (plate ? 4 : 0), borderRadius: 7, backgroundColor: plate ? colors.brandPlate : "transparent", alignItems: "center", justifyContent: "center" }}>
+  // Lift Qwen's near-black gradient stop at night instead of adding a plate.
+  const artwork = key ? brandMarks[key] : undefined;
+  const xml = mode === "dark" && key === "qwen-color" ? artwork?.replace("#00055F", "#A29CFF") : artwork;
+  return <View accessible={false} style={{ width: size, height: size, alignItems: "center", justifyContent: "center" }}>
     {/tavily/.test(value) ? <Image source={require("../assets/brands/tavily.png")} style={{ width: size, height: size }} resizeMode="contain" />
-      : key ? <SvgXml xml={brandMarks[key]} width={size} height={size} color={colors.ink} />
+      : xml ? <SvgXml xml={xml} width={size} height={size} color={colors.ink} />
       : <Ionicons name={search ? "globe-outline" : "hardware-chip-outline"} size={size} color={search ? colors.blue : colors.gold} />}
   </View>;
 }
