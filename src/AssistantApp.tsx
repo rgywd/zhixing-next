@@ -1,5 +1,6 @@
 import { availablePreference } from "./providerEditing";
-import { ThemeProvider } from "./ThemeProvider";
+import { ThemeProvider, useThemedStyles } from "./ThemeProvider";
+import { radius, space, typography, type ThemeColors } from "./theme";
 import { AppearanceControl } from "./AppearanceControl";
 import { useUi, ActionLink, BackLink, Button, humanError, PageHeading, PageScrollView, IconAction } from "./ui";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -12,6 +13,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  StyleSheet,
   Text,
   View,
 } from "react-native";
@@ -232,6 +234,7 @@ function ConnectedSession({
   connectionError: string;
 }) {
   const { s, colors } = useUi();
+  const chatStyles = useThemedStyles(createChatHeaderStyles);
   const [tab, setTab] = useState<Tab>("home");
   const [lifePage, setLifePage] = useState<LifePage>("overview");
   const [chatReturn, setChatReturn] = useState<ChatReturn>({ tab: "home", lifePage: "overview" });
@@ -244,6 +247,7 @@ function ConnectedSession({
   const [showSearchSettings, setShowSearchSettings] = useState(false);
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [status, setStatus] = useState<ServiceStatus | null>(null);
+  const [lastSyncFailed, setLastSyncFailed] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
@@ -376,6 +380,7 @@ function ConnectedSession({
         ]);
         if (!active) return;
         setStatus(health);
+        setLastSyncFailed(!modelPage);
         setAssistant(person);
         if (resources) setRecentResources(resources.items);
         setConversations((old) =>
@@ -393,6 +398,7 @@ function ConnectedSession({
         reportSync();
       } catch (e) {
         if (active) {
+          setLastSyncFailed(true);
           reportSync(e);
         }
       } finally {
@@ -499,6 +505,8 @@ function ConnectedSession({
     }
   }
   const welcomePreference = availablePreference(catalog, welcomeKind, welcomeModels[welcomeKind], welcomeEfforts[welcomeKind]);
+  const welcomeModel = catalog?.items.find((item) => item.id === (welcomePreference.modelId ?? catalog.roles.chat));
+  const welcomeStatus = lastSyncFailed ? "重新连接" : !status || !catalog ? "连接中" : !status.worker_online ? "服务离线" : (!welcomePreference.modelId && !status.model_ready) || !welcomeModel?.ready ? "未就绪" : busy ? "处理中" : "待命中";
   function submitWelcome() {
     const text = welcomeDraft.trim();
     if (text && welcome.ready && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
@@ -572,23 +580,25 @@ function ConnectedSession({
         <HealthPage connection={connection} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("health", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
       ) : tab === "chat" ? (
         <>
-          <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 5, gap: 5 }}>
-            <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="menu-outline" size={25} color={colors.ink} />
+          <View style={showWelcome ? chatStyles.header : { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 5, gap: 5 }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={showWelcome ? chatStyles.menu : { width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+              <Ionicons name="menu-outline" size={showWelcome ? 22 : 25} color={colors.ink} />
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={s.grow}>
-              <Text numberOfLines={1} style={[s.itemTitle, { textAlign: "left" }]}>{showWelcome ? assistant?.name ?? "知行" : selected?.title ?? "新的对话"}</Text>
-              <Text numberOfLines={1} style={[s.muted, { textAlign: "left" }]}>
+            <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={showWelcome ? chatStyles.copy : s.grow}>
+              <View style={showWelcome ? chatStyles.titleRow : undefined}><Text numberOfLines={1} style={showWelcome ? chatStyles.name : [s.itemTitle, { textAlign: "left" }]}>{showWelcome ? assistant?.name ?? "知行" : selected?.title ?? "新的对话"}</Text>
+                {showWelcome ? <View style={[chatStyles.status, welcomeStatus !== "待命中" && chatStyles.statusMuted]}><View style={[chatStyles.dot, welcomeStatus !== "待命中" && { backgroundColor: colors.muted }]} /><Text style={[chatStyles.statusText, welcomeStatus !== "待命中" && { color: colors.muted }]}>{welcomeStatus}</Text></View> : null}
+              </View>
+              <Text numberOfLines={1} style={showWelcome ? chatStyles.subtitle : [s.muted, { textAlign: "left" }]}>
                 {showWelcome ? "随时聊聊，把事情做成" : `${currentComposer?.kind === "task" ? "任务 · " : ""}${selectedModel?.name ?? "知行"}`}
               </Text>
             </Pressable>
             {!showWelcome && selected ? <IconAction icon={home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`) ? "bookmark" : "bookmark-outline"} label="固定或取消固定此对话" disabled={!home.ready} onPress={() => home.toggle({ kind: "conversation", id: selected.id, title: selected.title })} /> : null}
             <AppearanceControl />
-            <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => setShowWelcome(true)} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="create-outline" size={23} color={colors.ink} />
+            <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => setShowWelcome(true)} style={showWelcome ? chatStyles.action : { width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+              <Ionicons name="create-outline" size={23} color={showWelcome ? colors.muted : colors.ink} />
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="返回上一页" onPress={closeChat} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="close" size={22} color={colors.ink} />
+            <Pressable accessibilityRole="button" accessibilityLabel="返回上一页" onPress={closeChat} style={showWelcome ? chatStyles.action : { width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+              <Ionicons name="close" size={22} color={showWelcome ? colors.muted : colors.ink} />
             </Pressable>
           </View>
           {showWelcome ? (
@@ -670,3 +680,17 @@ function ConnectedSession({
     </View>
   );
 }
+
+const createChatHeaderStyles = (colors: ThemeColors) => StyleSheet.create({
+  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10, gap: 8, minHeight: 66, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
+  menu: { width: 42, minHeight: 44, borderRadius: radius.item, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", marginRight: 4 },
+  copy: { flex: 1, minWidth: 0, gap: 3 },
+  titleRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", columnGap: 7, rowGap: 3 },
+  name: { ...typography.section, fontSize: 18, lineHeight: 25, color: colors.ink, flexShrink: 1 },
+  status: { borderRadius: radius.pill, backgroundColor: colors.goldSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.strongLine, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: 7, paddingVertical: 1 },
+  statusMuted: { backgroundColor: colors.surface, borderColor: colors.line },
+  dot: { width: 5, height: 5, borderRadius: radius.pill, backgroundColor: colors.gold },
+  statusText: { ...typography.small, color: colors.gold },
+  subtitle: { ...typography.caption, color: colors.muted },
+  action: { width: 40, minHeight: 44, alignItems: "center", justifyContent: "center" },
+});

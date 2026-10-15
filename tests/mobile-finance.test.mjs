@@ -374,3 +374,11 @@ test("chat reports changed run receipts once, including terminal failures after 
   app.chat.runs = [run("completed"), { ...run("completed", "other-chat-run"), conversation_id: "other-conversation" }];
   app.render(props); assert.equal(batches.length, 4);
 });
+
+test("main conversations keep the welcome composer while service conversations keep their own layout", () => {
+  const main = chatHarness();
+  const mainComposer = main.render({ conversation: { id: "main-chat", agent_id: null, model_id: null, reasoning_effort: null } }).find((node) => node.type === "ConversationComposer");
+  assert.equal(mainComposer.props.appearance, "welcome");
+  const service = chatHarness();
+  assert.equal(service.render().find((node) => node.type === "ConversationComposer").props.appearance, "default");
+});
