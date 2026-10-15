@@ -25,8 +25,7 @@
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
         "android.permission.SCHEDULE_EXACT_ALARM",
-        "android.permission.READ_MEDIA_IMAGES",
-        "android.permission.DETECT_SCREEN_CAPTURE"
+        "android.permission.READ_MEDIA_IMAGES"
       ],
       "versionCode": 3
     },
