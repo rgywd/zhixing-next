@@ -63,7 +63,7 @@ test("welcome composer stays outside the scroll body and uses chat defaults desp
   const composer = nodes.find((node) => node.type === "ConversationComposer");
   assert.ok(tree.props.children.includes(composer));
   assert.equal(walk(scroll).includes(composer), false);
-  assert.equal(composer.props.appearance, "welcome"); assert.equal(composer.props.kind, "chat");
+  assert.equal(Object.hasOwn(composer.props, "appearance"), false); assert.equal(composer.props.kind, "chat");
   assert.equal(composer.props.model.id, "chat-model");
   const picker = nodes.find((node) => node.type === "ModelPicker");
   assert.equal(picker.props.selectedId, "chat-model"); assert.equal(picker.props.title, "选择聊天模型");

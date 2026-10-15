@@ -1,8 +1,7 @@
 import { availablePreference } from "./providerEditing";
-import { ThemeProvider, useThemedStyles } from "./ThemeProvider";
-import { radius, space, typography, type ThemeColors } from "./theme";
-import { AppearanceControl } from "./AppearanceControl";
-import { useUi, ActionLink, BackLink, Button, humanError, PageHeading, PageScrollView, IconAction } from "./ui";
+import { ThemeProvider } from "./ThemeProvider";
+import { AgentChatHeader } from "./AgentChatHeader";
+import { useUi, ActionLink, BackLink, Button, humanError, PageHeading, PageScrollView } from "./ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -13,7 +12,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  StyleSheet,
   Text,
   View,
 } from "react-native";
@@ -236,8 +234,7 @@ function ConnectedSession({
   onDisconnect: () => void;
   connectionError: string;
 }) {
-  const { s, colors } = useUi();
-  const chatStyles = useThemedStyles(createChatHeaderStyles);
+  const { s } = useUi();
   const [tab, setTab] = useState<Tab>("home");
   const todayDevice = useTodayDeviceContext(tab === "home");
   const [lifePage, setLifePage] = useState<LifePage>("overview");
@@ -278,10 +275,9 @@ function ConnectedSession({
   const alive = useRef(true);
   const refresh = useCallback(() => refreshRef.current(), []);
   const reportSync = useSyncStatus(refresh);
-  const [composerContext, setComposerContext] = useState<{ conversationId: string; modelId: string | null; kind: "chat" | "task" } | null>(null);
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
-  const currentComposer = composerContext?.conversationId === selectedId ? composerContext : null;
-  const selectedModel = catalog?.items.find((item) => item.id === (currentComposer ? currentComposer.modelId : selected?.model_id ?? catalog.roles.chat));
+  const selectedAgent = agents.find((item) => item.id === selected?.agent_id);
+  const chatAssistantName = selected?.agent_id ? selectedAgent?.name ?? (selected.agent_id === "finance" ? "财务助手" : selected.agent_id === "health" ? "健康助手" : "专属助手") : assistant?.name ?? "知行";
   const [serviceVersion, setServiceVersion] = useState(0);
   const observedRunStates = useRef(new Map<string, Run["status"]>());
   const showTabs = tab !== "chat" && (tab !== "life" || lifePage === "overview") && (tab !== "settings" || settingsView === "overview");
@@ -591,27 +587,18 @@ function ConnectedSession({
         <HealthPage connection={connection} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("health", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
       ) : tab === "chat" ? (
         <>
-          <View style={showWelcome ? chatStyles.header : { flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 5, gap: 5 }}>
-            <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={showWelcome ? chatStyles.menu : { width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="menu-outline" size={showWelcome ? 22 : 25} color={colors.ink} />
-            </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={() => setShowAiDrawer(true)} style={showWelcome ? chatStyles.copy : s.grow}>
-              <View style={showWelcome ? chatStyles.titleRow : undefined}><Text numberOfLines={1} style={showWelcome ? chatStyles.name : [s.itemTitle, { textAlign: "left" }]}>{showWelcome ? assistant?.name ?? "知行" : selected?.title ?? "新的对话"}</Text>
-                {showWelcome ? <View style={[chatStyles.status, welcomeStatus !== "待命中" && chatStyles.statusMuted]}><View style={[chatStyles.dot, welcomeStatus !== "待命中" && { backgroundColor: colors.muted }]} /><Text style={[chatStyles.statusText, welcomeStatus !== "待命中" && { color: colors.muted }]}>{welcomeStatus}</Text></View> : null}
-              </View>
-              <Text numberOfLines={1} style={showWelcome ? chatStyles.subtitle : [s.muted, { textAlign: "left" }]}>
-                {showWelcome ? "随时聊聊，把事情做成" : `${currentComposer?.kind === "task" ? "任务 · " : ""}${selectedModel?.name ?? "知行"}`}
-              </Text>
-            </Pressable>
-            {!showWelcome && selected ? <IconAction icon={home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`) ? "bookmark" : "bookmark-outline"} label="固定或取消固定此对话" disabled={!home.ready} onPress={() => home.toggle({ kind: "conversation", id: selected.id, title: selected.title })} /> : null}
-            <AppearanceControl />
-            <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => setShowWelcome(true)} style={showWelcome ? chatStyles.action : { width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="create-outline" size={23} color={showWelcome ? colors.muted : colors.ink} />
-            </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="返回上一页" onPress={closeChat} style={showWelcome ? chatStyles.action : { width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
-              <Ionicons name="close" size={22} color={showWelcome ? colors.muted : colors.ink} />
-            </Pressable>
-          </View>
+          <AgentChatHeader
+            title={showWelcome ? assistant?.name ?? "知行" : chatAssistantName}
+            subtitle={showWelcome ? "随时聊聊，把事情做成" : selected?.title ?? "新的对话"}
+            status={showWelcome ? welcomeStatus : undefined}
+            busy={busy}
+            onMenu={() => setShowAiDrawer(true)}
+            onNew={() => { if (!showWelcome && selected?.agent_id) void newConversation(false, selected.agent_id); else setShowWelcome(true); }}
+            onClose={closeChat}
+            pinned={Boolean(selected && home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`))}
+            pinReady={home.ready}
+            onPin={!showWelcome && selected ? () => home.toggle({ kind: "conversation", id: selected.id, title: selected.title }) : undefined}
+          />
           {showWelcome ? (
             <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />
           ) : selected ? (
@@ -621,9 +608,9 @@ function ConnectedSession({
               conversation={selected}
               focusMessageSeq={focusMessage?.conversationId === selected.id ? focusMessage.seq : null}
               onFocusHandled={focusHandled}
-              assistantName={agents.find((item) => item.id === selected.agent_id)?.name ?? assistant?.name ?? "知行"}
+              assistantName={chatAssistantName}
               catalog={catalog}
-              agentModelId={agents.find((item) => item.id === selected.agent_id)?.model_id ?? null}
+              agentModelId={selectedAgent?.model_id ?? null}
               initialKind={chatStart?.id === selected.id ? chatStart.kind : "chat"}
               initialTaskModelId={chatStart?.id === selected.id ? chatStart.taskModelId : null}
               initialTaskEffort={chatStart?.id === selected.id ? chatStart.taskEffort : null}
@@ -631,7 +618,6 @@ function ConnectedSession({
               startWithFiles={chatStart?.id === selected.id && chatStart.files}
               onFilesOpened={() => setChatStart((old) => old ? { ...old, files: false } : null)}
               onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))}
-              onComposerContext={setComposerContext}
               onRefresh={refresh}
               onRunsChanged={chatRunsChanged}
             />
@@ -691,17 +677,3 @@ function ConnectedSession({
     </View>
   );
 }
-
-const createChatHeaderStyles = (colors: ThemeColors) => StyleSheet.create({
-  header: { flexDirection: "row", alignItems: "center", paddingHorizontal: 16, paddingVertical: 10, gap: 8, minHeight: 66, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
-  menu: { width: 42, minHeight: 44, borderRadius: radius.item, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center", marginRight: 4 },
-  copy: { flex: 1, minWidth: 0, gap: 3 },
-  titleRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", columnGap: 7, rowGap: 3 },
-  name: { ...typography.section, fontSize: 18, lineHeight: 25, color: colors.ink, flexShrink: 1 },
-  status: { borderRadius: radius.pill, backgroundColor: colors.goldSoft, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.strongLine, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: 7, paddingVertical: 1 },
-  statusMuted: { backgroundColor: colors.surface, borderColor: colors.line },
-  dot: { width: 5, height: 5, borderRadius: radius.pill, backgroundColor: colors.gold },
-  statusText: { ...typography.small, color: colors.gold },
-  subtitle: { ...typography.caption, color: colors.muted },
-  action: { width: 40, minHeight: 44, alignItems: "center", justifyContent: "center" },
-});

@@ -30,9 +30,9 @@ function load(filename, dependencies, suffix = "") {
   return exports;
 }
 function appHarness({ connected = true, modelPage = { items: [], roles: { chat: null } }, serviceStatus = { model_ready: true, worker_online: true }, failStatus = false, failModels = false, chosenModelId = null } = {}) {
-  const lifecycle = hooks(), calls = [], reminderVersions = [], backHandlers = new Set(); let uuid = 0, reminderOpen = () => {}, keyboardVisible = false, keyboardDismisses = 0;
+  const lifecycle = hooks(), calls = [], reminderVersions = [], toggled = [], backHandlers = new Set(); let uuid = 0, reminderOpen = () => {}, keyboardVisible = false, keyboardDismisses = 0;
   const sync = () => {};
-  const conversations = ["finance", "health"].map((agent_id) => ({ id: `${agent_id}-history`, title: `${agent_id} history`, agent_id, model_id: null, reasoning_effort: null, project_id: null, updated_at: "2028-06-02T10:00:00Z" }));
+  const conversations = [null, "finance", "health"].map((agent_id) => ({ id: `${agent_id ?? "main"}-history`, title: `${agent_id ?? "main"} history`, agent_id, model_id: null, reasoning_effort: null, project_id: null, updated_at: "2028-06-02T10:00:00Z" }));
   const preferences = { pins: [{ kind: "project", id: "legacy-project", title: "旧项目" }, { kind: "conversation", id: "finance-history", title: "财务历史" }], visited: [{ kind: "project", id: "legacy-project", title: "旧项目" }], opened: { "project:legacy-project": "2028-06-02T11:00:00Z" } };
   const welcome = { value: { text: "hello", kind: "task", models: { chat: chosenModelId, task: null }, efforts: { chat: null, task: null }, searchId: null }, ready: true, error: "", consumeText: async () => {}, retry() {}, setText(next) { welcome.value.text = typeof next === "function" ? next(welcome.value.text) : next; }, setKind() {}, setSearch() {}, setModel() {}, setEffort() {} };
   const native = { ...Object.fromEntries(["ActivityIndicator", "Image", "KeyboardAvoidingView", "Modal", "Pressable", "Text", "View"].map((name) => [name, name])), StyleSheet: { create: (value) => value }, Platform: { OS: "android" }, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: (_event, callback) => { backHandlers.add(callback); return { remove: () => backHandlers.delete(callback) }; } }, Keyboard: { isVisible: () => keyboardVisible, dismiss() { keyboardVisible = false; keyboardDismisses++; }, addListener: () => ({ remove() {} }) } };
@@ -41,7 +41,7 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
     "react-native-safe-area-context": { SafeAreaProvider: "SafeAreaProvider", SafeAreaView: "SafeAreaView" }, "expo-status-bar": { StatusBar: "StatusBar" }, "expo-crypto": { randomUUID: () => `message-${++uuid}` }, "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
     "./theme": theme, "./providerEditing": { availablePreference }, "./ui": { useUi: () => ({ s: {}, colors: theme.lightColors }), humanError: (error) => error.message, ...Object.fromEntries(["BackLink", "Button", "PageScrollView", "PageHeading", "IconAction"].map((name) => [name, name])) },
     "./ConnectionStatus": { useSyncStatus: () => sync, ConnectionStatusProvider: "ConnectionStatusProvider", ServiceStatusNotice: "ServiceStatusNotice" },
-    "./useHomePreferences": { useHomePreferences: () => ({ preferences, ready: true, opened() {}, toggle() {}, retry() {} }) }, "./useWelcomeDraft": { useWelcomeDraft: () => welcome }, "./homeEntries": { targetKey },
+    "./useHomePreferences": { useHomePreferences: () => ({ preferences, ready: true, opened() {}, toggle: (target) => toggled.push(target), retry() {} }) }, "./useWelcomeDraft": { useWelcomeDraft: () => welcome }, "./homeEntries": { targetKey },
     "./useHealthReminders": { useHealthReminders(_connection, revision, onOpen) { reminderVersions.push(revision); reminderOpen = onOpen; } }, "./storage": { draftKey: () => "draft", saveDraft: async () => {}, clearDraft: async () => {} },
     "./api": { ...api, request: async (_connection, path, options) => {
       calls.push({ path, ...options });
@@ -49,21 +49,24 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
       if (path === "/assistant") return { name: "知行" };
       if (path === "/models") { if (failModels) throw new Error("models unavailable"); return modelPage; }
       if (path === "/agents") return { items: ["finance", "health"].map((id) => ({ id, name: id === "finance" ? "财务助手" : "健康助手", model_id: null })) };
-      if (path === "/conversations" && options?.method === "POST") return { ...options.body, id: `${options.body.agent_id}-created`, model_id: null, reasoning_effort: null };
+      if (path === "/conversations" && options?.method === "POST") {
+        const created = { ...options.body, id: `${options.body.agent_id ?? "main"}-created`, model_id: null, reasoning_effort: null };
+        conversations.push(created); return created;
+      }
       if (path.startsWith("/conversations/") && !path.includes("?") && !path.endsWith("/messages")) return conversations.find((item) => path === `/conversations/${item.id}`) ?? { id: "loaded", agent_id: null };
       if (path.endsWith("/messages")) return {};
       if (path.startsWith("/conversations")) return { items: conversations, next_cursor: null, previous_cursor: null };
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
+  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
   dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };
   const exported = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession, DisconnectedShell, BottomTabs };\n");
   const props = { connection: { url: "https://example.test", token: "test" }, onConnect() {}, onDisconnect() {}, connectionError: "" };
   const render = () => walk(lifecycle.render(() => (connected ? exported.ConnectedSession : exported.DisconnectedShell)(props)));
-  return { render, calls, preferences, welcome, reminderVersions, notification() { reminderOpen(); }, keyboard(visible) { keyboardVisible = visible; }, get keyboardDismisses() { return keyboardDismisses; }, tabsVisible() { return render().some((item) => item.type === exported.BottomTabs); }, back() { return [...backHandlers].at(-1)?.(); }, renderTabs() { const node = render().find((item) => item.type === exported.BottomTabs); assert.ok(node, "bottom navigation visible"); return walk(exported.BottomTabs(node.props)); }, unmount: lifecycle.unmount };
+  return { render, calls, preferences, welcome, reminderVersions, toggled, notification() { reminderOpen(); }, keyboard(visible) { keyboardVisible = visible; }, get keyboardDismisses() { return keyboardDismisses; }, tabsVisible() { return render().some((item) => item.type === exported.BottomTabs); }, back() { return [...backHandlers].at(-1)?.(); }, renderTabs() { const node = render().find((item) => item.type === exported.BottomTabs); assert.ok(node, "bottom navigation visible"); return walk(exported.BottomTabs(node.props)); }, unmount: lifecycle.unmount };
 }
 const find = (app, name) => app.render().find((node) => node.type === name);
 
@@ -80,7 +83,7 @@ test("life services open their own agent chats and return to the exact service b
     service.props.onChat(); await settle();
     const chat = find(app, "ChatPanel"); assert.equal(chat.props.conversation.agent_id, agent); assert.equal(chat.props.conversation.id, `${agent}-history`); assert.equal(chat.props.initialKind, "chat");
     assert.equal(app.tabsVisible(), false);
-    app.render().find((node) => node.props?.accessibilityLabel === "返回上一页").props.onPress();
+    find(app, "AgentChatHeader").props.onClose();
     assert.ok(find(app, pageName));
     find(app, pageName).props.onChat(); await settle(); assert.ok(find(app, "ChatPanel"));
     assert.equal(app.back(), true); assert.ok(find(app, pageName));
@@ -191,7 +194,7 @@ test("home record opens the existing finance agent without sending and returns d
     assert.equal(chat.props.initialKind, "chat"); assert.equal(app.tabsVisible(), false);
     assert.equal(find(app, "FinanceDashboard"), undefined);
     assert.equal(app.welcome.value.text, "hello", "opening the finance agent does not replace the main draft");
-    if (exit === "header") app.render().find((node) => node.props?.accessibilityLabel === "返回上一页").props.onPress();
+    if (exit === "header") find(app, "AgentChatHeader").props.onClose();
     else assert.equal(app.back(), true);
     assert.ok(find(app, "HomePanel")); assert.equal(app.tabsVisible(), true);
   }
@@ -226,6 +229,107 @@ test("welcome always starts chat even when a previous installation saved task mo
   const app = appHarness(); app.render(); await settle(); find(app, "HomePanel").props.onChat();
   assert.equal(find(app, "AiHome").props.kind, "chat"); find(app, "AiHome").props.onSend(); await settle();
   const sent = app.calls.find((call) => call.path.endsWith("/messages")); assert.equal(sent.body.kind, "chat"); app.unmount();
+});
+
+test("welcome, main and child conversations share one header with the correct identity and actions", async () => {
+  const app = appHarness(); app.render(); await settle();
+  find(app, "HomePanel").props.onChat();
+  const header = () => {
+    const headers = app.render().filter((node) => node.type === "AgentChatHeader");
+    assert.equal(headers.length, 1); return headers[0].props;
+  };
+  assert.equal(header().title, "知行"); assert.equal(header().subtitle, "随时聊聊，把事情做成");
+  assert.equal(typeof header().status, "string"); assert.equal(header().onPin, undefined);
+  header().onMenu(); assert.equal(find(app, "AiDrawer").props.visible, true);
+  find(app, "AiDrawer").props.onClose(); assert.equal(find(app, "AiDrawer").props.visible, false);
+  header().onClose(); assert.ok(find(app, "HomePanel"));
+  for (const [agent, title, pinned] of [[null, "知行", false], ["finance", "财务助手", true], ["health", "健康助手", false]]) {
+    const id = `${agent ?? "main"}-history`;
+    find(app, "HomePanel").props.onOpenConversation(id); await settle();
+    assert.equal(find(app, "ChatPanel").props.conversation.id, id);
+    assert.equal(header().title, title); assert.equal(header().subtitle, `${agent ?? "main"} history`);
+    assert.equal(header().status, undefined, "a conversation must not inherit the welcome readiness badge");
+    assert.equal(header().pinned, pinned); assert.equal(header().pinReady, true);
+    header().onPin(); assert.deepEqual(JSON.parse(JSON.stringify(app.toggled.at(-1))), { kind: "conversation", id, title: `${agent ?? "main"} history` });
+    header().onMenu(); assert.equal(find(app, "AiDrawer").props.visible, true);
+    find(app, "AiDrawer").props.onClose(); header().onClose(); assert.ok(find(app, "HomePanel"));
+  }
+  assert.equal(app.calls.some((call) => call.method === "POST"), false);
+  app.unmount();
+});
+
+test("a child header creates one empty conversation for the current agent and retains the service return path", async () => {
+  for (const [agent, pageName] of [["finance", "FinanceDashboard"], ["health", "HealthPage"]]) {
+    const app = appHarness(); app.render(); await settle(); openLifeService(app, agent);
+    find(app, pageName).props.onChat(); await settle();
+    assert.equal(find(app, "ChatPanel").props.conversation.id, `${agent}-history`);
+    const header = find(app, "AgentChatHeader");
+    header.props.onNew(); header.props.onNew(); await settle();
+    const created = app.calls.filter((call) => call.method === "POST");
+    assert.equal(created.length, 1, "repeated taps must not start multiple conversations or send a message");
+    assert.equal(created[0].path, "/conversations"); assert.equal(created[0].body.agent_id, agent); assert.equal(created[0].body.project_id, null);
+    const chat = find(app, "ChatPanel"); assert.equal(chat.props.conversation.id, `${agent}-created`); assert.equal(chat.props.conversation.agent_id, agent);
+    assert.equal(chat.props.initialKind, "chat"); assert.equal(find(app, "AiHome"), undefined);
+    assert.equal(app.welcome.value.text, "hello", "starting a child conversation preserves the main agent draft");
+    assert.equal(find(app, "AgentChatHeader").props.status, undefined);
+    find(app, "AgentChatHeader").props.onClose(); assert.ok(find(app, pageName));
+    app.back(); assert.ok(find(app, "LifePanel")); app.unmount();
+  }
+});
+
+test("new from the welcome or a main conversation returns to the preserved main draft without posting", async () => {
+  for (const current of ["welcome", "main"]) {
+    const app = appHarness(); app.render(); await settle();
+    const home = find(app, "HomePanel");
+    if (current === "welcome") home.props.onChat();
+    else { home.props.onOpenConversation("main-history"); await settle(); assert.ok(find(app, "ChatPanel")); }
+    find(app, "AgentChatHeader").props.onNew(); await settle();
+    assert.equal(find(app, "AiHome").props.draft, "hello"); assert.equal(find(app, "ChatPanel"), undefined);
+    assert.equal(find(app, "AgentChatHeader").props.onPin, undefined);
+    assert.equal(app.calls.some((call) => call.method === "POST"), false);
+    find(app, "AgentChatHeader").props.onClose(); assert.ok(find(app, "HomePanel")); app.unmount();
+  }
+});
+
+test("the real shared header preserves accessible controls, touch targets and theme colors", () => {
+  const flatten = (style) => Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : style || {};
+  for (const colors of [theme.lightColors, theme.darkColors]) {
+    const actions = [];
+    const { AgentChatHeader } = load("AgentChatHeader.tsx", {
+      "react/jsx-runtime": jsxRuntime,
+      "react-native": { View: "View", Text: "Text", Pressable: "Pressable", StyleSheet: { create: (value) => value, hairlineWidth: 1 } },
+      "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./AppearanceControl": { AppearanceControl: "AppearanceControl" },
+      "./ThemeProvider": { useThemedStyles: (factory) => factory(colors) }, "./theme": theme, "./ui": { useUi: () => ({ colors }) },
+    });
+    const props = { title: "财务助手", subtitle: "这个月的收支", pinned: true, onMenu: () => actions.push("menu"), onNew: () => actions.push("new"), onClose: () => actions.push("close"), onPin: () => actions.push("pin") };
+    const nodes = walk(AgentChatHeader(props));
+    const button = (label) => nodes.find((node) => node.type === "Pressable" && node.props.accessibilityLabel === label);
+    for (const [label, action] of [["打开对话侧边栏", "menu"], ["新建对话", "new"], ["返回上一页", "close"], ["固定或取消固定此对话", "pin"]]) {
+      const control = button(label); assert.equal(control.props.accessibilityRole, "button");
+      const style = flatten(control.props.style); assert.ok(style.width >= 40); assert.ok((style.minHeight ?? style.height) >= 44);
+      control.props.onPress(); assert.equal(actions.at(-1), action);
+    }
+    assert.equal(button("固定或取消固定此对话").props.accessibilityState.selected, true);
+    const identity = button("财务助手，这个月的收支，打开对话侧边栏"); assert.ok(identity); identity.props.onPress(); assert.equal(actions.at(-1), "menu");
+    const title = nodes.find((node) => node.type === "Text" && node.props.accessibilityRole === "header");
+    assert.equal(title.props.children, "财务助手"); assert.equal(flatten(title.props.style).color, colors.ink);
+    assert.equal(flatten(nodes.find((node) => node.type === "Text" && node.props.children === "这个月的收支").props.style).color, colors.muted);
+    assert.equal(nodes.filter((node) => node.type === "AppearanceControl").length, 1);
+    const bookmark = walk(button("固定或取消固定此对话")).find((node) => node.type === "Ionicons"); assert.equal(bookmark.props.name, "bookmark"); assert.equal(bookmark.props.color, colors.gold);
+
+    const locked = walk(AgentChatHeader({ ...props, busy: true, pinReady: false }));
+    for (const label of ["新建对话", "固定或取消固定此对话"]) {
+      const control = locked.find((node) => node.type === "Pressable" && node.props.accessibilityLabel === label);
+      assert.equal(control.props.disabled, true); assert.equal(control.props.accessibilityState.disabled, true);
+    }
+    assert.equal(locked.find((node) => node.props?.accessibilityLabel === "返回上一页").props.disabled, undefined);
+    for (const status of ["待命中", "重新连接"]) {
+      const welcome = walk(AgentChatHeader({ ...props, title: "知行", onPin: undefined, status }));
+      assert.equal(welcome.some((node) => node.props?.accessibilityLabel === "固定或取消固定此对话"), false);
+      const badge = welcome.find((node) => node.type === "Text" && node.props.children === status);
+      assert.equal(flatten(badge.props.style).color, status === "待命中" ? colors.gold : colors.muted);
+    }
+  }
 });
 
 test("every welcome suggestion keeps chat mode and the composer exposes no task switch", () => {
@@ -279,9 +383,9 @@ test("welcome readiness follows the service, selected model, and latest sync ins
   ]) {
     const app = appHarness(options);
     app.render(); find(app, "HomePanel").props.onChat();
-    assert.ok(app.render().some((node) => node.type === "Text" && node.props.children === "连接中"));
+    assert.equal(find(app, "AgentChatHeader").props.status, "连接中");
     await settle();
-    assert.ok(app.render().some((node) => node.type === "Text" && node.props.children === expected), expected);
+    assert.equal(find(app, "AgentChatHeader").props.status, expected);
     app.unmount();
   }
 });

@@ -336,7 +336,7 @@ export function ChatPanel({
         </View>
       ) : null}
       <ConversationComposer
-        appearance={conversation.agent_id ? "default" : "welcome"}
+        placeholder={`和${assistantName}聊聊，或交代一件事…`}
         text={draft.text} editable={draftReady && !draft.pending && !busy}
         onText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}
         canSend={draftReady && !busy && !modelBusy && !!(draft.text.trim() || draft.attachments?.length)} busy={busy} pending={!!draft.pending}
