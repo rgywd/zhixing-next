@@ -26,7 +26,6 @@ export const lightColors = {
   overlay: "rgba(20, 20, 22, 0.32)",
   shadow: "#18181B",
   switchThumb: "#FFFFFF",
-  brandPlate: "#F1F1EF",
 };
 
 export type ThemeColors = typeof lightColors;
@@ -57,7 +56,6 @@ export const darkColors: ThemeColors = {
   overlay: "rgba(0, 0, 0, 0.64)",
   shadow: "#000000",
   switchThumb: "#F2F1EE",
-  brandPlate: "#DDD8CE",
 };
 
 export type ThemeMode = "light" | "dark";
