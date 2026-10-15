@@ -21,6 +21,7 @@ Expo 使用 `userInterfaceStyle: automatic` 与 `expo-system-ui`，状态栏、�
   页头插画通过 `art` 和 `artStyle` 接入；插画位置等专有排版留在所属页面。
 - 管理子页使用普通 `PageScrollView`、`PageHeading`，由外层提供 `BackLink`。子页不预留底栏空白。
 - 财务和健康是生活子页，隐藏底栏，页内返回与 Android 返回键回到生活；服务表单先返回服务页。原工作位置只展示“施工中”“功能待定”，不恢复旧工作操作。
+- 财务和健康概览共用 `ServicePrimitives`：固定顶栏的返回、周期切换与外观，紧凑页头、圆角分区卡、大数字与双列指标。尺度由 `theme.ts` 的 `serviceLayout` 和原字阶统一提供；表单继续复用共享输入控件。进度与指标仅显示真实记录或预算推导值，未设置或尚未读取的数据明确标出。
 - 模型、思考、搜索等即时选择与创建项目等短表单使用 `BottomSheet`，保留当前页面背景。支持淡入遮罩、滑入／滑出、下拉手柄、点击遮罩和系统返回；尊重系统减少动态效果设置。文件浏览、任务记录、完整对话列表等长内容页仍使用 `SheetHeader`。
 - 卡片使用 `s.card` 和 `CardHeader`；双列入口使用 `ServiceTile`，纵向入口使用 `ActionRow`。
   `ActionRow compact` 用于最近对话等较密的列表，末行传 `last` 去掉分隔线。窄屏时 `ServiceTile`

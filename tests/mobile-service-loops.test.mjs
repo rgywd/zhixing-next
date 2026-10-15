@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import * as jsxRuntime from "react/jsx-runtime";
 import ts from "typescript";
 import { ApiError } from "../src/api.ts";
+import * as theme from "../src/theme.ts";
 
 const settle = async () => { for (let i = 0; i < 4; i++) await new Promise((resolve) => setImmediate(resolve)); };
 function hooks() {
@@ -38,10 +39,12 @@ function setup(mutate = async () => ({})) {
   return { forms, storage, render: (fn) => lifecycle.render(fn), remount() { lifecycle.unmount(); lifecycle = hooks(); } };
 }
 const connection = { url: "https://service.test", token: "test" };
-const ui = { useUi: () => ({ s: {} }), ...Object.fromEntries(["ActionLink", "BackLink", "Button", "CardHeader", "Empty", "Field", "PageHeading", "PageHero", "PageScrollView", "StatusPill", "SwitchRow"].map((key) => [key, key])) };
+const ui = { useUi: () => ({ s: {}, colors: theme.darkColors }), ...Object.fromEntries(["ActionLink", "BackLink", "Button", "CardHeader", "Empty", "Field", "PageHeading", "PageHero", "PageScrollView", "StatusPill", "SwitchRow"].map((key) => [key, key])) };
+const primitives = { useServiceStyles: () => ({}), ...Object.fromEntries(["ServiceToolbar", "ServiceHeading", "ServiceCard", "ServiceSectionHeader", "ServiceMetric", "ServiceChatRow", "ServiceEmpty"].map((key) => [key, key])) };
+const design = { "./ServicePrimitives": primitives, "./ThemeProvider": { useThemedStyles: (factory) => factory(theme.darkColors) }, "./theme": theme, "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" } };
 function pages(forms) {
   const dependencies = {
-    "react/jsx-runtime": jsxRuntime, react: {}, "react-native": {}, "./api": {}, "./Notice": {}, "./serviceApi": {}, "./serviceForms": forms, "./ui": ui,
+    ...design, "react/jsx-runtime": jsxRuntime, react: {}, "react-native": { StyleSheet: { create: (value) => value } }, "./api": {}, "./Notice": {}, "./serviceApi": {}, "./serviceForms": forms, "./ui": ui,
     "./deviceCapabilities": { allowNotifications: async () => {} }, "./healthNotifications": { pauseHealthNotificationsForToday: async () => {} },
   };
   return { ...load("FinanceDashboard", dependencies), ...load("HealthPage", dependencies) };
@@ -158,8 +161,8 @@ function screen(name, data, editing = null) {
   const editor = { draft: editing, visible: Boolean(editing), busy: false, ready: true, locked: false, error: "", storageError: "", open: (...args) => opened.push(args), close: () => backs.push(true), resume() {}, discard() {}, set() {}, submit: (...args) => saved.push(args) };
   const lifecycle = hooks(); const actual = setup().forms;
   const component = load(name, {
-    "react/jsx-runtime": jsxRuntime, react: lifecycle.react,
-    "react-native": { View: "View", Text: "Text", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator", BackHandler: { addEventListener: (_event, callback) => { backs.push(callback); return { remove() {} }; } } },
+    ...design, "react/jsx-runtime": jsxRuntime, react: lifecycle.react,
+    "react-native": { StyleSheet: { create: (value) => value }, View: "View", Text: "Text", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator", BackHandler: { addEventListener: (_event, callback) => { backs.push(callback); return { remove() {} }; } } },
     "./api": {}, "./Notice": { useNotice: () => ({ show() {} }) }, "./serviceApi": { readFinanceDashboard() {}, readHealthSummary() {} },
     "./serviceForms": { ...actual, useServiceEditor: () => editor, useServiceSnapshot: () => ({ data, loading: false, error: "", reload() {} }) }, "./ui": ui,
     "./deviceCapabilities": { allowNotifications: async () => {} }, "./healthNotifications": { pauseHealthNotificationsForToday: async () => {} },
@@ -175,7 +178,7 @@ function healthData(recommendations = []) {
 test("health empty state starts manual records without personal numeric defaults or a model", () => {
   const page = screen("HealthPage", healthData());
   assert.ok(page.nodes.some((node) => node.type === "PageScrollView" && node.props.tabs));
-  assert.ok(page.nodes.some((node) => node.type === "Empty" && node.props.title === "还没有这一天的饮食记录"));
+  assert.ok(page.nodes.some((node) => node.type === "ServiceEmpty" && node.props.title === "还没有这一天的饮食记录"));
   page.nodes.find((node) => node.type === "ActionLink" && node.props.children === "记录饮食").props.onPress();
   assert.equal(page.opened[0][0], "meal"); assert.equal(page.opened[0][1].description, "");
   page.nodes.find((node) => node.type === "ActionLink" && node.props.children === "记录体重").props.onPress();
