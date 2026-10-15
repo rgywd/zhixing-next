@@ -149,6 +149,10 @@ class AgentUpdate(AgentInput):
     pass
 
 
+class QueuedSteerInput(Input):
+    target_run_id: Identifier
+
+
 class MessageInput(Input):
     id: Identifier
     content: str = Field(default="", max_length=100_000)

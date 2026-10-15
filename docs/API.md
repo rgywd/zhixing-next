@@ -43,6 +43,7 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 - `GET /v1/conversations/{id}/messages?cursor=&limit=`: 按序号升序，消息
   `{id,conversation_id,role: user|assistant,content,attachments: Resource[],intent: queue|steer,run_id,status: accepted|applied|rejected,created_at,seq}`。
   自动转交的任务输入额外带 `origin:assistant_task`，手机显示为后台任务，不作为用户事实提取记忆；此字段只由服务端设置。内部转交可汇集多次 Steer 的附件，外部每条消息仍最多 8 份。
+  原先以 queue 提交、之后通过下方原子操作改为引导的同一消息额外带 `submitted_intent:queue`；`intent:steer` 表示当前投递方式。客户端恢复未收到回执的原始请求时以 `submitted_intent ?? intent` 核对提交方式，不改写本机已保存的请求。
 - `POST /v1/conversations/{id}/messages {id,content?: string,attachments?: string[],intent: queue|steer,kind: chat|task,target_run_id?: string,model_id?: string,reasoning_effort?: auto|none|minimal|low|medium|high|xhigh|max,search_provider_id?: string}`:
   回执 `{message,run}`；queue 创建 queued 运行，主知行与专用助手均可为单条聊天或任务覆盖模型与思考档位并选择联网搜索服务，保持原会话的助手身份与工具范围（选中的搜索工具仅对该次运行开放）；steer 必须绑定实际 running 运行，不接受这些覆盖字段，也不创建新运行。同一消息 ID 重试必须保持所有字段一致。
   `content` 默认空串，文字和附件至少提供一项；`attachments` 为最多 8 个不重复资源 ID，必须属于当前会话或同项目工作目录。引用越界返回 403，当前模型明确不支持图片返回 422，校验失败不落入队消息。Steer 图片使用目标运行模型校验。旧客户端不传附件仍兼容。
@@ -55,8 +56,11 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 - `POST /v1/runs/{id}/resume`: 重新入队带恢复记录的 interrupted 运行，继续原 run_id 和 checkpoint，返回 Run；不支持取消/失败运行（422），同会话已执行后续任务时返回 409。同一个 queued/recovering 请求可重复提交。
 - `POST /v1/runs/{id}/cancel`: 从未开始的 queued 立即撤回，不改变会话阻塞状态；等待批准或恢复的已开始任务取消后阻塞队列；running 持久记录取消请求，
   实际停止后暂停其后续队列。取消不删除后续队列。
+- `POST /v1/runs/{id}/queued/withdraw`: 仅撤回普通用户提交、`kind=chat,status=queued,phase=normal,started_at=null` 且尚未取消的输入，返回 `{message,run}`。同一撤回可以重试；worker 已领取时返回 `409 stale_queue`，不会转为取消正在运行的任务。撤回不改变当前执行或已有会话阻塞；后台任务、等待批准／回答、恢复任务及已改投为引导的输入不能使用此接口。
+- `POST /v1/runs/{id}/queued/steer {target_run_id}`: 将上述尚未开始的队列输入原子改投到同会话、未请求取消的实际 running 运行，返回 `{message,run:目标运行,source_run:已撤回的原队列运行}`。保留同一 message ID、顺序、正文、附件、创建时间和原始 `request_json`；不重新上传附件、不新建消息／运行，也不把原队列的模型、思考或搜索配置覆盖到目标。图片按目标已保存的模型快照校验，不支持时返回 `422 image_not_supported` 并保持原队列。source 被领取或 target 已结束／取消时返回 409，整个操作无部分修改。
+  成功后重试同一 source／target 返回同一投递的当前回执，即使引导已应用或目标已结束；不同目标返回 `409 stale_queue`，不会再次投递。原 queue POST 仍须原样重试，返回同一已改投消息和目标运行。操作与 worker 领取、结束共用 SQLite 写事务；禁止客户端使用“先取消再发送”模拟转换。原队列模型快照被清理，目标配置、checkpoint 和实际效果不变。
 - `GET /v1/runs/{id}/events?after=0&limit=100`: `{items: [{seq,run_id,type,data,created_at}],next_cursor}`。
-  类型包括 started/progress/tool/steer_applied/execution/artifact/operation/approval/paused/recovering/completed/failed/cancelled/interrupted；序号单调递增。
+  类型包括 started/progress/tool/queue_promoted/steer_applied/execution/artifact/operation/approval/paused/recovering/completed/failed/cancelled/interrupted；序号单调递增。`queue_promoted.data={message_id,source_run_id}` 只表示同一排队输入已接受为目标引导；实际应用仍以 checkpoint 后的 `steer_applied` 为准。
   模型实时显示使用 additive 事件 `assistant.reset`、`assistant.snapshot`、`reasoning.snapshot`。reset 的 data 为 `{stream_id}`，每次运行实际开始或从 checkpoint 恢复时先发，清除同一 run 旧的未确认实时正文／思考，不删除工具回执或已落库消息。snapshot 为 `{stream_id,message_id,text,truncated?}`：同一 key 的 text 是完整替换快照，禁止拼接；不同模型回合／重试使用不同 message_id。客户端按 run 隔离、按 event seq 排序去重，仅接受当前 stream_id，正文优先最新回合；最终助手消息落库后优先显示最终消息。
   快照只含模型实际提供的正文或显式 reasoning 内容；不发送系统提示、模型请求、签名、工具参数或完整 graph state。仅投影主图 `model` 节点，内部摘要及子图 token 不冒充当前助手正文。首片立即发送，之后约 100ms 或累计 1024 字符更新，步骤结束刷新；每字段上限 65536 个 UTF-16 code units（与手机字符串长度一致，不截断 emoji 代理对），每次运行实际执行最多 64 个模型消息、512 个快照及 1 MiB JSON 快照负载。超出后停止实时投影，最终消息仍按原流程完整保存；截断快照可带 `truncated:true`。供应商不提供思考时不产生 reasoning 事件。
   这些只是展示投影，不是 checkpoint／成功回执，不创建额外聊天消息，不改变 token 预算、工具批准或恢复幂等；取消、失败和恢复仍以原有持久事件及最终状态为准。`tool.data={tool,tool_call_id,status:started|completed|failed,cancel_requested?}` 继续表示实际工具阶段，客户端仅显示安全工具名及状态，不把工具参数或输出直接当聊天正文。

@@ -42,6 +42,8 @@ import { ApprovalCards } from "./ApprovalCards";
 import { RunReport } from "./RunReport";
 import { FilesPanel } from "./FilesPanel";
 import { SearchPicker } from "./SearchPicker";
+import { QueuedMessages } from "./QueuedMessages";
+import { useQueuedMessages } from "./useQueuedMessages";
 
 const searchViewabilityConfig = { itemVisiblePercentThreshold: 1 };
 
@@ -155,6 +157,9 @@ export function ChatPanel({
     liveRun,
   } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles, focusMessageSeq: focusAnchor,
     defaultIntent: chatPreferences.defaultIntent, defaultIntentReady: chatPreferences.ready });
+  const refreshQueuedMessages = useCallback(() => refresh.current(), [refresh]);
+  const queuedMessages = useQueuedMessages({ connection, conversationId: conversation.id, runs, running,
+    onChanged: refreshQueuedMessages, onError: setError });
   const runStates = useRef<{ conversationId: string; statuses: Map<string, Run["status"]> }>({ conversationId: conversation.id, statuses: new Map() });
   useEffect(() => {
     if (!onRunsChanged) return;
@@ -245,6 +250,7 @@ export function ChatPanel({
         contentContainerStyle={{
           paddingHorizontal: 18,
           paddingVertical: 16,
+          paddingBottom: queuedMessages.items.length ? 76 : 16,
           gap: 20,
           flexGrow: 1,
         }}
@@ -287,6 +293,9 @@ export function ChatPanel({
             {item.role === "assistant" ? <View style={chatStyles.assistantMark}><Ionicons name="sparkles" size={13} color={colors.accent} /></View> : null}
             <Text style={[s.muted, item.role === "assistant" && { color: colors.ink, fontWeight: "600" }]}>
               {item.origin === "assistant_task" ? "后台任务" : item.role === "assistant" ? assistantName : "你"}
+              {item.role === "user" && !item.origin && item.intent === "queue" && item.status === "rejected"
+                && runs.some((run) => run.id === item.run_id && run.status === "cancelled" && run.started_at === null)
+                ? " · 已撤回" : ""}
               {item.intent === "steer"
                 ? ` · 引导${item.status === "applied" ? "已应用" : item.status === "rejected" ? "未应用" : "待应用"}`
                 : ""}
@@ -344,6 +353,9 @@ export function ChatPanel({
         </View>
       ) : null}
       <ConversationComposer
+        floating={queuedMessages.items.length ? <QueuedMessages key={conversation.id} connection={connection} items={queuedMessages.items} running={running}
+          busyId={queuedMessages.busyId} error={queuedMessages.error} onWithdraw={queuedMessages.withdraw}
+          onSteer={queuedMessages.steer} onOpenRun={setDetail} /> : undefined}
         placeholder={`和${assistantName}聊聊，或交代一件事…`}
         text={draft.text} editable={draftReady && !draft.pending && !busy}
         onText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}

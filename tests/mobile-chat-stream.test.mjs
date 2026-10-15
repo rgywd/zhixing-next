@@ -222,6 +222,31 @@ test("legacy text and text begun before preferences load stay queued after the d
   assert.equal(posted.intent, "queue"); assert.equal(posted.target_run_id, undefined); reading.unmount();
 });
 
+test("an original queue pending request settles from the same promoted message receipt without resubmission", async () => {
+  const pending = { id: "original-id", content: "Keep original content", intent: "queue", kind: "chat", attachments: ["image", "document"] };
+  const initial = { text: pending.content, pending, attachments: [{ id: "image" }, { id: "document" }] };
+  const app = harness({ initial });
+  app.setMessages([{ id: pending.id, conversation_id: "c1", role: "user", content: pending.content,
+    intent: "steer", submitted_intent: "queue", run_id: "target-reply", seq: 3, status: "accepted",
+    attachments: [{ id: "document" }, { id: "image" }] }]);
+  const value = await app.ready();
+  assert.equal(value.draft.pending, null); assert.equal(value.draft.text, ""); assert.equal(app.stored().pending, null);
+  assert.equal(app.calls.filter((call) => call.method === "POST").length, 0); app.unmount();
+});
+
+test("promoted receipts with mismatched original identity, content, intent or attachments never clear pending", async () => {
+  const pending = { id: "original-id", content: "Keep original content", intent: "queue", kind: "chat", attachments: ["image"] };
+  const receipt = { id: pending.id, conversation_id: "c1", role: "user", content: pending.content,
+    intent: "steer", submitted_intent: "queue", run_id: "target-reply", seq: 3, status: "accepted", attachments: [{ id: "image" }] };
+  for (const mismatch of [{ id: "another-id" }, { conversation_id: "c2" }, { role: "assistant" }, { content: "Changed" },
+    { submitted_intent: undefined }, { submitted_intent: "steer" }, { attachments: [] }, { attachments: [{ id: "another-image" }] }]) {
+    const app = harness({ initial: { text: pending.content, pending, attachments: [{ id: "image" }] } });
+    app.setMessages([{ ...receipt, ...mismatch }]); const value = await app.ready();
+    assert.equal(value.draft.pending.id, pending.id); assert.deepEqual(plain(app.stored().pending), pending);
+    assert.equal(app.calls.filter((call) => call.method === "POST").length, 0); app.unmount();
+  }
+});
+
 test("LiveRunView exposes actual reasoning by default during a run and supports folding tool progress", () => {
   const lifecycle = hooks();
   const { LiveRunView } = load("LiveRunView.tsx", { react: lifecycle.react, "react/jsx-runtime": jsx, "react-native": { Text: "Text", View: "View", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator" }, "@react-native-vector-icons/ionicons": { Ionicons: "Icon" }, "./MessageBody": { MessageBody: "MessageBody" }, "./theme": { layout: { touchTarget: 44 } }, "./ui": { useUi: () => ({ s: { row: {}, muted: {}, description: {} }, colors: { muted: "#aaa", gold: "#ba8", line: "#333" } }) } });

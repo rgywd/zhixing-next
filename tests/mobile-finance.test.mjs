@@ -76,6 +76,7 @@ function hooks() {
 function chatHarness(state = {}, options = {}) {
   const calls = [];
   const hookInputs = [];
+  const queueInputs = [];
   const lifecycle = hooks();
   const sync = () => {};
   const chat = {
@@ -96,12 +97,13 @@ function chatHarness(state = {}, options = {}) {
     "./chatPreferences": { useChatPreferences: () => options.chatPreferences ?? { defaultIntent: "queue", ready: true, error: "", retry() {} } },
     "./ConnectionStatus": { useSyncStatus: () => sync },
     "./useChat": { useChat: (input) => { hookInputs.push(input); return chat; } },
+    "./useQueuedMessages": { useQueuedMessages: (input) => { queueInputs.push(input); return options.queuedMessages ?? { items: [], busyId: null, error: "", async withdraw() {}, async steer() {} }; } },
     "./api": { request: options.request ?? (async (_connection, path, options) => { calls.push({ path, ...options }); return options.body; }) },
   };
-  for (const name of ["MessageBody", "ConversationComposer", "ReasoningPicker", "ModelPicker", "Attachments", "ApprovalCards", "RunReport", "FilesPanel", "SearchPicker", "BottomSheet", "LiveRunView"]) dependencies[`./${name}`] = { [name]: name };
+  for (const name of ["MessageBody", "ConversationComposer", "ReasoningPicker", "ModelPicker", "Attachments", "ApprovalCards", "RunReport", "FilesPanel", "SearchPicker", "BottomSheet", "LiveRunView", "QueuedMessages"]) dependencies[`./${name}`] = { [name]: name };
   const { ChatPanel } = load("ChatPanel", dependencies, options.globals);
   const defaults = { connection: {}, conversation: { id: "finance-chat", agent_id: "finance", model_id: null, reasoning_effort: null }, catalog, assistantName: "财务助手", onRefresh() {}, onConversationChanged() {} };
-  return { calls, hookInputs, lifecycle, chat, render: (props = {}) => walk(lifecycle.render(ChatPanel, { ...defaults, ...props })) };
+  return { calls, hookInputs, queueInputs, lifecycle, chat, render: (props = {}) => walk(lifecycle.render(ChatPanel, { ...defaults, ...props })) };
 }
 
 function financeHarness(colors = theme.lightColors) {
@@ -415,6 +417,50 @@ test("active reply controls live in the settings sheet while live content and ap
   assert.deepEqual(actions, [["detail", "active-run"], ["cancel", "active-run"], ["close"]]);
   app.chat.running = { ...running, cancel_requested: true };
   assert.equal(app.render({ settingsOpen: true }).find((node) => node.type === "Button" && node.props.children === "已请求取消").props.disabled, true);
+});
+
+test("every agent uses the same floating queue slot and reserves scrollable clearance only when needed", async () => {
+  for (const agentId of [null, "finance", "health"]) {
+    const actions = [];
+    const running = { id: "active-run", status: "running", kind: "chat", cancel_requested: false };
+    const items = [{ run: { id: "queued-run" }, text: "等这条回复后再做", attachments: [] }];
+    const queuedMessages = { items, busyId: null, error: "", withdraw: async (item) => actions.push(["withdraw", item]), steer: async (item) => actions.push(["steer", item]) };
+    const app = chatHarness({ running, runs: [running], setDetail: (id) => actions.push(["detail", id]) }, { queuedMessages });
+    let nodes = app.render({ conversation: { id: `chat-${agentId}`, agent_id: agentId } });
+    const composer = nodes.find((node) => node.type === "ConversationComposer");
+    const floating = composer.props.floating;
+    assert.equal(floating.type, "QueuedMessages");
+    assert.equal(floating.props.items, items);
+    assert.equal(floating.props.running, running);
+    assert.equal(floating.props.onSteer, queuedMessages.steer);
+    assert.equal(floating.props.onWithdraw, queuedMessages.withdraw);
+    floating.props.onOpenRun("queued-run");
+    assert.deepEqual(actions, [["detail", "queued-run"]]);
+    assert.equal(app.queueInputs.at(-1).conversationId, `chat-${agentId}`);
+    assert.equal(app.queueInputs.at(-1).running, running);
+    assert.equal(nodes.find((node) => node.type === "FlatList").props.contentContainerStyle.paddingBottom, 76);
+    queuedMessages.items = [];
+    nodes = app.render();
+    assert.equal(nodes.find((node) => node.type === "ConversationComposer").props.floating, undefined);
+    assert.equal(nodes.find((node) => node.type === "FlatList").props.contentContainerStyle.paddingBottom, 16);
+  }
+});
+
+test("withdrawn unstarted queue messages are labelled without mislabelling rejected steering or started runs", () => {
+  for (const [intent, status, runStatus, startedAt, expected] of [
+    ["queue", "rejected", "cancelled", null, true],
+    ["queue", "rejected", "cancelled", "2026-10-15", false],
+    ["queue", "rejected", "cancelled", undefined, false],
+    ["queue", "accepted", "cancelled", null, false],
+    ["steer", "rejected", "cancelled", null, false],
+  ]) {
+    const message = { id: "message", role: "user", intent, status, run_id: "withdrawn", content: "原始文字" };
+    const app = chatHarness({ runs: [{ id: "withdrawn", status: runStatus, started_at: startedAt }] });
+    const list = app.render().find((node) => node.type === "FlatList");
+    const body = text(list.props.renderItem({ item: message }));
+    assert.equal(body.includes("已撤回"), expected);
+    assert.match(body, /原始文字/);
+  }
 });
 
 test("committed reply metadata moves before its matching assistant body and never appears twice", () => {
