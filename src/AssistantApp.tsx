@@ -57,6 +57,7 @@ import { ConstructionPage } from "./ConstructionPage";
 import { useHealthReminders } from "./useHealthReminders";
 import { ConnectionSettingsPanel, PersonaSettingsPanel } from "./SettingsPanel";
 import { SettingsHome, type SettingsDestination } from "./SettingsHome";
+import { PasswordVaultPanel } from "./PasswordVaultPanel";
 import { SearchPicker } from "./SearchPicker";
 import { AgentsPanel } from "./AgentsPanel";
 import { DeviceCapabilitiesPanel } from "./DeviceCapabilitiesPanel";
@@ -191,9 +192,10 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
   const [tab, setTab] = useState<Tab>("home");
   const todayDevice = useTodayDeviceContext(tab === "home");
   const [lifePage, setLifePage] = useState<LifePage>("overview");
-  const [localSettings, setLocalSettings] = useState<"overview" | "connection" | "device">("overview");
+  const [localSettings, setLocalSettings] = useState<"overview" | "connection" | "device" | "vault">("overview");
   useEffect(() => {
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (tab === "settings" && localSettings === "vault") return false;
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
       if (tab === "settings" && localSettings !== "overview") { setLocalSettings("overview"); return true; }
       if (tab === "life" && lifePage !== "overview") { setLifePage("overview"); return true; }
@@ -211,7 +213,8 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
       : tab === "work" ? <ConstructionPage />
       : tab === "life" ? lifePage === "overview" ? <LifePanel onFinance={() => setLifePage("finance")} onHealth={() => setLifePage("health")} onChat={connect} />
         : <><BackLink label="生活" onPress={() => setLifePage("overview")} /><PageScrollView><PageHeading title={lifePage === "finance" ? "财务" : "健康"} description="连接服务后，记录收支与饮食，继续自己的目标。" /><Button onPress={connect}>连接服务</Button></PageScrollView></>
-      : tab === "settings" ? localSettings === "overview" ? <SettingsHome onOpen={(destination) => setLocalSettings(destination === "device" ? "device" : "connection")} />
+      : tab === "settings" ? localSettings === "overview" ? <SettingsHome onOpen={(destination) => setLocalSettings(destination === "device" || destination === "vault" ? destination : "connection")} />
+        : localSettings === "vault" ? <PasswordVaultPanel onBack={() => setLocalSettings("overview")} />
         : <><BackLink label="设置" onPress={() => setLocalSettings("overview")} />{localSettings === "device" ? <DeviceCapabilitiesPanel /> : <ConnectionSettingsPanel onConnect={onConnect} />}</>
       : <PageScrollView tabs><PageHeading title="连接知行" description="连接服务后，和知行聊聊。" /><Button onPress={connect}>连接服务</Button></PageScrollView>}
     {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
@@ -289,6 +292,7 @@ function ConnectedSession({
   }, []);
   useEffect(() => {
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (tab === "settings" && settingsView === "vault") return false;
       navigation.current++;
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
       if (tab === "chat") { setTab(chatReturn.tab); setLifePage(chatReturn.lifePage); return true; }
@@ -628,6 +632,8 @@ function ConnectedSession({
           if (destination === "search") setShowSearchSettings(true);
           else { if (destination === "resources") setResourceReturnTab("settings"); setSettingsView(destination); }
         }} />
+      ) : settingsView === "vault" ? (
+        <PasswordVaultPanel onBack={() => { navigation.current++; setSettingsView("overview"); }} />
       ) : (
         <>
           <BackLink label={settingsView === "resources" && resourceReturnTab === "home" ? "首页" : "设置"} onPress={() => { navigation.current++; setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); }} />

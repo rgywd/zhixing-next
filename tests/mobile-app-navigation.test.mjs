@@ -59,7 +59,7 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
+  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
   dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };
@@ -69,6 +69,37 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
   return { render, calls, preferences, welcome, reminderVersions, toggled, notification() { reminderOpen(); }, keyboard(visible) { keyboardVisible = visible; }, get keyboardDismisses() { return keyboardDismisses; }, tabsVisible() { return render().some((item) => item.type === exported.BottomTabs); }, back() { return [...backHandlers].at(-1)?.(); }, renderTabs() { const node = render().find((item) => item.type === exported.BottomTabs); assert.ok(node, "bottom navigation visible"); return walk(exported.BottomTabs(node.props)); }, unmount: lifecycle.unmount };
 }
 const find = (app, name) => app.render().find((node) => node.type === name);
+
+test("local password vault stays available without a server and owns its private return path", async () => {
+  for (const connected of [true, false]) {
+    const app = appHarness({ connected }); app.render(); await settle();
+    app.renderTabs().find((node) => node.props.accessibilityLabel === "设置").props.onPress();
+    find(app, "SettingsHome").props.onOpen("vault");
+    const vault = find(app, "PasswordVaultPanel"); assert.ok(vault);
+    assert.equal(app.tabsVisible(), false);
+    assert.equal(find(app, "BackLink"), undefined, "the panel owns lock-before-exit and keyboard handling");
+    assert.equal(app.back(), false, "the parent must leave back handling to the private panel");
+    assert.ok(find(app, "PasswordVaultPanel"));
+    vault.props.onBack(); assert.ok(find(app, "SettingsHome")); assert.equal(app.tabsVisible(), true);
+    assert.equal(app.calls.some((call) => call.method === "POST"), false);
+    if (!connected) assert.equal(app.calls.length, 0, "local access must not depend on the service");
+    app.unmount();
+  }
+});
+
+test("settings groups password management in the toolbox", () => {
+  const opened = [];
+  const { SettingsHome } = load("SettingsHome.tsx", {
+    "react/jsx-runtime": jsxRuntime, "./AppearanceControl": { AppearanceControl: "AppearanceControl" },
+    "./ui": Object.fromEntries(["ActionRow", "PageHero", "PageScrollView", "SettingsGroup"].map((name) => [name, name])),
+  });
+  const nodes = walk(SettingsHome({ onOpen: (destination) => opened.push(destination) }));
+  const toolbox = nodes.find((node) => node.type === "SettingsGroup" && node.props.title === "工具箱");
+  assert.ok(toolbox);
+  const row = walk(toolbox).find((node) => node.type === "ActionRow" && node.props.title === "密码管理");
+  row.props.onPress(); assert.deepEqual(opened, ["vault"]);
+  assert.deepEqual(nodes.filter((node) => node.type === "SettingsGroup").map((node) => node.props.title), ["通用", "工具箱", "模型与服务", "助手", "数据与连接"]);
+});
 
 function openLifeService(app, service) {
   find(app, "HomePanel").props.onLife();
