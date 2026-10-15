@@ -72,6 +72,8 @@ export const space = { xs: 4, sm: 8, md: 12, lg: 16, xl: 24 };
 export const radius = { small: 10, control: 12, item: 16, card: 20, pill: 999 };
 export const layout = { gutter: 16, pageGap: 14, cardPadding: 14, heroHeight: 116, touchTarget: 44, compactWidth: 360, tabClearance: 132 };
 
+export const serviceLayout = { cardRadius: 24, cardPadding: 20, tileRadius: 16, headingSize: 28, amountSize: 34 };
+
 export const typography = {
   kicker: { fontSize: 12, lineHeight: 18, fontWeight: "700", letterSpacing: 0.5 },
   hero: { fontSize: 31, lineHeight: 42, fontWeight: "700" },

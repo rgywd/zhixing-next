@@ -6,13 +6,16 @@ import type { ServicePageProps } from "./FinanceDashboard";
 import { useNotice } from "./Notice";
 import { readHealthSummary, type HealthMeal, type HealthProfile, type HealthRecommendation, type HealthReminders, type HealthRule, type HealthSteps, type HealthWeight, type ServiceMutation } from "./serviceApi";
 import { localDate, localTime, localTimestamp, mealLabels, parseReminderSlots, positiveNumber, requireDate, requireTime, textLines, useServiceEditor, useServiceSnapshot, validDate, type ServiceDraft } from "./serviceForms";
-import { ActionLink, BackLink, Button, CardHeader, Empty, Field, PageHeading, PageHero, PageScrollView, StatusPill, SwitchRow, useUi } from "./ui";
+import { ActionLink, BackLink, Button, Field, PageHeading, PageScrollView, StatusPill, SwitchRow, useUi } from "./ui";
+
+import { ServiceToolbar, ServiceHeading, ServiceCard, ServiceSectionHeader, ServiceMetric, ServiceChatRow, ServiceEmpty, useServiceStyles } from "./ServicePrimitives";
 
 const ruleKinds = { guideline: "饮食约定", restriction: "必须遵守的限制", preference: "偏好" };
 const ruleStates = { active: "生效", paused: "暂停", proposed: "待采纳" };
 const feedbackLabels = { accepted: "已采纳", replaced: "希望替换", declined: "这次不采用" };
 export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
   const { s } = useUi();
+  const v = useServiceStyles();
   const { show } = useNotice();
   const [date, setDate] = useState(localDate());
   const [showAllWeights, setShowAllWeights] = useState(false);
@@ -123,86 +126,118 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
     </View>;
   }
   const trend = data?.review.weight_trend;
+  const recordedMeals = data?.meals.filter((item) => item.status === "recorded").length;
+  const availableRecommendations = data?.recommendations.filter((item) => item.target_date === date && item.status === "current" && !item.latest_feedback);
+  const latestSteps = data?.steps.reduce<HealthSteps | null>((latest, item) => !latest || Date.parse(item.measured_at) > Date.parse(latest.measured_at) ? item : latest, null);
+  const unknown = snapshot.loading ? "读取中" : "待记录";
+  const nextMeal = () => onChat(`请结合我的当前资料、有效饮食规范和最近实际记录，推荐 ${date} 的下一餐。先使用健康工具读取依据，给少量可执行选项并保存建议；缺少真实商家或价格时不要编造。`);
   return <View style={s.body}>
-    {onBack ? <BackLink label="生活" onPress={onBack} /> : null}
+    <ServiceToolbar period={date} onBack={onBack} onPrevious={() => shiftDate(-1)} onNext={() => shiftDate(1)} onCurrent={() => setDate(localDate())} previousLabel="前一天" nextLabel="后一天" currentLabel="回到今天" />
     <PageScrollView tabs={!onBack}>
-    <PageHero eyebrow="HEALTH" title="健康" description="聊出适合你的饮食安排，记录变化，一起调整。" />
-    <View style={s.spread}><ActionLink icon="chevron-back" tone="neutral" onPress={() => shiftDate(-1)}>前一天</ActionLink><ActionLink tone="neutral" onPress={() => setDate(localDate())}>{date === localDate() ? "今天" : date}</ActionLink><ActionLink icon="chevron-forward" tone="neutral" onPress={() => shiftDate(1)}>后一天</ActionLink></View>
-    {snapshot.loading && !data ? <ActivityIndicator accessibilityLabel="正在读取健康数据" /> : null}
-    {snapshot.error ? <View style={s.notice}><Text accessibilityRole="alert" style={s.error}>{data ? "当前显示上次同步的数据。" : "健康摘要尚未读取。"}{snapshot.error}</Text><ActionLink disabled={snapshot.loading} onPress={() => void snapshot.reload()}>重新连接并刷新</ActionLink></View> : null}
-    {editor.storageError ? <View style={s.stack}><Text accessibilityRole="alert" style={s.error}>{editor.storageError}</Text>{!editor.ready ? <ActionLink onPress={editor.retryRead}>重新读取本机草稿</ActionLink> : null}</View> : null}
-    {editor.draft ? <Button secondary onPress={editor.resume}>继续尚未完成的编辑</Button> : null}
-    <View style={s.card}>
-      <CardHeader icon="restaurant-outline" title="吃什么，一起想" tone="gold" />
-      <Text style={s.description}>根据当前饮食约定、实际记录和用餐条件，挑选能做到的一顿。</Text>
-      <Button icon="chatbubble-ellipses-outline" onPress={() => onChat(`请结合我的当前资料、有效饮食规范和最近实际记录，推荐 ${date} 的下一餐。先使用健康工具读取依据，给少量可执行选项并保存建议；缺少真实商家或价格时不要编造。`)}>聊聊下一餐</Button>
-      <View style={s.wrap}><ActionLink disabled={!editor.ready} onPress={() => openMeal()}>记录饮食</ActionLink><ActionLink disabled={!editor.ready} onPress={() => openMeasure("weight")}>记录体重</ActionLink><ActionLink onPress={() => onChat()}>健康对话</ActionLink></View>
-    </View>
-    {(data?.recommendations ?? []).filter((item) => item.target_date === date).slice(0, 3).map((recommendation) => <View key={recommendation.id} style={s.card}>
-      <CardHeader icon="sparkles-outline" title={`${recommendation.target_date} ${mealLabels[recommendation.meal_type]}建议`} tone="gold" />
-      {recommendation.latest_feedback ? <StatusPill>{`历史选择 · ${feedbackLabels[recommendation.latest_feedback.action]}`}</StatusPill> : recommendation.status === "stale" ? <><StatusPill>依据已变化</StatusPill><Text style={s.muted}>请按最新规范重新推荐。</Text><ActionLink onPress={() => onChat("我的资料或饮食规范已变化，请读取最新依据，更新这顿饭的建议并保存。")}>更新建议</ActionLink></> : null}
-      {recommendation.note ? <Text style={s.description}>{recommendation.note}</Text> : null}
-      {recommendation.options.map((option) => <View key={option.id} style={s.stack}>
-        <Text style={s.itemTitle}>{option.title}</Text><Text style={s.text}>{option.description}</Text>
-        {option.portion ? <Text style={s.description}>份量：{option.portion}</Text> : null}
-        {option.reason ? <Text style={s.description}>{option.reason}</Text> : null}
-        {option.substitutions.length ? <Text style={s.muted}>可替换：{option.substitutions.join("；")}</Text> : null}
-        {option.estimated_energy ? <Text style={s.muted}>估计 {option.estimated_energy.minimum}–{option.estimated_energy.maximum} kcal；依据：{option.estimated_energy.basis}</Text> : null}
-        {option.cost_note ? <Text style={s.muted}>费用说明：{option.cost_note}</Text> : null}
-        {option.note ? <Text style={s.muted}>{option.note}</Text> : null}
-        <View style={s.wrap}><ActionLink disabled={!editor.ready || recommendation.status === "stale" || Boolean(recommendation.latest_feedback)} onPress={() => openFeedback(recommendation, "accepted", option.id)}>采纳这个</ActionLink><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openMeal(undefined, recommendation, option)}>实际吃过，记下来</ActionLink></View><View style={s.divider} />
-      </View>)}
-      {recommendation.latest_feedback ? <Text style={s.muted}>{feedbackLabels[recommendation.latest_feedback.action]}{recommendation.latest_feedback.note ? `：${recommendation.latest_feedback.note}` : ""}。采纳不代表已吃。</Text> : null}
-      <View style={s.wrap}><ActionLink disabled={!editor.ready} onPress={() => openFeedback(recommendation, "replaced")}>换个建议</ActionLink><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openFeedback(recommendation, "declined")}>这次不采用</ActionLink></View>
-      {recommendation.context ? <>
-        <ActionLink tone="neutral" onPress={() => setExpandedRecommendations((old) => ({ ...old, [recommendation.id]: !old[recommendation.id] }))}>{expandedRecommendations[recommendation.id] ? "收起建议依据" : "查看建议依据"}</ActionLink>
-        {expandedRecommendations[recommendation.id] ? <Text style={s.description}>{recommendation.context}</Text> : null}
-      </> : null}
-    </View>)}
-    <View style={s.card}>
-      <CardHeader icon="nutrition-outline" title={`${date === localDate() ? "今天" : date}的饮食`} action={<ActionLink disabled={!editor.ready} onPress={() => openMeal()}>补记</ActionLink>} />
-      {data?.meals.length ? data.meals.map((item) => <View key={item.id} style={s.stack}>
-        <Text style={s.itemTitle}>{mealLabels[item.meal_type]} · {localTime(new Date(item.occurred_at))}{item.status === "skipped" ? " · 明确未吃" : ""}</Text>
-        {item.description ? <Text style={s.text}>{item.description}</Text> : null}{item.estimated_energy ? <Text style={s.muted}>估计 {item.estimated_energy.minimum}–{item.estimated_energy.maximum} kcal；依据：{item.estimated_energy.basis}</Text> : null}{item.portion ? <Text style={s.description}>{item.portion}</Text> : null}{item.note ? <Text style={s.muted}>{item.note}</Text> : null}
-        <View style={s.wrap}><ActionLink tone="neutral" onPress={() => openMeal(item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink disabled={!editor.ready} onPress={() => openDelete("meal", item, item.description || `${mealLabels[item.meal_type]}未吃记录`)}>删除</ActionLink></View><View style={s.divider} />
-      </View>) : <Empty compact title="还没有这一天的饮食记录">没记录只表示未知；随手补一顿就能开始。</Empty>}
-      <ActionLink onPress={() => onChat(`请读取截至 ${date} 的健康记录、建议选择和困难反馈，做一次饮食回顾。只根据真实记录说明情况，并给下一餐的一项调整。`)}>回顾饮食与困难</ActionLink>
-      {data?.review.recent_choices.filter((item) => item.latest_feedback?.note).slice(0, 3).map((item) => <Text key={item.id} style={s.muted}>{item.target_date} 的反馈：{item.latest_feedback?.note}</Text>)}
-    </View>
-    <View style={s.card}>
-      <CardHeader icon="scale-outline" title="体重与活动记录" action={<ActionLink disabled={!editor.ready} onPress={() => openMeasure("weight")}>记体重</ActionLink>} tone="blue" />
-      <Text style={s.heading}>{trend?.latest_kg != null ? `${trend.latest_kg} kg` : "等待测量"}</Text>
-      {trend && trend.count >= 2 && trend.change_kg != null ? <Text style={s.description}>{trend.first_date} 至 {trend.last_date}，{trend.count} 次测量变化 {trend.change_kg > 0 ? "+" : ""}{trend.change_kg} kg。</Text> : <Text style={s.muted}>积累更多同口径测量后再观察变化；不把单次波动当作趋势。</Text>}
-      {(showAllWeights ? data?.weights : data?.weights.slice(0, 5))?.map((item) => <View key={item.id} style={s.stack}>
-        <Text style={s.text}>{localDate(new Date(item.measured_at))} {localTime(new Date(item.measured_at))}　{item.value} {item.unit}</Text>
-        {item.note ? <Text style={s.muted}>{item.note}</Text> : null}
-        <View style={s.wrap}><ActionLink tone="neutral" onPress={() => openMeasure("weight", item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink onPress={() => openDelete("weight", item, `${item.value} ${item.unit}`)} disabled={!editor.ready}>删除</ActionLink></View>
-      </View>)}
-      {data && data.weights.length > 5 ? <ActionLink tone="neutral" onPress={() => setShowAllWeights(!showAllWeights)}>{showAllWeights ? "收起测量记录" : "展开近期测量记录"}</ActionLink> : null}
-      {data?.steps.map((item) => <View key={item.id} style={s.stack}><Text style={s.description}>{localTime(new Date(item.measured_at))} 记录步数：{item.value}{item.note ? ` · ${item.note}` : ""}</Text><View style={s.wrap}><ActionLink tone="neutral" onPress={() => openMeasure("steps", item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink onPress={() => openDelete("steps", item, `${item.value} 步`)} disabled={!editor.ready}>删除</ActionLink></View></View>)}
-      <ActionLink tone="blue" disabled={!editor.ready} onPress={() => openMeasure("steps")}>记录步数</ActionLink>
-      <Text style={s.muted}>活动按身体限制安排，记录步数不会自动增加运动要求。</Text>
-    </View>
-    <View style={s.card}>
-      <CardHeader icon="leaf-outline" title="当前饮食规范" action={<ActionLink disabled={!editor.ready} onPress={() => openRule()}>添加</ActionLink>} />
-      {data?.all_rules.length ? data.all_rules.map((item) => <View key={item.id} style={s.stack}>
-        <View style={s.wrap}><StatusPill tone={item.status === "active" ? "gold" : "neutral"}>{ruleStates[item.status]}</StatusPill><StatusPill>{ruleKinds[item.kind]}</StatusPill></View>
-        <Text style={s.text}>{item.content}</Text><Text style={s.muted}>{item.effective_from || "立即"}起 · {item.effective_until ? `截至 ${item.effective_until}` : "持续沿用"}</Text>
-        <View style={s.wrap}><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openRule(item)}>修改／暂停</ActionLink><ActionLink disabled={!editor.ready} onPress={() => openDelete("rule", item, item.content)}>删除</ActionLink></View><View style={s.divider} />
-      </View>) : <Empty compact title="从一条做得到的约定开始">可以直接添加，也可以先与健康助手讨论。</Empty>}
-      <ActionLink onPress={() => onChat("我想结合自己的身体情况、口味和用餐条件，一起整理适合我的饮食规范。明确是我要求的可以保存，新增建议先让我采纳。")}>一起聊出饮食规范</ActionLink>
-    </View>
-    <View style={s.card}>
-      <CardHeader icon="person-outline" title="资料与跟进" tone="blue" />
-      {data?.profile.activity_limitations.length ? <Text style={s.description}>活动限制：{data.profile.activity_limitations.join("；")}</Text> : null}
-      {data?.profile.food_allergies.length ? <Text style={s.description}>过敏：{data.profile.food_allergies.join("；")}</Text> : null}
-      <ActionLink tone="blue" disabled={!data || !editor.ready} onPress={openProfile}>编辑身体资料、限制和偏好</ActionLink>
-      <ActionLink tone="blue" disabled={!data || !editor.ready} onPress={openReminders}>{data?.reminders.enabled ? "调整或暂停提醒" : "设置用餐与回顾提醒"}</ActionLink>
-      <ActionLink tone="neutral" disabled={pausing} onPress={() => { if (pausing) return; setPausing(true); void pauseHealthNotificationsForToday(connection).then(() => show({ message: "今天这台手机的健康提醒已暂停", tone: "success" })).catch((reason: unknown) => show({ message: reason instanceof Error ? reason.message : "暂停尚未完成，请重试", tone: "error" })).finally(() => setPausing(false)); }}>{pausing ? "正在暂停…" : "今天不提醒这台手机"}</ActionLink>
-      <Text style={s.muted}>{data?.reminders.enabled ? `已开启 ${data.reminders.slots.length} 个时段；每天最多 ${data.reminders.max_per_day} 次。` : "提醒尚未开启。"}本机权限和排期结果会单独反馈。</Text>
-      <ActionLink tone="neutral" disabled={snapshot.loading} onPress={() => void snapshot.reload()}>刷新数据</ActionLink>
-    </View>
-  </PageScrollView></View>;
+      <ServiceHeading eyebrow="HEALTH" title="健康" description="按自己的饮食约定，记录变化，安排下一餐。" />
+      {snapshot.loading && !data ? <ActivityIndicator accessibilityLabel="正在读取健康数据" /> : null}
+      {snapshot.error ? <View style={s.notice}><Text accessibilityRole="alert" style={s.error}>{data ? "当前显示上次同步的数据。" : "健康摘要尚未读取。"}{snapshot.error}</Text><ActionLink disabled={snapshot.loading} onPress={() => void snapshot.reload()}>重新连接并刷新</ActionLink></View> : null}
+      {editor.storageError ? <View style={s.stack}><Text accessibilityRole="alert" style={s.error}>{editor.storageError}</Text>{!editor.ready ? <ActionLink onPress={editor.retryRead}>重新读取本机草稿</ActionLink> : null}</View> : null}
+      {editor.draft ? <Button secondary onPress={editor.resume}>继续尚未完成的编辑</Button> : null}
+
+      <ServiceCard>
+        <ServiceSectionHeader icon="restaurant-outline" title="饮食安排" subtitle="根据当前约定，挑选能做到的一顿" action={<ActionLink disabled={!editor.ready} onPress={() => openRule()}>调整</ActionLink>} />
+        <View style={v.stack}>
+          <Text style={v.muted}>{date === localDate() ? "今天" : "这一天"}已记饮食</Text>
+          <Text style={v.amount}>{recordedMeals == null ? unknown : `${recordedMeals} 餐`}</Text>
+          <Text style={v.tiny}>只统计实际吃过的记录；没有记录表示未知。</Text>
+        </View>
+        <View style={v.divider} />
+        <View style={v.grid}>
+          <ServiceMetric label="有效饮食约定" value={data ? `${data.rules.length} 条` : unknown} detail={data?.rules.length ? "按当前约定安排饮食" : "可直接添加或聊着整理"} />
+          <ServiceMetric label="最近体重" value={trend?.latest_kg != null ? `${trend.latest_kg} kg` : data ? "等待测量" : unknown} detail={trend?.last_date ?? "按实际测量记录"} />
+          <ServiceMetric label="当日步数" value={latestSteps ? `${latestSteps.value} 步` : data ? "尚未记录" : unknown} detail={latestSteps ? `${localTime(new Date(latestSteps.measured_at))} 的记录` : "按身体限制安排活动"} />
+          <ServiceMetric label="可用饮食建议" value={availableRecommendations ? `${availableRecommendations.length} 份` : unknown} detail={availableRecommendations?.length ? "看看方案，再决定怎么吃" : "一起想想下一餐"} tone="gold" />
+        </View>
+        <Button style={v.primaryButton} icon="sparkles-outline" onPress={nextMeal}>聊聊下一餐</Button>
+        <View style={v.emptyActions}><ActionLink disabled={!editor.ready} onPress={() => openMeal()}>记录饮食</ActionLink><ActionLink disabled={!editor.ready} onPress={() => openMeasure("weight")}>记录体重</ActionLink></View>
+        <ServiceChatRow title="和健康助手聊聊" description="说说习惯、口味或用餐困难" onPress={() => onChat()} />
+      </ServiceCard>
+
+      {(data?.recommendations ?? []).filter((item) => item.target_date === date).slice(0, 3).map((recommendation) => <ServiceCard key={recommendation.id}>
+        <ServiceSectionHeader icon="sparkles-outline" title={`${mealLabels[recommendation.meal_type]}建议`} subtitle={recommendation.target_date} />
+        {recommendation.latest_feedback ? <StatusPill>{`历史选择 · ${feedbackLabels[recommendation.latest_feedback.action]}`}</StatusPill> : recommendation.status === "stale" ? <><StatusPill>依据已变化</StatusPill><Text style={v.muted}>请按最新规范重新推荐。</Text><ActionLink onPress={() => onChat("我的资料或饮食规范已变化，请读取最新依据，更新这顿饭的建议并保存。")}>更新建议</ActionLink></> : null}
+        {recommendation.note ? <Text style={v.muted}>{recommendation.note}</Text> : null}
+        {recommendation.options.map((option) => <View key={option.id} style={v.stack}>
+          <Text style={v.title}>{option.title}</Text><Text style={v.body}>{option.description}</Text>
+          {option.portion ? <Text style={v.muted}>份量：{option.portion}</Text> : null}
+          {option.reason ? <Text style={v.muted}>{option.reason}</Text> : null}
+          {option.substitutions.length ? <Text style={v.tiny}>可替换：{option.substitutions.join("；")}</Text> : null}
+          {option.estimated_energy ? <Text style={v.tiny}>估计 {option.estimated_energy.minimum}–{option.estimated_energy.maximum} kcal；依据：{option.estimated_energy.basis}</Text> : null}
+          {option.cost_note ? <Text style={v.tiny}>费用说明：{option.cost_note}</Text> : null}
+          {option.note ? <Text style={v.tiny}>{option.note}</Text> : null}
+          <View style={v.emptyActions}><ActionLink disabled={!editor.ready || recommendation.status === "stale" || Boolean(recommendation.latest_feedback)} onPress={() => openFeedback(recommendation, "accepted", option.id)}>采纳这个</ActionLink><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openMeal(undefined, recommendation, option)}>实际吃过，记下来</ActionLink></View><View style={v.divider} />
+        </View>)}
+        {recommendation.latest_feedback ? <Text style={v.tiny}>{feedbackLabels[recommendation.latest_feedback.action]}{recommendation.latest_feedback.note ? `：${recommendation.latest_feedback.note}` : ""}。采纳不代表已吃。</Text> : null}
+        <View style={v.emptyActions}><ActionLink disabled={!editor.ready} onPress={() => openFeedback(recommendation, "replaced")}>换个建议</ActionLink><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openFeedback(recommendation, "declined")}>这次不采用</ActionLink></View>
+        {recommendation.context ? <>
+          <ActionLink tone="neutral" onPress={() => setExpandedRecommendations((old) => ({ ...old, [recommendation.id]: !old[recommendation.id] }))}>{expandedRecommendations[recommendation.id] ? "收起建议依据" : "查看建议依据"}</ActionLink>
+          {expandedRecommendations[recommendation.id] ? <Text style={v.muted}>{recommendation.context}</Text> : null}
+        </> : null}
+      </ServiceCard>)}
+
+      <ServiceCard>
+        <ServiceSectionHeader icon="nutrition-outline" title="饮食记录" subtitle={data ? `${date} · ${data.meals.length} 条记录` : date} action={<ActionLink disabled={!editor.ready} onPress={() => openMeal()}>补记</ActionLink>} />
+        {data?.meals.length ? data.meals.map((item) => <View key={item.id} style={v.stack}>
+          <View style={v.spread}><Text style={v.title}>{mealLabels[item.meal_type]}{item.status === "skipped" ? " · 明确未吃" : ""}</Text><Text style={v.tiny}>{localTime(new Date(item.occurred_at))}</Text></View>
+          {item.description ? <Text style={v.body}>{item.description}</Text> : null}{item.estimated_energy ? <Text style={v.tiny}>估计 {item.estimated_energy.minimum}–{item.estimated_energy.maximum} kcal；依据：{item.estimated_energy.basis}</Text> : null}{item.portion ? <Text style={v.muted}>{item.portion}</Text> : null}{item.note ? <Text style={v.tiny}>{item.note}</Text> : null}
+          <View style={v.emptyActions}><ActionLink tone="neutral" onPress={() => openMeal(item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink disabled={!editor.ready} onPress={() => openDelete("meal", item, item.description || `${mealLabels[item.meal_type]}未吃记录`)}>删除</ActionLink></View><View style={v.divider} />
+        </View>) : !data ? <Text style={v.muted}>{snapshot.loading ? "正在读取这一天的记录…" : "暂时无法读取这一天的记录。"}</Text> : <ServiceEmpty icon="create-outline" title="还没有这一天的饮食记录" description="没记录只表示未知；随手补一顿就能开始。">
+          <View style={v.emptyActions}><Button small secondary disabled={!editor.ready} onPress={() => openMeal()}>记一餐</Button><ActionLink onPress={() => onChat()}>对话录入</ActionLink></View>
+        </ServiceEmpty>}
+        <ActionLink onPress={() => onChat(`请读取截至 ${date} 的健康记录、建议选择和困难反馈，做一次饮食回顾。只根据真实记录说明情况，并给下一餐的一项调整。`)}>回顾饮食与困难</ActionLink>
+        {data?.review.recent_choices.filter((item) => item.latest_feedback?.note).slice(0, 3).map((item) => <Text key={item.id} style={v.tiny}>{item.target_date} 的反馈：{item.latest_feedback?.note}</Text>)}
+      </ServiceCard>
+
+      <ServiceCard>
+        <ServiceSectionHeader icon="scale-outline" title="体重与活动" subtitle="按实际测量观察变化" action={<ActionLink disabled={!editor.ready} onPress={() => openMeasure("weight")}>记体重</ActionLink>} />
+        <Text style={v.muted}>最近体重</Text>
+        <Text style={v.amount}>{trend?.latest_kg != null ? `${trend.latest_kg} kg` : data ? "等待测量" : unknown}</Text>
+        {trend && trend.count >= 2 && trend.change_kg != null ? <Text style={v.muted}>{trend.first_date} 至 {trend.last_date}，{trend.count} 次测量变化 {trend.change_kg > 0 ? "+" : ""}{trend.change_kg} kg。</Text> : <Text style={v.tiny}>积累更多同口径测量后再观察变化；不把单次波动当作趋势。</Text>}
+        <View style={v.divider} />
+        {(showAllWeights ? data?.weights : data?.weights.slice(0, 5))?.map((item) => <View key={item.id} style={v.stack}>
+          <View style={v.spread}><Text style={v.body}>{localDate(new Date(item.measured_at))} {localTime(new Date(item.measured_at))}</Text><Text style={v.title}>{item.value} {item.unit}</Text></View>
+          {item.note ? <Text style={v.tiny}>{item.note}</Text> : null}
+          <View style={v.emptyActions}><ActionLink tone="neutral" onPress={() => openMeasure("weight", item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink onPress={() => openDelete("weight", item, `${item.value} ${item.unit}`)} disabled={!editor.ready}>删除</ActionLink></View>
+        </View>)}
+        {data && data.weights.length > 5 ? <ActionLink tone="neutral" onPress={() => setShowAllWeights(!showAllWeights)}>{showAllWeights ? "收起测量记录" : "展开近期测量记录"}</ActionLink> : null}
+        <View style={v.inset}>
+          <View style={v.spread}><Text style={v.muted}>当日步数</Text><Text style={v.amountSmall}>{latestSteps ? `${latestSteps.value} 步` : data ? "尚未记录" : unknown}</Text></View>
+          {data?.steps.map((item) => <View key={item.id} style={v.stack}><Text style={v.tiny}>{localTime(new Date(item.measured_at))} · {item.value} 步{item.note ? ` · ${item.note}` : ""}</Text><View style={v.emptyActions}><ActionLink tone="neutral" onPress={() => openMeasure("steps", item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink onPress={() => openDelete("steps", item, `${item.value} 步`)} disabled={!editor.ready}>删除</ActionLink></View></View>)}
+          <ActionLink disabled={!editor.ready} onPress={() => openMeasure("steps")}>记录步数</ActionLink>
+        </View>
+        <Text style={v.tiny}>活动按身体限制安排，记录步数不会自动增加运动要求。</Text>
+      </ServiceCard>
+
+      <ServiceCard>
+        <ServiceSectionHeader icon="leaf-outline" title="饮食规范" subtitle={data ? `${data.rules.length} 条当前有效约定` : "随生活情况调整"} action={<ActionLink disabled={!editor.ready} onPress={() => openRule()}>添加</ActionLink>} />
+        {data?.all_rules.length ? data.all_rules.map((item) => <View key={item.id} style={v.stack}>
+          <View style={s.wrap}><StatusPill tone={item.status === "active" ? "gold" : "neutral"}>{ruleStates[item.status]}</StatusPill><Text style={v.tiny}>{ruleKinds[item.kind]}</Text></View>
+          <Text style={v.body}>{item.content}</Text><Text style={v.tiny}>{item.effective_from || "立即"}起 · {item.effective_until ? `截至 ${item.effective_until}` : "持续沿用"}</Text>
+          <View style={v.emptyActions}><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openRule(item)}>修改／暂停</ActionLink><ActionLink disabled={!editor.ready} onPress={() => openDelete("rule", item, item.content)}>删除</ActionLink></View><View style={v.divider} />
+        </View>) : <Text style={v.muted}>{data ? "从一条做得到的约定开始，可以直接添加，也可以先聊聊。" : snapshot.loading ? "正在读取饮食规范…" : "饮食规范暂时无法读取。"}</Text>}
+        <ServiceChatRow title="一起聊出饮食规范" description="结合身体情况、口味和用餐条件" onPress={() => onChat("我想结合自己的身体情况、口味和用餐条件，一起整理适合我的饮食规范。明确是我要求的可以保存，新增建议先让我采纳。")} />
+      </ServiceCard>
+
+      <ServiceCard>
+        <ServiceSectionHeader icon="person-outline" title="资料与跟进" subtitle="身体资料、限制和本机提醒" />
+        {data?.profile.activity_limitations.length ? <Text style={v.muted}>活动限制：{data.profile.activity_limitations.join("；")}</Text> : null}
+        {data?.profile.food_allergies.length ? <Text style={v.muted}>过敏：{data.profile.food_allergies.join("；")}</Text> : null}
+        <ActionLink disabled={!data || !editor.ready} onPress={openProfile}>编辑身体资料、限制和偏好</ActionLink>
+        <View style={v.divider} />
+        <View style={v.spread}><Text style={v.body}>用餐与回顾提醒</Text><StatusPill tone={data?.reminders.enabled ? "gold" : "neutral"}>{data ? data.reminders.enabled ? "已开启" : "未开启" : snapshot.loading ? "读取中" : "未知"}</StatusPill></View>
+        <Text style={v.tiny}>{data?.reminders.enabled ? `${data.reminders.slots.length} 个时段 · 每天最多 ${data.reminders.max_per_day} 次` : data ? "按需设置，之后可以随时调整。" : "本机权限和排期结果会单独反馈。"}</Text>
+        <View style={v.emptyActions}><ActionLink disabled={!data || !editor.ready} onPress={openReminders}>{data?.reminders.enabled ? "调整或暂停提醒" : "设置用餐与回顾提醒"}</ActionLink><ActionLink tone="neutral" disabled={pausing} onPress={() => { if (pausing) return; setPausing(true); void pauseHealthNotificationsForToday(connection).then(() => show({ message: "今天这台手机的健康提醒已暂停", tone: "success" })).catch((reason: unknown) => show({ message: reason instanceof Error ? reason.message : "暂停尚未完成，请重试", tone: "error" })).finally(() => setPausing(false)); }}>{pausing ? "正在暂停…" : "今天不提醒这台手机"}</ActionLink></View>
+        <View style={v.divider} />
+        <ActionLink tone="neutral" icon="refresh-outline" disabled={snapshot.loading} onPress={() => void snapshot.reload()}>刷新数据</ActionLink>
+      </ServiceCard>
+    </PageScrollView>
+  </View>;
 }
 
 export function buildHealthMutation(draft: ServiceDraft): ServiceMutation {

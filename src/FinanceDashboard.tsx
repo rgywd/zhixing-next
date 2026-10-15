@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, BackHandler, Pressable, Text, View } from "react-native";
 import type { Connection } from "./api";
 import { useNotice } from "./Notice";
-import { readFinanceDashboard, type FinanceBudget, type FinanceCommitment, type FinanceTransaction, type ServiceMutation } from "./serviceApi";
+import { readFinanceDashboard, type FinanceBudget, type FinanceCommitment, type FinanceTransaction, type FinanceDashboardSummary, type ServiceMutation } from "./serviceApi";
 import { localDate, moneyInput, moneyLabel, parseCommitments, requireDate, useServiceEditor, useServiceSnapshot, type ServiceDraft } from "./serviceForms";
-import { ActionLink, BackLink, Button, CardHeader, Empty, Field, PageHeading, PageHero, PageScrollView, StatusPill, SwitchRow, useUi } from "./ui";
+import { ActionLink, BackLink, Button, Field, PageHeading, PageScrollView, StatusPill, SwitchRow, useUi } from "./ui";
+
+import { ServiceToolbar, ServiceHeading, ServiceCard, ServiceSectionHeader, ServiceMetric, ServiceChatRow, ServiceEmpty, useServiceStyles } from "./ServicePrimitives";
 
 const kindLabels = { expense: "支出", income: "收入", transfer: "转账／还款", refund: "退款" } as const;
 const assumptionLabels: Record<string, string> = {
@@ -15,7 +17,8 @@ const assumptionLabels: Record<string, string> = {
 const bucketLabels = { daily: "日常", fixed: "固定", one_time: "一次性" } as const;
 export type ServicePageProps = { onBack?: () => void; connection: Connection; onChat: (prompt?: string) => void; onChanged?: () => void; refreshKey?: number };
 export function FinanceDashboard({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
-  const { s } = useUi();
+  const { s, colors } = useUi();
+  const styles = useServiceStyles();
   const { show } = useNotice();
   const [month, setMonth] = useState(localDate().slice(0, 7));
   const read = useCallback(() => readFinanceDashboard(connection, month), [connection, month]);
@@ -90,50 +93,77 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
       </PageScrollView>
     </View>;
   }
+  const summary = data?.summary;
+  const progress = summary ? financeBudgetProgress(summary) : null;
+  const remaining = summary?.remaining.daily_budget;
+  const remainingState = remaining == null ? "预算待补充" : Number(remaining) < 0 ? "已超出安排" : Number(remaining) === 0 ? "额度已用完" : "还有余量";
   return <View style={s.body}>
-    {onBack ? <BackLink label="生活" onPress={onBack} /> : null}
+    <ServiceToolbar period={month} onBack={onBack} onPrevious={() => shiftMonth(-1)} onNext={() => shiftMonth(1)} onCurrent={() => setMonth(localDate().slice(0, 7))} previousLabel="上个月" nextLabel="下个月" currentLabel="回到本月" />
     <PageScrollView tabs={!onBack}>
-    <PageHero eyebrow="FINANCE" title="财务" description="记录实际开销，按当前目标安排接下来的生活。" />
-    <View style={s.spread}><ActionLink icon="chevron-back" tone="neutral" onPress={() => shiftMonth(-1)}>上个月</ActionLink><Text style={s.itemTitle}>{month}</Text><ActionLink icon="chevron-forward" tone="neutral" onPress={() => shiftMonth(1)}>下个月</ActionLink></View>
-    {snapshot.loading && !data ? <ActivityIndicator accessibilityLabel="正在读取财务" /> : null}
-    {snapshot.error ? <View style={s.notice}><Text accessibilityRole="alert" style={s.error}>{data ? "当前显示上次同步的数据。" : "财务摘要尚未读取。"}{snapshot.error}</Text><ActionLink onPress={() => void snapshot.reload()} disabled={snapshot.loading}>重新连接并刷新</ActionLink></View> : null}
-    {editor.storageError ? <View style={s.stack}><Text accessibilityRole="alert" style={s.error}>{editor.storageError}</Text>{!editor.ready ? <ActionLink onPress={editor.retryRead}>重新读取本机草稿</ActionLink> : null}</View> : null}
-    {editor.draft ? <Button secondary onPress={editor.resume}>继续尚未完成的编辑</Button> : null}
-    <View style={s.card}>
-      <CardHeader icon="wallet-outline" title="本月安排" tone="gold" action={<ActionLink disabled={!editor.ready} onPress={openBudget}>调整</ActionLink>} />
-      {data ? <>
-        <Text style={s.description}>剩余日常额度</Text><Text style={s.heading}>{moneyLabel(data.summary.remaining.daily_budget)}</Text>
-        <Text style={s.muted}>含已记消费及剩余固定／大件安排，受日常上限与结余目标共同约束。</Text>
-        <View style={s.divider} />
-        <Text style={s.text}>预计月底结余　{moneyLabel(data.summary.projection.savings)}</Text>
-        <Text style={s.description}>目标结余　{moneyLabel(budget?.savings_target)}</Text>
-        <Text style={s.description}>预计收入　{moneyLabel(budget?.expected_income)}　日常上限　{moneyLabel(budget?.daily_budget)}</Text>
-        <Text style={s.muted}>{budget?.source_month && budget.source_month !== month ? `沿用 ${budget.source_month} 的预算` : budget?.recurring ? "预算会沿用到后续月份" : "本月独立设置"}</Text>
-        {data.summary.projection.assumptions.filter((item) => assumptionLabels[item]).map((item, index) => <Text key={index} style={s.muted}>{assumptionLabels[item]}</Text>)}
-      </> : <Empty compact title="先记账，也可以先定目标">收入和目标可稍后补充，未知额度不会当作零元。</Empty>}
-      <Button icon="add" disabled={!editor.ready} onPress={() => openTransaction()}>记一笔收支</Button>
-      <ActionLink icon="chatbubble-ellipses-outline" tone="gold" onPress={() => onChat()}>和财务助手聊聊</ActionLink>
-    </View>
-    {data ? <View style={s.card}>
-      <CardHeader icon="bar-chart-outline" title="已记开销" tone="gold" />
-      <Text style={s.text}>全部净支出　{moneyLabel(data.summary.totals.expense)}</Text>
-      <View style={s.wrap}>{Object.entries(bucketLabels).map(([key, label]) => <StatusPill key={key} tone="neutral">{`${label} ${moneyLabel(data.summary.totals[key as keyof typeof bucketLabels])}`}</StatusPill>)}</View>
-      {data.summary.daily_average.amount != null ? <Text style={s.description}>日常日均　{moneyLabel(data.summary.daily_average.amount)} · {data.summary.daily_average.from} 至 {data.summary.daily_average.through}</Text> : <Text style={s.muted}>日常日均待确认完整覆盖期后计算。</Text>}
-      <Text style={s.description}>已收收入　{moneyLabel(data.summary.totals.income)}　待发生安排　{moneyLabel(data.summary.reservations.total)}</Text>
-      <Text style={s.muted}>{data.summary.coverage.complete ? "已确认覆盖完整月份。" : "仅统计已记内容；漏记不代表没有消费。"}记录覆盖 {data.summary.coverage.recorded_days} 天。</Text>
-      <ActionLink onPress={() => onChat("请根据已记的消费、当前预算及记录覆盖情况，回顾本月开销变化，并给一项可执行的调整建议。")}>回顾消费与下一步</ActionLink>
-    </View> : null}
-    <View style={s.card}>
-      <CardHeader icon="receipt-outline" title="本月记录" description={data ? `${data.records.total} 笔` : undefined} tone="gold" />
-      {data?.records.items.length ? data.records.items.map((item) => <View key={item.id} style={s.stack}>
-        <View style={s.spread}><View style={s.headingCopy}><Text style={s.itemTitle}>{item.category || kindLabels[item.kind]}</Text><Text style={s.muted}>{item.occurred_on} · {kindLabels[item.kind]} · {bucketLabels[item.bucket]}</Text></View><Text style={s.itemTitle}>{item.kind === "expense" ? "−" : item.kind === "income" || item.kind === "refund" ? "+" : ""}{moneyLabel(item.amount)}</Text></View>
-        {item.note ? <Text style={s.description}>{item.note}</Text> : null}
-        <View style={s.wrap}><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openTransaction(item)}>纠正</ActionLink>{item.kind === "expense" ? <ActionLink tone="neutral" disabled={!editor.ready} onPress={() => editor.open("transaction", { kind: "refund", amount: "", date: localDate(), bucket: item.bucket, category: item.category, note: "", related: item.id, commitment: "" }, { record: null, commitments: budget?.commitments ?? [] })}>退款</ActionLink> : null}<ActionLink disabled={!editor.ready} onPress={() => editor.open("delete", { description: `${item.occurred_on} ${item.category} ${moneyLabel(item.amount)}` }, { record: item })}>删除</ActionLink></View><View style={s.divider} />
-      </View>) : <Empty compact title="这个月还没有记录">可以直接记一笔，也可以发文字或账单截图给财务助手。</Empty>}
-      {data && data.records.total > data.records.items.length ? <Text style={s.muted}>这里显示最近 {data.records.items.length} 笔；可让财务助手查询更早的记录。</Text> : null}
-      <ActionLink onPress={() => void snapshot.reload()} disabled={snapshot.loading}>刷新数据</ActionLink>
-    </View>
-  </PageScrollView></View>;
+      <ServiceHeading eyebrow="FINANCE" title="财务" description="记录实际开销，按当前目标安排接下来的生活。" />
+      {snapshot.loading && !data ? <ActivityIndicator accessibilityLabel="正在读取财务" /> : null}
+      {snapshot.error ? <View style={s.notice}><Text accessibilityRole="alert" style={s.error}>{data ? "当前显示上次同步的数据。" : "财务摘要尚未读取。"}{snapshot.error}</Text><ActionLink onPress={() => void snapshot.reload()} disabled={snapshot.loading}>重新连接并刷新</ActionLink></View> : null}
+      {editor.storageError ? <View style={s.stack}><Text accessibilityRole="alert" style={s.error}>{editor.storageError}</Text>{!editor.ready ? <ActionLink onPress={editor.retryRead}>重新读取本机草稿</ActionLink> : null}</View> : null}
+      {editor.draft ? <Button secondary onPress={editor.resume}>继续尚未完成的编辑</Button> : null}
+
+      <ServiceCard>
+        <ServiceSectionHeader icon="card-outline" title="本月安排" subtitle={budget?.source_month && budget.source_month !== month ? `沿用 ${budget.source_month} 的预算` : budget?.recurring ? "预算会沿用到后续月份" : budget ? "本月独立设置" : "预算可随时调整"} action={<ActionLink disabled={!editor.ready} onPress={openBudget}>调整</ActionLink>} />
+        <View style={styles.stack}>
+          <View style={styles.spread}><Text style={styles.muted}>剩余日常额度</Text><StatusPill tone={remaining != null && Number(remaining) < 0 ? "red" : "gold"}>{remainingState}</StatusPill></View>
+          <Text accessibilityLabel={`剩余日常额度 ${moneyLabel(remaining)}`} style={[styles.amount, remaining != null && Number(remaining) < 0 && { color: colors.red }]}>{moneyLabel(remaining)}</Text>
+          {progress ? <>
+            <View accessibilityRole="progressbar" accessibilityLabel={progress.basis === "goal" ? "本月支出安排占用" : "本月日常上限占用"} accessibilityValue={{ min: 0, max: 100, now: Math.round(progress.usedPercent), text: `已记 ${moneyLabel(progress.spent)}${progress.reserved ? `，待发生安排 ${moneyLabel(progress.reserved)}` : ""}，共 ${moneyLabel(progress.capacity)}` }} style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${progress.spentPercent}%` }]} />
+              {progress.reservedPercent > 0 ? <View style={[styles.progressReserved, { width: `${progress.reservedPercent}%` }]} /> : null}
+            </View>
+            <View style={styles.spread}><Text style={styles.tiny}>{progress.basis === "daily" ? "日常已记" : "已记支出"} {moneyLabel(progress.spent)}</Text><Text style={styles.tiny}>{progress.basis === "daily" ? "日常上限" : "可支出安排"} {moneyLabel(progress.capacity)}</Text></View>
+            {progress.reserved > 0 ? <Text style={styles.tiny}>另已预留固定／大件 {moneyLabel(progress.reserved)}</Text> : null}
+          </> : <Text style={styles.tiny}>{remaining == null ? "补充预算后显示额度进度。" : "当前没有可分配的正向预算额度。"}</Text>}
+          <Text style={styles.muted}>含已记消费及剩余固定／大件安排，受日常上限与结余目标共同约束。</Text>
+        </View>
+        <View style={styles.divider} />
+        <View style={styles.grid}>
+          <ServiceMetric label="预计收入" value={moneyLabel(budget?.expected_income)} detail={budget?.expected_income == null ? "可稍后补充" : "含已到账收入"} />
+          <ServiceMetric label="目标结余" value={moneyLabel(budget?.savings_target)} detail="可随时调整" />
+          <ServiceMetric label="预计月底结余" value={moneyLabel(summary?.projection.savings)} detail={summary?.projection.savings == null ? "根据预算动态核算" : "按当前已知收支估算"} tone={summary?.remaining.savings_target_headroom != null && Number(summary.remaining.savings_target_headroom) < 0 ? "warning" : "neutral"} />
+          <ServiceMetric label="日常上限" value={moneyLabel(budget?.daily_budget)} detail={budget?.daily_budget == null ? "点击设定上限" : "控制每月日常消费"} actionLabel={budget?.daily_budget == null ? "设定上限" : undefined} onPress={budget?.daily_budget == null ? openBudget : undefined} disabled={!editor.ready} tone="gold" />
+        </View>
+        {summary?.projection.assumptions.filter((item) => item === "projection_uses_budget_not_observed_spending_rate").map((item) => <Text key={item} style={styles.tiny}>{assumptionLabels[item]}</Text>)}
+        <Button icon="add" style={styles.primaryButton} disabled={!editor.ready} onPress={() => openTransaction()}>记一笔收支</Button>
+        <ServiceChatRow title="和财务助手聊聊" description="发账单截图或说明开销" onPress={() => onChat()} />
+      </ServiceCard>
+
+      <ServiceCard>
+        <ServiceSectionHeader icon="bar-chart-outline" title="已记开销" />
+        <View style={styles.spread}><Text style={styles.muted}>全部净支出</Text><Text style={styles.amountSmall}>{moneyLabel(summary?.totals.expense)}</Text></View>
+        <View style={styles.threeColumns}>{Object.entries(bucketLabels).map(([key, label]) => <View key={key} style={styles.column}><Text style={styles.tiny}>{label}</Text><Text style={styles.body}>{moneyLabel(summary?.totals[key as keyof typeof bucketLabels])}</Text></View>)}</View>
+        {summary?.daily_average.amount != null ? <Text style={styles.muted}>日常日均 {moneyLabel(summary.daily_average.amount)} · {summary.daily_average.from} 至 {summary.daily_average.through}</Text> : <Text style={styles.muted}>日常日均待确认完整覆盖期后计算。</Text>}
+        <View style={styles.inset}>
+          <View style={styles.spread}><Text style={styles.muted}>已收收入</Text><Text style={styles.body}>{moneyLabel(summary?.totals.income)}</Text></View>
+          <View style={styles.spread}><Text style={styles.muted}>待发生安排</Text><Text style={[styles.body, styles.gold]}>{moneyLabel(summary?.reservations.total)}</Text></View>
+        </View>
+        <View style={styles.spread}><Text style={styles.tiny}>{summary?.coverage.complete ? summary.coverage.from && summary.coverage.through ? `已确认 ${summary.coverage.from} 至 ${summary.coverage.through}` : "已确认当前覆盖期。" : "仅统计已记内容；漏记不代表没有消费。"}</Text><Text style={styles.tiny}>{summary ? `记录覆盖 ${summary.coverage.recorded_days} 天` : "覆盖待确认"}</Text></View>
+        {summary?.projection.assumptions.includes("cumulative_total_includes_details_in_its_range") ? <Text style={styles.tiny}>{assumptionLabels.cumulative_total_includes_details_in_its_range}</Text> : null}
+        <View style={styles.divider} />
+        <View style={styles.footerAction}><ActionLink icon="arrow-forward" onPress={() => onChat("请根据已记的消费、当前预算及记录覆盖情况，回顾本月开销变化，并给一项可执行的调整建议。")}>回顾消费与下一步</ActionLink></View>
+      </ServiceCard>
+
+      <ServiceCard>
+        <ServiceSectionHeader icon="document-text-outline" title="本月记录" subtitle={data ? `${data.records.total} 笔` : "记录尚未读取"} />
+        {data?.records.items.length ? data.records.items.map((item) => <View key={item.id} style={styles.stack}>
+          <View style={styles.recordRow}><View style={styles.recordMain}><Text style={s.itemTitle}>{item.category || kindLabels[item.kind]}</Text><Text style={styles.tiny}>{item.occurred_on} · {kindLabels[item.kind]} · {bucketLabels[item.bucket]}</Text></View><Text style={styles.recordAmount}>{item.kind === "expense" ? "−" : item.kind === "income" || item.kind === "refund" ? "+" : ""}{moneyLabel(item.amount)}</Text></View>
+          {item.note ? <Text style={styles.muted}>{item.note}</Text> : null}
+          <View style={s.wrap}><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openTransaction(item)}>纠正</ActionLink>{item.kind === "expense" ? <ActionLink tone="neutral" disabled={!editor.ready} onPress={() => editor.open("transaction", { kind: "refund", amount: "", date: localDate(), bucket: item.bucket, category: item.category, note: "", related: item.id, commitment: "" }, { record: null, commitments: budget?.commitments ?? [] })}>退款</ActionLink> : null}<ActionLink disabled={!editor.ready} onPress={() => editor.open("delete", { description: `${item.occurred_on} ${item.category} ${moneyLabel(item.amount)}` }, { record: item })}>删除</ActionLink></View><View style={styles.divider} />
+        </View>) : <ServiceEmpty icon="create-outline" title={data ? "这个月还没有记录" : "记录尚未读取"} description={data ? "可以直接记一笔，也可以发文字或账单截图给财务助手。" : "先记一笔，或刷新读取已有记录。"}>
+          <View style={styles.emptyActions}><Button small secondary disabled={!editor.ready} onPress={() => openTransaction()}>记一笔</Button><Button small secondary onPress={() => onChat()}>对话录入</Button></View>
+        </ServiceEmpty>}
+        {data && data.records.total > data.records.items.length ? <Text style={styles.muted}>这里显示最近 {data.records.items.length} 笔；可让财务助手查询更早的记录。</Text> : null}
+        <View style={styles.divider} />
+        <ActionLink icon="refresh-outline" tone="neutral" onPress={() => void snapshot.reload()} disabled={snapshot.loading}>刷新数据</ActionLink>
+      </ServiceCard>
+    </PageScrollView>
+  </View>;
+
 }
 
 export function buildFinanceMutation(draft: ServiceDraft): ServiceMutation {
@@ -151,4 +181,20 @@ export function buildFinanceMutation(draft: ServiceDraft): ServiceMutation {
   if (f.kind === "refund" && !f.related) throw new Error("请关联原消费，确保退款进入正确统计口径。");
   const body = { idempotency_key: draft.id, kind: f.kind, amount, occurred_on: requireDate(f.date), bucket: f.bucket, category: f.category.trim() || "其他", note: f.note.trim(), commitment_key: f.kind === "expense" && f.bucket !== "daily" ? f.commitment || null : null, related_transaction_id: f.kind === "refund" ? f.related : null, ...(record ? { expected_revision: record.revision } : {}) };
   return record ? { method: "PATCH", path: `/finance/transactions/${encodeURIComponent(record.id)}`, body } : { method: "POST", path: "/finance/transactions", body };
+}
+
+/** Use the tighter real budget constraint; reserved fixed costs never consume a daily-only cap. */
+export function financeBudgetProgress(summary: FinanceDashboardSummary) {
+  const dailyCap = summary.budget.daily_budget == null ? null : Number(summary.budget.daily_budget);
+  const dailySpent = Number(summary.totals.daily);
+  const available = summary.remaining.total_spend_budget == null ? null : Number(summary.remaining.total_spend_budget);
+  const goalBinds = available != null && (dailyCap == null || available <= dailyCap - dailySpent);
+  if (!goalBinds && dailyCap == null) return null;
+  const spent = goalBinds ? Number(summary.totals.expense) : dailySpent;
+  const reserved = goalBinds ? Number(summary.reservations.total) : 0;
+  const capacity = goalBinds ? available! + spent + reserved : dailyCap!;
+  if (![spent, reserved, capacity].every(Number.isFinite) || capacity <= 0) return null;
+  const spentPercent = Math.min(100, Math.max(0, spent / capacity * 100));
+  const reservedPercent = Math.min(100 - spentPercent, Math.max(0, reserved / capacity * 100));
+  return { basis: goalBinds ? "goal" as const : "daily" as const, spent, reserved, capacity, spentPercent, reservedPercent, usedPercent: spentPercent + reservedPercent };
 }
