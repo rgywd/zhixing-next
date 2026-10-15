@@ -160,6 +160,16 @@ test("resuming the same interrupted run keeps polling through empty pages before
   restarted = true; value = await app.timer(800);
   assert.equal(value.liveRun.run.id, "r1"); assert.equal(value.liveRun.content, "Resumed reply"); app.unmount();
 });
+test("a new queued follow-up does not hide the queue head waiting for approval or input", async () => {
+  for (const phase of ["approval", "input"]) {
+    const head = { ...run("r1", "queued"), phase };
+    const app = harness({ events: async ({ path }) => ({ items: path.includes("/r1/") ? [reset(), event(2, "reasoning.snapshot", { stream_id: "s1", message_id: "m1", text: "Actual head reasoning" }), event(3, "tool", { tool: "write_text_file", tool_call_id: "call", status: "started" }), event(4, "paused", { reason: phase })] : [], next_cursor: null }) });
+    app.setRuns([head]); let value = await app.ready(); assert.equal(value.liveRun.run.id, "r1");
+    app.setRuns([head, run("r2", "queued")]); value.refresh.current(); await settle(); value = app.render(); await settle(); value = app.render();
+    assert.equal(value.pendingRuns[0].id, "r1"); assert.equal(value.liveRun.run.id, "r1");
+    assert.equal(value.liveRun.reasoning, "Actual head reasoning"); assert.equal(value.liveRun.tools[0].id, "call"); app.unmount();
+  }
+});
 test("background cancels incomplete history batches and late unmounted event responses are ignored", async () => {
   const pendingHistory = deferred(); let first = true;
   const app = harness({ read: ({ path }) => { if (first && path.includes("/messages?")) { first = false; return pendingHistory.promise; } } });

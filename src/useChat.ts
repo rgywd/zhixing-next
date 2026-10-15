@@ -96,7 +96,7 @@ export function useChat({
   const scopedRuns = runScope === streamScope ? runs.filter((run) => run.conversation_id === conversation.id) : [];
   const currentRunning = runScope === streamScope && running?.conversation_id === conversation.id ? running : null;
   const trackedRun = currentRunning
-    ?? [...scopedRuns].reverse().find((run) => run.status === "queued") ?? scopedRuns.at(-1) ?? null;
+    ?? scopedRuns.find((run) => run.status === "queued") ?? scopedRuns.at(-1) ?? null;
   const trackedRunId = trackedRun?.id ?? null;
   const trackedRunStatus = trackedRun?.status ?? null;
 
