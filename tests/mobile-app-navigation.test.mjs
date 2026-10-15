@@ -92,6 +92,7 @@ test("settings groups password management in the toolbox", () => {
   const opened = [];
   const { SettingsHome } = load("SettingsHome.tsx", {
     "react/jsx-runtime": jsxRuntime, "./AppearanceControl": { AppearanceControl: "AppearanceControl" },
+    "./AppUpdateSettings": { AppUpdateSettings: "AppUpdateSettings" },
     "./ui": Object.fromEntries(["ActionRow", "PageHero", "PageScrollView", "SettingsGroup"].map((name) => [name, name])),
   });
   const nodes = walk(SettingsHome({ onOpen: (destination) => opened.push(destination) }));

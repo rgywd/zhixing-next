@@ -25,7 +25,7 @@
 - `main` 保持可构建、可测试；日常改动通过短分支 PR 合入。禁止直接推送、强推或删除 `main`。
 - 分支命名与知行主仓一致：`feat/需求号-英文简述`、`fix/问题号-英文简述`、`chore/英文简述`、`exp/英文简述`；简述使用小写 `kebab-case`，分支名只包含一层 `/`。
 - Commit header 使用英文 Conventional Commit 类型与可选 scope，中文摘要；正文用 `1.`、`2.` 编号说明改动与验证。
-- 推送或创建 PR 前，在最终提交上完成下方适用的本地验证；PR 的 `PR policy` 检查分支名。存在并行任务时从干净的 `main` 创建独立 worktree，不带入其他工作树的未提交改动。
+- 推送或创建 PR 前，在最终提交上完成下方适用的本地验证，并在本地运行 `.github/scripts/check-branch-name.sh` 检查分支名。普通提交和 PR 不运行 GitHub Actions；只有正式版本标签触发发布验证与签名构建。不得把本地检查称为 CI 通过。存在并行任务时从干净的 `main` 创建独立 worktree，不带入其他工作树的未提交改动。
 - 只有用户明确要求正式发布时，才创建 `release/x.y.z`、正式标签或 GitHub Release。提交、推送与 PR 合并均不等于发布。
 
 ## Expo 与原生代码

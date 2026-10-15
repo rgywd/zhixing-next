@@ -58,6 +58,35 @@ def public_server_url(value):
     return value.rstrip("/")
 
 
+def configured_version(root):
+    package = json.loads((root / "package.json").read_text())
+    app = json.loads((root / "app.json").read_text())["expo"]
+    code = app["android"].get("versionCode")
+    if package.get("version") != app.get("version") or not package.get("version"):
+        raise SystemExit("package.json and app.json versions must agree before building")
+    if type(code) is not int or not 1 <= code <= 2_100_000_000:
+        raise SystemExit("Android versionCode must be an integer between 1 and 2100000000")
+    return {"version": package["version"], "version_code": code, "application_id": app["android"]["package"]}
+
+
+def verify_native_version(metadata, manifest, expected):
+    if len(metadata.get("elements", [])) != 1:
+        raise SystemExit("Expected one Android release APK output")
+    element = metadata["elements"][0]
+    android_attribute = "{http://schemas.android.com/apk/res/android}"
+    actual = {
+        "version": element.get("versionName"), "version_code": element.get("versionCode"),
+        "application_id": metadata.get("applicationId"),
+    }
+    manifest_version = {
+        "version": manifest.attrib.get(android_attribute + "versionName"),
+        "version_code": manifest.attrib.get(android_attribute + "versionCode"),
+        "application_id": manifest.attrib.get("package"),
+    }
+    if actual != expected or manifest_version != {key: str(value) for key, value in expected.items()}:
+        raise SystemExit("Native APK metadata and manifest must match package.json and app.json")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--signing-file", type=Path, required=True)
@@ -66,6 +95,7 @@ def main():
     parser.add_argument("--server-url", default="")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
+    expected_version = configured_version(root)
     if os.name != "nt" and args.signing_file.stat().st_mode & 0o077:
         raise SystemExit("Signing file permissions must be private (0600)")
     signing = json.loads(args.signing_file.read_text())
@@ -141,6 +171,7 @@ def main():
         root
         / "android/app/build/intermediates/merged_manifests/release/processReleaseManifest/AndroidManifest.xml"
     ).getroot()
+    verify_native_version(metadata, manifest, expected_version)
     sdk = manifest.find("uses-sdk")
     android_attribute = "{http://schemas.android.com/apk/res/android}"
     receipt = {

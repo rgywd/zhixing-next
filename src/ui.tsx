@@ -92,12 +92,12 @@ export function ServiceTile({ icon, title, description, onPress, accessibilityLa
   return <Pressable accessibilityRole="button" accessibilityLabel={accessibilityLabel} onPress={onPress} style={({ pressed }) => [s.serviceTile, narrow && s.serviceTileNarrow, pressed && s.pressed]}><IconBadge name={icon} small tone={tone} /><View style={s.headingCopy}><Text style={s.itemTitle}>{title}</Text><Text numberOfLines={1} style={s.small}>{description}</Text></View><Ionicons name="chevron-forward" size={16} color={colors.muted} /></Pressable>;
 }
 
-export function ActionRow({ icon, title, description, onPress, last = false, compact = false, tone = "red" }: {
-  icon: IconName; title: string; description?: string; onPress: () => void; last?: boolean; compact?: boolean; tone?: UiTone;
+export function ActionRow({ icon, title, description, onPress, last = false, compact = false, tone = "red", disabled = false }: {
+  icon: IconName; title: string; description?: string; onPress: () => void; last?: boolean; compact?: boolean; tone?: UiTone; disabled?: boolean;
 }) {
   const { s, colors } = useUi();
   return (
-    <Pressable accessibilityRole="button" accessibilityLabel={title} onPress={onPress} style={({ pressed }) => [s.actionRow, !last && s.rowDivider, pressed && s.pressed]}>
+    <Pressable accessibilityRole="button" accessibilityLabel={title} accessibilityState={{ disabled }} disabled={disabled} onPress={onPress} style={({ pressed }) => [s.actionRow, !last && s.rowDivider, disabled && s.disabled, pressed && s.pressed]}>
       <IconBadge name={icon} small={compact} tone={tone} />
       <View style={s.headingCopy}><Text numberOfLines={1} style={compact ? s.listTitle : s.itemTitle}>{title}</Text>{description ? <Text style={s.muted}>{description}</Text> : null}</View>
       <Ionicons name="chevron-forward" size={18} color={colors.muted} />

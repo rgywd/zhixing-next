@@ -1,4 +1,5 @@
 import { AppearanceControl } from "./AppearanceControl";
+import { AppUpdateSettings } from "./AppUpdateSettings";
 import type { Assistant, ModelCatalog } from "./api";
 import { ActionRow, PageHero, PageScrollView, SettingsGroup } from "./ui";
 
@@ -35,5 +36,6 @@ export function SettingsHome({ assistant, catalog, connectionUrl, onOpen }: {
       <ActionRow icon="albums-outline" title="资源库" description="图片、资料和交付文件" tone="blue" compact onPress={() => onOpen("resources")} />
       <ActionRow icon="link-outline" title="服务连接" description={connectionUrl ? new URL(connectionUrl).host : "连接你的知行服务"} tone="neutral" compact last onPress={() => onOpen("connection")} />
     </SettingsGroup>
+    <AppUpdateSettings />
   </PageScrollView>;
 }
