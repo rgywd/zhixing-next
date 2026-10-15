@@ -199,7 +199,11 @@ export class TodayDeviceController {
     if (!this.active || !this.snapshot.calendarEnabled) return;
     if (!permission.granted) { this.permissionDenied("calendar", permission); return; }
     try { await this.deps.openEvent(event); }
-    catch (error) { if (this.active) this.patch({ calendarError: error instanceof TodayContextError ? error.message : "无法打开系统日历，请稍后重试。" }); }
+    catch (error) {
+      const failure = error instanceof TodayContextError ? error : new TodayContextError("无法打开系统日历，请稍后重试。");
+      if (this.active) this.patch({ calendarError: failure.message });
+      throw failure;
+    }
   };
   dispose() { this.cancelLocation(); this.cancelCalendar(); this.alive = false; this.readVersion++; }
 }

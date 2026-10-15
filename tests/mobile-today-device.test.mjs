@@ -327,3 +327,11 @@ test("declining one recurring instance does not remove another instance sharing 
   const events = await app.readTodayCalendar(baseNow, new AbortController().signal);
   assert.equal(events.length, 1); assert.equal(events[0].startDate, new Date(later).toISOString());
 });
+
+
+test("system calendar viewer failure remains visible and rejects for Home's notice handler", async () => {
+  const app = controllerHarness({ openEvent: async () => { throw new Error("no-viewer"); } }, enabled); await app.start();
+  await assert.rejects(app.controller.openEvent(event), /无法打开系统日历/);
+  assert.match(app.controller.snapshot.calendarError, /无法打开系统日历/);
+  assert.equal(app.controller.snapshot.events.length, 1);
+});

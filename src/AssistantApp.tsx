@@ -208,7 +208,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
   const selectTab = (next: Tab) => { setTab(next); if (next === "life") setLifePage("overview"); if (next === "settings") setLocalSettings("overview"); };
   const showTabs = (tab !== "life" || lifePage === "overview") && (tab !== "settings" || localSettings === "overview");
   return <View style={s.body}>
-    {tab === "home" ? <HomePanel device={todayDevice} conversations={[]} onChat={connect} onOpenConversation={connect} onLife={() => selectTab("life")} onWork={() => selectTab("work")}
+    {tab === "home" ? <HomePanel device={todayDevice} conversations={[]} promptReady={false} onChat={connect} onOpenConversation={connect} onLife={() => selectTab("life")} onWork={() => selectTab("work")}
       onFinance={() => { setLifePage("finance"); setTab("life"); }} onHealth={() => { setLifePage("health"); setTab("life"); }} onRecordExpense={connect} />
       : tab === "work" ? <ConstructionPage />
       : tab === "life" ? lifePage === "overview" ? <LifePanel onFinance={() => setLifePage("finance")} onHealth={() => setLifePage("health")} onChat={connect} />

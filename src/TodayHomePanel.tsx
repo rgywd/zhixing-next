@@ -25,6 +25,8 @@ export function TodayHomePanel({ device, connection, refreshKey = 0, status, loa
   const view = buildTodayHome(snapshot, services, todayStatus(status, !!connection, loading, syncFailed), !!connection);
   const [contextOpen, setContextOpen] = useState(false);
   const busy = snapshot.locationState === "loading" || snapshot.weatherState === "loading";
+  const locationNeedsPermission = snapshot.locationState === "denied" || snapshot.locationState === "blocked";
+  const calendarNeedsPermission = snapshot.calendarState === "denied" || snapshot.calendarState === "blocked";
   const run = (action: () => Promise<unknown> | void) => { void Promise.resolve().then(action).catch((error) => show({ message: humanError(error), tone: "warning" })); };
   function openCalendar() {
     const next = snapshot.calendarState === "ready" ? nextTodayEvent(snapshot.events, snapshot.now) : null;
@@ -50,7 +52,7 @@ export function TodayHomePanel({ device, connection, refreshKey = 0, status, loa
           </> : null}
           {snapshot.weather ? <Text style={s.text}>{Math.round(snapshot.weather.temperature)}°C · {snapshot.weather.condition} · {new Date(snapshot.weather.observedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })} 更新</Text> : null}
           {snapshot.locationError || snapshot.weatherError ? <Text accessibilityRole="alert" style={s.error}>{snapshot.locationError || snapshot.weatherError}</Text> : null}
-          <Button disabled={!snapshot.preferencesReady || busy} onPress={() => run(snapshot.locationEnabled ? device.refreshLocation : device.enableLocation)}>{busy ? "正在更新" : snapshot.locationEnabled ? "刷新位置与天气" : "启用位置与天气"}</Button>
+          <Button disabled={!snapshot.preferencesReady || busy} onPress={() => run(snapshot.locationEnabled && !locationNeedsPermission ? device.refreshLocation : device.enableLocation)}>{busy ? "正在更新" : locationNeedsPermission ? "重新允许位置与天气" : snapshot.locationEnabled ? "刷新位置与天气" : "启用位置与天气"}</Button>
           {busy ? <ActionLink icon="close" onPress={device.cancelLocation}>取消更新</ActionLink> : null}
           {snapshot.locationEnabled && !busy ? <View style={s.wrap}>
             <ActionLink icon="locate-outline" onPress={() => run(device.enableNetworkLocation)}>增强网络辅助定位</ActionLink>
@@ -63,7 +65,7 @@ export function TodayHomePanel({ device, connection, refreshKey = 0, status, loa
           <CardHeader icon="calendar-outline" title="手机日历" tone="gold" description="只读取今天的日程，不自动新建或修改" />
           <Text style={s.description}>连接后展示下一项日程；点击日程可到系统日历查看。日程和地区信息不会自动发送到服务端，点击首页“开始”才会放入可编辑的聊天草稿，仍需自己发送。</Text>
           {snapshot.calendarError ? <Text accessibilityRole="alert" style={s.error}>{snapshot.calendarError}</Text> : null}
-          <Button disabled={!snapshot.preferencesReady || snapshot.calendarState === "loading"} onPress={() => run(snapshot.calendarEnabled ? device.refreshCalendar : device.enableCalendar)}>{snapshot.calendarState === "loading" ? "正在读取" : snapshot.calendarEnabled ? "刷新今日日程" : "读取今日日程"}</Button>
+          <Button disabled={!snapshot.preferencesReady || snapshot.calendarState === "loading"} onPress={() => run(snapshot.calendarEnabled && !calendarNeedsPermission ? device.refreshCalendar : device.enableCalendar)}>{snapshot.calendarState === "loading" ? "正在读取" : calendarNeedsPermission ? "重新允许读取日程" : snapshot.calendarEnabled ? "刷新今日日程" : "读取今日日程"}</Button>
           {snapshot.calendarEnabled ? <ActionLink onPress={device.disableCalendar}>断开手机日历</ActionLink> : null}
           {snapshot.calendarState === "blocked" || snapshot.calendarState === "denied" ? <ActionLink icon="settings-outline" onPress={() => run(() => openDeviceSettings())}>打开日历权限设置</ActionLink> : null}
         </View>
