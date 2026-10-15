@@ -8,11 +8,11 @@
 
 本机健康提醒滚动安排未来 14 天，每次同步按当前规则更新；“今天不提醒这台手机”可离线取消当天排期。权限、系统限制和长期不打开 App 会影响提醒。本次按用户要求完成 Android 模拟器原生验收，已观察到退出后实际通知与点击跳转；投递可能延迟，实体手机与厂商电池策略未覆盖。
 
-**[0.2.1 正式版](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.1)** 汇总生活入口、财务／健康和主 Agent 界面调整，以及透明模型图标与一次性草稿恢复提醒。[下载最新 ARM64 APK](https://work.8-208-118-119.sslip.io/assistant-downloads/zhixing-next-0.2.1-arm64.apk)，安装与覆盖升级见[0.2.1 发布说明](docs/RELEASE-0.2.1.md)。安装包内嵌 JS，无需 Metro；首次连接仍需自己的服务访问令牌。后端代码与 0.2.0 相同，现网继续使用 `adeeb65`／数据库 v12。
+**[0.2.2 发布](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.2)** 汇总今天首页、AI-first 记账、主／子 Agent 共用界面与仅本机密码管理。[下载最新 ARM64 APK](https://work.8-208-118-119.sslip.io/assistant-downloads/zhixing-next-0.2.2-arm64.apk)，安装与覆盖升级见[0.2.2 发布说明](docs/RELEASE-0.2.2.md)。沿用正式签名，可覆盖 0.2.1 与同签预览，保留本机数据和密码库；请勿先卸载。安装包内嵌 JS，无需 Metro；首次连接仍需自己的服务访问令牌。后端代码与 0.2.1 相同，现网继续使用 `adeeb65`／数据库 v12。正式 APK 的构建、安装与下载校验结果以 Release 附件为准。
 
-源码中的首页新增位置天气、今日日程与财务／健康速览，手机信息按需授权，开始后进入可编辑的主 Agent 草稿。此首页更新不包含在上方既有 0.2.1 正式包中，具体使用与验证见[今天首页说明](docs/TODAY-HOME.md)。
+首页新增位置天气、只读今日日程与财务／健康速览，手机信息按需授权，时间跟随手机时钟。“开始”只追加到可编辑的主 Agent 草稿；新增收支优先进入财务 AI，不自动发送模板，手动补记与已有记录纠正仍保留。具体使用与验证见[今天首页说明](docs/TODAY-HOME.md)。
 
-源码新增“设置 → 工具箱 → 密码管理”，支持网站／网址、账号、密码及辅助邮箱、电话、密保问题、自定义字段。使用独立主密码，仅本机加密保存，不进入 AI；主密码无法找回，卸载会丢失密码库。Android 密码库要求 API 26 起，需重建原生安装包，使用和验证边界见[本机密码管理](docs/PASSWORD-VAULT.md)。
+“设置 → 工具箱 → 密码管理”支持网站／网址、账号、密码及辅助邮箱、电话、密保问题、自定义字段。使用独立主密码，仅本机加密保存，不进入 AI；离开、后台或闲置会锁定，复制内容按持有关系尝试限时清理。主密码无法找回，卸载会丢失密码库。Android 密码库要求 API 26 起，使用和验证边界见[本机密码管理](docs/PASSWORD-VAULT.md)。
 
 ## 本地开发
 
@@ -36,7 +36,7 @@ npm run bundle:ios
 npx expo-doctor
 ```
 
-后端在 `backend/` 执行 `uv run pytest -q` 与 `uv run ruff check .`。`bundle:*` 只生成 JS/Hermes 产物。正式 APK 通过[签名构建脚本](scripts/build_android_release.py)生成并内嵌 JS，支持 Android API 24 起；本次交付的 APK 仅包含 arm64。已完成模拟器独立安装、同证书覆盖、实际通知、生产部署和发布附件下载校验，0.2.0 的完整业务与通知验收见[历史说明](docs/RELEASE-0.2.0.md)，本次界面汇总与覆盖升级验收见[0.2.1 说明](docs/RELEASE-0.2.1.md)；实体 Android 手机和原生 iOS 未覆盖，不作为此次发布门槛。
+后端在 `backend/` 执行 `uv run pytest -q` 与 `uv run ruff check .`。`bundle:*` 只生成 JS/Hermes 产物。正式 APK 通过[签名构建脚本](scripts/build_android_release.py)生成并内嵌 JS，应用支持 Android API 24 起，密码库要求 API 26 起；本次 APK 仅包含 arm64。0.2.2 合入前预览已完成 Android 模拟器首页、AI-first 记账与密码库原生验收；本轮正式包的构建、覆盖安装和下载校验由 Release 附件单独记录，见[0.2.2 发布验收](docs/RELEASE-0.2.2.md)。完整业务与通知的既有验收见[0.2.0 说明](docs/RELEASE-0.2.0.md)，此前界面汇总见[0.2.1 说明](docs/RELEASE-0.2.1.md)。实体 Android 手机和原生 iOS 未覆盖；iOS JS bundle 不等于 iPhone 安装包。
 
 ## 入口
 

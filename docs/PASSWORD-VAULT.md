@@ -2,6 +2,8 @@
 
 入口为“设置 → 工具箱 → 密码管理”，未连接知行服务也能使用。首次设置独立主密码，之后每次进入解锁；主密码至少 12 个字符，保留输入的空格与大小写。主密码无法找回。当前只保存在这台设备，不随系统备份迁移；卸载会丢失密码库，请在录入前理解这一点。
 
+密码管理纳入 [0.2.2 发布](RELEASE-0.2.2.md)。从 0.2.1 正式版或同签名密码库预览直接覆盖安装，保留本机数据；已有密码库不要通过卸载重装来升级。应用仍支持 Android API 24 起，密码库仅在 API 26 起可用。
+
 ## 使用范围
 
 - 每条记录必须填写网站名称或网址、账号、密码；支持辅助邮箱、电话、多个密保问题和答案、备注及自定义字段。自定义字段默认按秘密隐藏。
@@ -24,6 +26,10 @@ Android 写入应用的 `noBackupFilesDir`，使用 `AtomicFile`；iOS 写入 Ap
 
 ## 验证边界
 
-定向回归覆盖密文格式与认证、Unicode 主密码、必填字段与秘密精确保留、CRUD 和失败保留、加密草稿、并发写入、锁定取消、AppState／卸载生命周期、页面返回与屏幕保护串行化。标准 Node 加密实现用于交叉检查，不代替手机原生桥接验收。Android 模拟器验收与安装包回执保存于本次交付记录；实体手机及原生 iOS 未验收。此功能不改变既有 0.2.1 正式 Release 的附件。
+定向回归覆盖密文格式与认证、Unicode 主密码、必填字段与秘密精确保留、CRUD 和失败保留、加密草稿、并发写入、锁定取消、AppState／卸载生命周期、页面返回与屏幕保护串行化。标准 Node 加密实现用于交叉检查，不代替手机原生桥接验收。
+
+PR #27 合入前预览已通过 Android 16 ARM64 模拟器验收：使用虚构记录验证本机创建与解锁、修改主密码、已有密文覆盖保留、错误密码与损坏文件保留、CRUD、后台／闲置锁定、320dp 键盘与返回、敏感剪贴板标记及持有关系清理。原生密文另由标准 Node 实现独立解密核对。截屏保护正常遮黑应用区域，验收未绕过保护；没有读取真实密码库或提交生产消息。
+
+剪贴板到期清理在进程存活时实际观察通过，后台访问和进程终止仍限制计时保证；前台重试与不清除后来其他应用内容已验证。写入失败与异步竞态由自动化回归覆盖，未在原生设备模拟磁盘耗尽或突然断电。0.2.2 正式 APK 的覆盖安装与启动结果以 [Release 验收附件](https://github.com/rgywd/zhixing-next/releases/download/v0.2.2/ACCEPTANCE.md)为准；实体手机及原生 iOS 未验收。公开回执不包含秘密、个人截图或本机密码库文件。
 
 原生 API 依据：[Expo Crypto](https://docs.expo.dev/versions/v57.0.0/sdk/crypto/)、[ScreenCapture](https://docs.expo.dev/versions/v57.0.0/sdk/screen-capture/)、[Android KDF 支持](https://developer.android.com/reference/javax/crypto/SecretKeyFactory)、[Android 敏感剪贴板](https://developer.android.com/develop/ui/views/touch-and-input/copy-paste#sensitive-content)。
