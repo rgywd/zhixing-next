@@ -137,7 +137,8 @@ export type Approval = {
   state: string;
   details: { title: string; description?: string; path?: string; bytes?: number; preview?: string; task?: string; tool?: string; arguments?: Record<string, unknown> };
 };
-export type Draft = { text: string; attachments?: Resource[]; pending: MessageInput | null };
+export type Draft = { text: string; attachments?: Resource[]; pending: MessageInput | null;
+  delivery?: { intent: "queue" | "steer"; target_run_id?: string } };
 export type Schedule = {
   id: string;
   conversation_id: string;
@@ -164,6 +165,7 @@ export type PlanDraft = {
 };
 export type RunEvent = {
   seq: number;
+  run_id?: string;
   type: string;
   data: Record<string, unknown>;
   created_at: string;

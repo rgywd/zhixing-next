@@ -1,6 +1,8 @@
 import { availablePreference } from "./providerEditing";
 import { ThemeProvider } from "./ThemeProvider";
 import { AgentChatHeader } from "./AgentChatHeader";
+import { ChatPreferencesProvider } from "./chatPreferences";
+import { ChatSettingsPanel } from "./ChatSettingsPanel";
 import { useUi, ActionLink, BackLink, Button, humanError, PageHeading, PageScrollView } from "./ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -74,7 +76,7 @@ type LifePage = "overview" | "finance" | "health";
 type ChatReturn = { tab: Exclude<Tab, "chat">; lifePage: LifePage };
 
 export default function AssistantApp() {
-  return <ThemeProvider><ThemedApp /></ThemeProvider>;
+  return <ThemeProvider><ChatPreferencesProvider><ThemedApp /></ChatPreferencesProvider></ThemeProvider>;
 }
 
 function ThemedApp() {
@@ -192,7 +194,7 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
   const [tab, setTab] = useState<Tab>("home");
   const todayDevice = useTodayDeviceContext(tab === "home");
   const [lifePage, setLifePage] = useState<LifePage>("overview");
-  const [localSettings, setLocalSettings] = useState<"overview" | "connection" | "device" | "vault">("overview");
+  const [localSettings, setLocalSettings] = useState<"overview" | "connection" | "device" | "vault" | "chat">("overview");
   useEffect(() => {
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
       if (tab === "settings" && localSettings === "vault") return false;
@@ -213,9 +215,9 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
       : tab === "work" ? <ConstructionPage />
       : tab === "life" ? lifePage === "overview" ? <LifePanel onFinance={() => setLifePage("finance")} onHealth={() => setLifePage("health")} onChat={connect} />
         : <><BackLink label="生活" onPress={() => setLifePage("overview")} /><PageScrollView><PageHeading title={lifePage === "finance" ? "财务" : "健康"} description="连接服务后，记录收支与饮食，继续自己的目标。" /><Button onPress={connect}>连接服务</Button></PageScrollView></>
-      : tab === "settings" ? localSettings === "overview" ? <SettingsHome onOpen={(destination) => setLocalSettings(destination === "device" || destination === "vault" ? destination : "connection")} />
+      : tab === "settings" ? localSettings === "overview" ? <SettingsHome onOpen={(destination) => setLocalSettings(destination === "device" || destination === "vault" || destination === "chat" ? destination : "connection")} />
         : localSettings === "vault" ? <PasswordVaultPanel onBack={() => setLocalSettings("overview")} />
-        : <><BackLink label="设置" onPress={() => setLocalSettings("overview")} />{localSettings === "device" ? <DeviceCapabilitiesPanel /> : <ConnectionSettingsPanel onConnect={onConnect} />}</>
+        : <><BackLink label="设置" onPress={() => setLocalSettings("overview")} />{localSettings === "device" ? <DeviceCapabilitiesPanel /> : localSettings === "chat" ? <ChatSettingsPanel /> : <ConnectionSettingsPanel onConnect={onConnect} />}</>
       : <PageScrollView tabs><PageHeading title="连接知行" description="连接服务后，和知行聊聊。" /><Button onPress={connect}>连接服务</Button></PageScrollView>}
     {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
     {showTabs ? <BottomTabs value={tab} onChange={selectTab} /> : null}
@@ -262,6 +264,8 @@ function ConnectedSession({
     null,
   );
   const [showAiDrawer, setShowAiDrawer] = useState(false);
+  const [chatSettingsFor, setChatSettingsFor] = useState<string | null>(null);
+  const [chatPreferencesReturn, setChatPreferencesReturn] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
   const welcome = useWelcomeDraft(connection.url);
   const { text: welcomeDraft, models: welcomeModels, efforts: welcomeEfforts, searchId: welcomeSearchId } = welcome.value;
@@ -284,6 +288,12 @@ function ConnectedSession({
   const [serviceVersion, setServiceVersion] = useState(0);
   const observedRunStates = useRef(new Map<string, Run["status"]>());
   const showTabs = tab !== "chat" && (tab !== "life" || lifePage === "overview") && (tab !== "settings" || settingsView === "overview");
+  const chatMenuScope = `${tab}:${selectedId ?? ""}:${showWelcome}`;
+  const [previousChatMenuScope, setPreviousChatMenuScope] = useState(chatMenuScope);
+  if (previousChatMenuScope !== chatMenuScope) {
+    setPreviousChatMenuScope(chatMenuScope);
+    setChatSettingsFor(null);
+  }
   useHealthReminders(connection, serviceVersion, () => openLifePage("health"));
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
@@ -296,13 +306,13 @@ function ConnectedSession({
       navigation.current++;
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
       if (tab === "chat") { setTab(chatReturn.tab); setLifePage(chatReturn.lifePage); return true; }
-      if (tab === "settings" && settingsView !== "overview") { setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); return true; }
+      if (tab === "settings" && settingsView !== "overview") { setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); if (settingsView === "chat" && chatPreferencesReturn) { setChatPreferencesReturn(false); setTab("chat"); } return true; }
       if (tab === "life" && lifePage !== "overview") { setLifePage("overview"); return true; }
       if (tab !== "home") { setTab("home"); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, chatReturn, lifePage, settingsView, resourceReturnTab]);
+  }, [tab, chatReturn, lifePage, settingsView, resourceReturnTab, chatPreferencesReturn]);
   function closeChat() {
     navigation.current++;
     setTab(chatReturn.tab);
@@ -324,7 +334,7 @@ function ConnectedSession({
     if (next === "chat") openMainChat();
     else setTab(next);
     if (next === "life") setLifePage("overview");
-    if (next === "settings") setSettingsView("overview");
+    if (next === "settings") { setSettingsView("overview"); setChatPreferencesReturn(false); }
   }
   async function openConversation(id: string, messageSeq?: number) {
     const requestId = ++navigation.current;
@@ -599,6 +609,7 @@ function ConnectedSession({
             onMenu={() => setShowAiDrawer(true)}
             onNew={() => { if (!showWelcome && selected?.agent_id) void newConversation(false, selected.agent_id); else setShowWelcome(true); }}
             onClose={closeChat}
+            onSettings={!showWelcome && selected ? () => setChatSettingsFor(selected.id) : undefined}
             pinned={Boolean(selected && home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`))}
             pinReady={home.ready}
             onPin={!showWelcome && selected ? () => home.toggle({ kind: "conversation", id: selected.id, title: selected.title }) : undefined}
@@ -624,20 +635,28 @@ function ConnectedSession({
               onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))}
               onRefresh={refresh}
               onRunsChanged={chatRunsChanged}
+              settingsOpen={chatSettingsFor === selected.id}
+              onSettingsClose={() => setChatSettingsFor(null)}
+              onOpenChatSettings={() => { setChatSettingsFor(null); setChatPreferencesReturn(true); navigation.current++; setSettingsView("chat"); setTab("settings"); }}
+              pinned={home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`)}
+              pinReady={home.ready}
+              onPin={() => home.toggle({ kind: "conversation", id: selected.id, title: selected.title })}
             />
           ) : <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy || loading} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />}
         </>
       ) : settingsView === "overview" ? (
         <SettingsHome assistant={assistant} catalog={catalog} connectionUrl={connection.url} onOpen={(destination) => {
           if (destination === "search") setShowSearchSettings(true);
-          else { if (destination === "resources") setResourceReturnTab("settings"); setSettingsView(destination); }
+          else { if (destination === "resources") setResourceReturnTab("settings"); setChatPreferencesReturn(false); setSettingsView(destination); }
         }} />
       ) : settingsView === "vault" ? (
         <PasswordVaultPanel onBack={() => { navigation.current++; setSettingsView("overview"); }} />
       ) : (
         <>
-          <BackLink label={settingsView === "resources" && resourceReturnTab === "home" ? "首页" : "设置"} onPress={() => { navigation.current++; setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); }} />
-          {settingsView === "device" ? (
+          <BackLink label={settingsView === "chat" && chatPreferencesReturn ? "对话" : settingsView === "resources" && resourceReturnTab === "home" ? "首页" : "设置"} onPress={() => { navigation.current++; setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); if (settingsView === "chat" && chatPreferencesReturn) { setChatPreferencesReturn(false); setTab("chat"); } }} />
+          {settingsView === "chat" ? (
+            <ChatSettingsPanel />
+          ) : settingsView === "device" ? (
             <DeviceCapabilitiesPanel onUseLocation={(text) => {
               setWelcomeDraft((old) => `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${text}\n\n`);
               setShowWelcome(true); setChatReturn({ tab: "settings", lifePage }); setTab("chat");

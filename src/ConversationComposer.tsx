@@ -1,7 +1,7 @@
 import type { ThemeColors } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { useEffect, useState, type ReactNode } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { request, type Connection, type ModelInfo, type ReasoningEffort, type SearchProvider } from "./api";
 import { BrandIcon } from "./BrandIcon";
@@ -36,18 +36,18 @@ export function ConversationComposer(props: Props) {
   const reasoningColor = !canReason || depth === "none" ? colors.strongLine : depth === "auto" ? colors.gold : colors.green;
   const searchText = searchId ? `搜索 · ${provider?.name ?? "已开启"}` : "联网搜索";
   return <View style={styles.area}>
-    <View style={styles.options}>
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.optionsViewport} contentContainerStyle={styles.options}>
       {onModel ? <Pressable accessibilityRole="button" accessibilityLabel={`选择${kind === "task" ? "任务" : "聊天"}模型，当前${model?.name ?? "未配置"}`} accessibilityState={{ disabled: optionsLocked }} disabled={optionsLocked} onPress={onModel} style={[styles.chip, optionsLocked && styles.disabled]}><View style={[styles.chipSurface, styles.modelChip]}>
-        <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={17} /><Text style={styles.chipText}>{model?.name ?? "选择模型"}</Text><Ionicons name="chevron-down" size={12} color={colors.muted} />
+        <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={17} /><Text numberOfLines={1} style={styles.chipText}>{model?.name ?? "选择模型"}</Text><Ionicons name="chevron-down" size={12} color={colors.muted} />
       </View></Pressable> : null}
       {onReasoning ? <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${reasoningText}`} accessibilityState={{ disabled: optionsLocked || !canReason }} disabled={optionsLocked || !canReason} onPress={onReasoning} style={[styles.chip, (optionsLocked || !canReason) && styles.disabled]}><View style={styles.chipSurface}>
-        <Ionicons name="bulb-outline" size={17} color={canReason && depth !== "none" ? colors.gold : colors.muted} /><Text style={styles.chipText}>思考 · {reasoningText}</Text><View accessible={false} style={[styles.statusDot, { backgroundColor: reasoningColor }]} />
+        <Ionicons name="bulb-outline" size={17} color={canReason && depth !== "none" ? colors.gold : colors.muted} /><Text numberOfLines={1} style={styles.chipText}>思考 · {reasoningText}</Text><View accessible={false} style={[styles.statusDot, { backgroundColor: reasoningColor }]} />
       </View></Pressable> : null}
       {onSearch ? <Pressable accessibilityRole="button" accessibilityLabel={`联网搜索${searchId ? `已开启${provider ? `，${provider.name}` : ""}` : "已关闭"}`} accessibilityState={{ selected: !!searchId, disabled: optionsLocked }} disabled={optionsLocked} onPress={onSearch} style={[styles.chip, optionsLocked && styles.disabled]}><View style={[styles.chipSurface, searchId && styles.searchOn]}>
         {searchId ? <BrandIcon name={provider?.kind ?? ""} search size={17} /> : <Ionicons name="globe-outline" size={17} color={colors.muted} />}
-        <Text style={[styles.chipText, searchId && { color: colors.blue }]}>{searchText}</Text>
+        <Text numberOfLines={1} style={[styles.chipText, searchId && { color: colors.blue }]}>{searchText}</Text>
       </View></Pressable> : null}
-    </View>
+    </ScrollView>
     <View style={styles.composer}>
       {children ? <View style={styles.attachments}>{children}</View> : null}
       <View style={styles.inputRow}>
@@ -62,11 +62,12 @@ export function ConversationComposer(props: Props) {
 
 const createStyles = (colors: ThemeColors) => StyleSheet.create({
   area: { paddingHorizontal: space.lg, paddingBottom: space.sm, paddingTop: space.sm, gap: space.sm },
-  options: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm },
-  chip: { minHeight: 44, minWidth: 0, maxWidth: "100%", flexShrink: 1, justifyContent: "center" },
-  chipSurface: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 30, minWidth: 0, maxWidth: "100%", borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, paddingHorizontal: 8, paddingVertical: 5 },
+  optionsViewport: { flexGrow: 0, flexShrink: 0 },
+  options: { flexDirection: "row", flexWrap: "nowrap", alignItems: "center", gap: space.sm },
+  chip: { minHeight: 44, minWidth: 40, flexShrink: 0, justifyContent: "center" },
+  chipSurface: { flexDirection: "row", alignItems: "center", gap: 4, minHeight: 30, minWidth: 0, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, paddingHorizontal: 8, paddingVertical: 5 },
   modelChip: { backgroundColor: colors.goldSoft, borderColor: colors.strongLine },
-  chipText: { ...typography.caption, color: colors.ink, flexShrink: 1 },
+  chipText: { ...typography.caption, color: colors.ink, flexShrink: 0 },
   statusDot: { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
   searchOn: { backgroundColor: colors.blueSoft, borderColor: colors.blueLine },
   composer: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.gold, borderRadius: 24, padding: 6, shadowColor: colors.gold, shadowOpacity: 0.09, shadowRadius: 12, shadowOffset: { width: 0, height: 2 } },

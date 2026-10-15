@@ -92,12 +92,13 @@ function chatHarness(state = {}, options = {}) {
     "./providerEditing": { availablePreference },
     "./theme": theme,
     "./ThemeProvider": { useThemedStyles: (factory) => factory(theme.darkColors) },
-    "./ui": { useUi: () => ({ s: {}, colors: theme.darkColors }), Button: "Button", Empty: "Empty", SheetHeader: "SheetHeader", humanError: (e) => e.message, timeLabel: String, runLabels: { running: "执行中", completed: "已完成", interrupted: "已中断" } },
+    "./ui": { useUi: () => ({ s: {}, colors: theme.darkColors }), ActionLink: "ActionLink", Button: "Button", Empty: "Empty", SheetHeader: "SheetHeader", humanError: (e) => e.message, timeLabel: String, runLabels: { running: "执行中", completed: "已完成", interrupted: "已中断" } },
+    "./chatPreferences": { useChatPreferences: () => options.chatPreferences ?? { defaultIntent: "queue", ready: true, error: "", retry() {} } },
     "./ConnectionStatus": { useSyncStatus: () => sync },
     "./useChat": { useChat: (input) => { hookInputs.push(input); return chat; } },
     "./api": { request: options.request ?? (async (_connection, path, options) => { calls.push({ path, ...options }); return options.body; }) },
   };
-  for (const name of ["MessageBody", "ConversationComposer", "ReasoningPicker", "ModelPicker", "Attachments", "ApprovalCards", "RunReport", "FilesPanel", "SearchPicker"]) dependencies[`./${name}`] = { [name]: name };
+  for (const name of ["MessageBody", "ConversationComposer", "ReasoningPicker", "ModelPicker", "Attachments", "ApprovalCards", "RunReport", "FilesPanel", "SearchPicker", "BottomSheet", "LiveRunView"]) dependencies[`./${name}`] = { [name]: name };
   const { ChatPanel } = load("ChatPanel", dependencies, options.globals);
   const defaults = { connection: {}, conversation: { id: "finance-chat", agent_id: "finance", model_id: null, reasoning_effort: null }, catalog, assistantName: "财务助手", onRefresh() {}, onConversationChanged() {} };
   return { calls, hookInputs, lifecycle, chat, render: (props = {}) => walk(lifecycle.render(ChatPanel, { ...defaults, ...props })) };
@@ -389,4 +390,105 @@ test("main, finance and health conversations use the same composer contract with
     assert.equal(composer.props.children.type, "Attachments");
     for (const action of ["onText", "onSend", "onFiles", "onModel", "onReasoning", "onSearch"]) assert.equal(typeof composer.props[action], "function");
   }
+});
+
+test("active reply controls live in the settings sheet while live content and approvals stay in the conversation", async () => {
+  const actions = [];
+  const running = { id: "active-run", status: "running", kind: "chat", cancel_requested: false };
+  const liveRun = { run: running, content: "正在到达的真实片段", reasoning: "", tools: [] };
+  const app = chatHarness({ running, pendingRuns: [running], liveRun, setDetail: (id) => actions.push(["detail", id]), cancel: async (run) => actions.push(["cancel", run.id]) });
+  const nodes = app.render({ settingsOpen: true, onSettingsClose: () => actions.push(["close"]) });
+  const sheet = nodes.find((node) => node.type === "BottomSheet");
+  assert.equal(sheet.props.visible, true);
+  assert.equal(sheet.props.title, "当前对话");
+  assert.match(text(sheet), /正在回复 · 0 条等待/);
+  const main = nodes[0].props.children.filter((node) => node?.type !== "BottomSheet");
+  assert.doesNotMatch(text(main), /正在回复 · 0 条等待|查看运行进度|取消当前运行|接着处理|补充当前回复/);
+  assert.equal(nodes.find((node) => node.type === "ConversationComposer").props.hint, undefined);
+  const footer = walk(nodes.find((node) => node.type === "FlatList").props.ListFooterComponent);
+  assert.equal(footer.find((node) => node.type === "LiveRunView").props.value, liveRun);
+  assert.ok(footer.some((node) => node.type === "ApprovalCards" && node.props.conversationId === "finance-chat"));
+  walk(sheet).find((node) => node.type === "ActionLink" && node.props.children === "查看运行进度").props.onPress();
+  walk(sheet).find((node) => node.type === "Button" && node.props.children === "取消当前运行").props.onPress();
+  sheet.props.onClose();
+  await settle();
+  assert.deepEqual(actions, [["detail", "active-run"], ["cancel", "active-run"], ["close"]]);
+  app.chat.running = { ...running, cancel_requested: true };
+  assert.equal(app.render({ settingsOpen: true }).find((node) => node.type === "Button" && node.props.children === "已请求取消").props.disabled, true);
+});
+
+test("committed reply metadata moves before its matching assistant body and never appears twice", () => {
+  const liveRun = { run: { id: "finished-run" }, content: "", reasoning: "保留的思考", tools: [{ id: "tool", name: "search", status: "completed" }], answerCommitted: true };
+  const messages = [
+    { id: "user", role: "user", run_id: "finished-run", content: "测试提问" },
+    { id: "earlier", role: "assistant", run_id: "finished-run", content: "早期回复" },
+    { id: "answer", role: "assistant", run_id: "finished-run", content: "已保存的最终正文" },
+    { id: "unrelated", role: "assistant", run_id: "other-run", content: "其他回复" },
+  ];
+  const nodes = chatHarness({ liveRun, messages }).render();
+  const list = nodes.find((node) => node.type === "FlatList");
+  assert.equal(walk(list.props.ListFooterComponent).filter((node) => node.type === "LiveRunView").length, 0);
+  assert.ok(walk(list.props.ListFooterComponent).some((node) => node.type === "ApprovalCards"));
+  const rows = messages.map((item) => walk(list.props.renderItem({ item })));
+  assert.equal(rows.flat().filter((node) => node.type === "LiveRunView").length, 1);
+  const answer = rows[2];
+  const metadata = answer.findIndex((node) => node.type === "LiveRunView");
+  const body = answer.findIndex((node) => node.type === "MessageBody");
+  assert.ok(metadata >= 0 && metadata < body);
+  assert.equal(answer[metadata].props.value, liveRun);
+  assert.equal(text(answer.find((node) => node.type === "MessageBody")), "已保存的最终正文");
+});
+
+test("all agents pass shared default intent and keep unread preferences from changing pending retries", () => {
+  for (const agentId of [null, "finance", "health"]) {
+    const preferences = { defaultIntent: "steer", ready: false, error: "发送设置无法读取", retry() {} };
+    const app = chatHarness({ draft: { text: "保留我的文字", attachments: [], pending: null } }, { chatPreferences: preferences });
+    let nodes = app.render({ conversation: { id: "test", agent_id: agentId }, settingsOpen: true });
+    assert.equal(app.hookInputs.at(-1).defaultIntent, "steer");
+    assert.equal(app.hookInputs.at(-1).defaultIntentReady, false);
+    assert.equal(nodes.find((node) => node.type === "ConversationComposer").props.canSend, false);
+    assert.ok(walk(nodes.find((node) => node.type === "BottomSheet")).some((node) => node.props?.accessibilityRole === "alert" && node.props.children === preferences.error));
+    const pending = { id: "immutable", content: "原请求", intent: "steer", target_run_id: "original-run" };
+    app.chat.draft = { text: "保留我的文字", attachments: [], pending };
+    nodes = app.render();
+    const composer = nodes.find((node) => node.type === "ConversationComposer");
+    assert.equal(composer.props.canSend, true);
+    assert.equal(composer.props.pending, true);
+    assert.equal(composer.props.editable, false);
+    assert.equal(app.chat.draft.pending, pending);
+  }
+});
+
+test("stale steer targets have an explicit settings recovery and immutable requests cannot be rebound", () => {
+  for (const pending of [null, { id: "original-request", intent: "steer", target_run_id: "ended-run" }]) {
+    const changes = [];
+    const app = chatHarness({ intent: "steer", target: "ended-run", running: { id: "new-run", kind: "chat" }, draft: { text: "原草稿", attachments: [], pending }, setIntent: (value) => changes.push(["intent", value]), setTarget: (value) => changes.push(["target", value]) });
+    const nodes = app.render({ settingsOpen: true });
+    assert.deepEqual(changes, []);
+    const sheet = nodes.find((node) => node.type === "BottomSheet");
+    assert.match(text(sheet), /补充目标已结束/);
+    const recover = walk(sheet).find((node) => node.type === "Button" && node.props.children === "改为接着处理");
+    assert.equal(recover.props.disabled, !!pending);
+    if (!pending) {
+      recover.props.onPress();
+      assert.deepEqual(changes, [["intent", "queue"], ["target", null]]);
+    }
+  }
+});
+
+test("settings keep preference retry, global settings and existing pin actions reachable without a status row", () => {
+  const actions = [];
+  const preferences = { defaultIntent: "queue", ready: false, error: "读取失败", retry: () => actions.push("retry") };
+  const app = chatHarness({}, { chatPreferences: preferences });
+  let nodes = app.render({ settingsOpen: true, onOpenChatSettings: () => actions.push("settings"), onPin: () => actions.push("pin"), pinned: false, pinReady: false });
+  let sheet = nodes.find((node) => node.type === "BottomSheet");
+  const links = walk(sheet).filter((node) => node.type === "ActionLink");
+  links.find((node) => node.props.children === "重新读取发送设置").props.onPress();
+  links.find((node) => node.props.children === "默认发送方式").props.onPress();
+  assert.equal(links.find((node) => node.props.children === "固定此对话").props.disabled, true);
+  nodes = app.render({ settingsOpen: true, onPin: () => actions.push("pin"), pinned: true, pinReady: true });
+  sheet = nodes.find((node) => node.type === "BottomSheet");
+  const unpin = walk(sheet).find((node) => node.type === "ActionLink" && node.props.children === "取消固定此对话");
+  assert.equal(unpin.props.disabled, false); unpin.props.onPress();
+  assert.deepEqual(actions, ["retry", "settings", "pin"]);
 });

@@ -25,7 +25,7 @@ function harness({ colors = darkColors, request = async () => ({ items: [] }), .
   const props = { text: "草稿", onText: (value) => actions.push(["text", value]), onSend: () => actions.push("send"), onFiles: () => actions.push("files"), onModel: () => actions.push("model"), onReasoning: () => actions.push("reasoning"), onSearch: () => actions.push("search"), editable: true, canSend: true, busy: false, kind: "chat", onKind() {}, model, depth: "high", searchId: null, ...initial };
   const dependencies = {
     "react/jsx-runtime": jsxRuntime, react: lifecycle.react,
-    "react-native": { ...Object.fromEntries(["ActivityIndicator", "Pressable", "Text", "TextInput", "View"].map((name) => [name, name])), StyleSheet: { create: (styles) => styles } },
+    "react-native": { ...Object.fromEntries(["ActivityIndicator", "Pressable", "ScrollView", "Text", "TextInput", "View"].map((name) => [name, name])), StyleSheet: { create: (styles) => styles } },
     "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./api": { request }, "./BrandIcon": { BrandIcon: "BrandIcon" }, "./reasoning": { thinkingLabel }, "./theme": theme,
     "./ThemeProvider": { useTheme: () => ({ colors }), useThemedStyles: (factory) => factory(colors) },
   };
@@ -50,15 +50,40 @@ test("the shared default composer places real choices above the attachment, inpu
   app.unmount();
 });
 
-test("shared controls show real model, reasoning and search states, wrap naturally, and expose no fake microphone", () => {
+test("shared controls show real model, reasoning and search states in one scrolling row and expose no fake microphone", () => {
   const app = harness(); const nodes = app.render();
   assert.match(content(control(nodes, "选择聊天模型")), /我选的真实模型/);
   assert.match(content(control(nodes, "思考深度")), /深度/);
   assert.equal(content(control(nodes, "联网搜索")), "联网搜索"); assert.match(control(nodes, "联网搜索").props.accessibilityLabel, /已关闭/);
-  assert.ok(nodes.some((node) => node.type === "View" && node.props.style?.flexWrap === "wrap" && node.props.style?.flexDirection === "row"));
-  assert.equal(nodes.some((node) => node.type === "Text" && node.props.numberOfLines), false);
+  const options = nodes.find((node) => node.type === "ScrollView");
+  assert.equal(options.props.horizontal, true);
+  assert.equal(options.props.showsHorizontalScrollIndicator, false);
+  assert.equal(options.props.keyboardShouldPersistTaps, "handled");
+  assert.equal(options.props.contentContainerStyle.flexWrap, "nowrap");
+  assert.equal(options.props.contentContainerStyle.flexDirection, "row");
+  assert.ok(walk(options).filter((node) => node.type === "Text").every((node) => node.props.numberOfLines === 1));
   assert.equal(nodes.some((node) => /语音|录音|麦克风/.test(node.props?.accessibilityLabel ?? "")), false);
   for (const [label, action] of [["选择聊天模型", "model"], ["思考深度", "reasoning"], ["联网搜索", "search"], ["添加资料", "files"], ["发送消息", "send"]]) { control(nodes, label).props.onPress(); assert.equal(app.actions.at(-1), action); }
+  app.unmount();
+});
+
+test("long real labels stay complete in an unshrinking horizontal row at narrow widths", async () => {
+  const longModelName = "用户自定义的超长模型名称 · 完整版本标识 2026";
+  const app = harness({ model: { ...model, name: longModelName }, searchId: "long", connection: { url: "https://example.test", token: "fixture" }, request: async () => ({ items: [{ id: "long", name: "我配置的长名称搜索供应商", kind: "brave" }] }) });
+  app.render(); await settle();
+  const nodes = app.render();
+  const options = nodes.find((node) => node.type === "ScrollView");
+  assert.equal(options.props.style.flexShrink, 0);
+  const choices = walk(options).filter((node) => node.type === "Pressable");
+  assert.equal(choices.length, 3);
+  for (const choice of choices) {
+    assert.equal(choice.props.style[0].flexShrink, 0);
+    assert.ok(choice.props.style[0].minHeight >= 44);
+    assert.ok(choice.props.style[0].minWidth >= 40);
+    assert.equal(choice.props.style[0].maxWidth, undefined);
+  }
+  assert.match(content(control(nodes, "选择聊天模型")), new RegExp(longModelName));
+  assert.match(content(control(nodes, "联网搜索")), /我配置的长名称搜索供应商/);
   app.unmount();
 });
 

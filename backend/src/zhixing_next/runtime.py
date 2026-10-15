@@ -383,6 +383,10 @@ async def _run_agent(
     sandbox=None,
     budget=None,
 ) -> str:
+    from .live_stream import LiveModelStream
+
+    live = LiveModelStream(emit)
+    await live.start()
     model = model_override if model_override is not None else create_model(
         settings, run["kind"], run.get("model_id"), run.get("reasoning_effort")
     )
@@ -404,7 +408,7 @@ async def _run_agent(
         )
     workspace.mkdir(parents=True, exist_ok=True)
     settings.data_dir.mkdir(parents=True, exist_ok=True)
-    config = {"configurable": {"thread_id": run["conversation_id"]}, "recursion_limit": 100}
+    config = {"configurable": {"thread_id": run["conversation_id"]}, "recursion_limit": 100, "callbacks": [live.callback]}
     search_enabled = run.get("search_provider") is not None
     store = Store(settings)
     from .taskflow import TaskFlow, create_taskflow_tools
@@ -594,14 +598,20 @@ async def _run_agent(
                 acknowledged.update(ready)
 
         latest: dict[str, Any] = dict(old.values) if resuming else {}
-        async for values in agent.astream(
+        async for mode, value in agent.astream(
             stream_input,
             config=config,
-            stream_mode="values",
+            stream_mode=["values", "messages"],
             durability="sync",
         ):
-            latest = values
-            await acknowledge_persisted()
+            if mode == "messages":
+                message, metadata = value
+                await live.receive(message, metadata)
+            elif mode == "values":
+                latest = value
+                await live.flush()
+                await acknowledge_persisted()
+        await live.flush()
         await acknowledge_persisted()
         saved = await agent.aget_state(config)
         if saved.interrupts:
