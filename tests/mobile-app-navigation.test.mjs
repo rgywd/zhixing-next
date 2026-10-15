@@ -59,7 +59,8 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
+  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
+  dependencies["./chatPreferences"] = { ChatPreferencesProvider: "ChatPreferencesProvider" };
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
   dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };
@@ -106,6 +107,24 @@ function openLifeService(app, service) {
   const life = find(app, "LifePanel"); assert.ok(life, "life overview opens first");
   life.props[service === "finance" ? "onFinance" : "onHealth"]();
 }
+
+test("chat preferences are available locally and each agent can open them and return to its conversation", async () => {
+  const offline = appHarness({ connected: false }); offline.render();
+  offline.renderTabs().find((node) => node.props.accessibilityLabel === "设置").props.onPress();
+  find(offline, "SettingsHome").props.onOpen("chat");
+  assert.ok(find(offline, "ChatSettingsPanel")); assert.equal(offline.tabsVisible(), false);
+  assert.equal(offline.back(), true); assert.ok(find(offline, "SettingsHome")); assert.deepEqual(offline.calls, []); offline.unmount();
+  for (const agent of ["finance", "health"]) {
+    const app = appHarness(); app.render(); await settle(); openLifeService(app, agent);
+    find(app, agent === "finance" ? "FinanceDashboard" : "HealthPage").props.onChat(); await settle();
+    const id = find(app, "ChatPanel").props.conversation.id;
+    find(app, "AgentChatHeader").props.onSettings(); assert.equal(find(app, "ChatPanel").props.settingsOpen, true);
+    find(app, "ChatPanel").props.onOpenChatSettings(); assert.ok(find(app, "ChatSettingsPanel"));
+    assert.equal(find(app, "BackLink").props.label, "对话");
+    app.back(); assert.equal(find(app, "ChatPanel").props.conversation.id, id); assert.equal(find(app, "ChatPanel").props.settingsOpen, false);
+    assert.equal(app.calls.some((call) => call.method === "POST"), false); app.unmount();
+  }
+});
 
 test("life services open their own agent chats and return to the exact service before life", async () => {
   for (const [pageName, agent] of [["FinanceDashboard", "finance"], ["HealthPage", "health"]]) {

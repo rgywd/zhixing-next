@@ -6,9 +6,9 @@ import { radius, space, typography, type ThemeColors } from "./theme";
 import { useUi } from "./ui";
 
 /** All agents share this chrome; identity and navigation remain caller-owned. */
-export function AgentChatHeader({ title, subtitle, status, pinned = false, pinReady = true, busy = false, onMenu, onNew, onClose, onPin }: {
+export function AgentChatHeader({ title, subtitle, status, pinned = false, pinReady = true, busy = false, onMenu, onNew, onClose, onPin, onSettings }: {
   title: string; subtitle: string; status?: string; pinned?: boolean; pinReady?: boolean; busy?: boolean;
-  onMenu: () => void; onNew: () => void; onClose: () => void; onPin?: () => void;
+  onMenu: () => void; onNew: () => void; onClose: () => void; onPin?: () => void; onSettings?: () => void;
 }) {
   const { colors } = useUi();
   const styles = useThemedStyles(createStyles);
@@ -23,7 +23,7 @@ export function AgentChatHeader({ title, subtitle, status, pinned = false, pinRe
       </View>
       <Text numberOfLines={1} style={styles.subtitle}>{subtitle}</Text>
     </Pressable>
-    {onPin ? <Pressable accessibilityRole="button" accessibilityLabel="固定或取消固定此对话" accessibilityState={{ selected: pinned, disabled: !pinReady }} disabled={!pinReady} onPress={onPin} style={[styles.action, !pinReady && styles.disabled]}><Ionicons name={pinned ? "bookmark" : "bookmark-outline"} size={21} color={pinned ? colors.gold : colors.muted} /></Pressable> : null}
+    {onSettings ? <Pressable accessibilityRole="button" accessibilityLabel="对话设置" onPress={onSettings} style={styles.action}><Ionicons name="ellipsis-horizontal" size={22} color={colors.muted} /></Pressable> : onPin ? <Pressable accessibilityRole="button" accessibilityLabel="固定或取消固定此对话" accessibilityState={{ selected: pinned, disabled: !pinReady }} disabled={!pinReady} onPress={onPin} style={[styles.action, !pinReady && styles.disabled]}><Ionicons name={pinned ? "bookmark" : "bookmark-outline"} size={21} color={pinned ? colors.gold : colors.muted} /></Pressable> : null}
     <AppearanceControl />
     <Pressable accessibilityRole="button" accessibilityLabel="新建对话" accessibilityState={{ disabled: busy }} disabled={busy} onPress={onNew} style={[styles.action, busy && styles.disabled]}><Ionicons name="create-outline" size={23} color={colors.muted} /></Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="返回上一页" onPress={onClose} style={styles.action}><Ionicons name="close" size={22} color={colors.muted} /></Pressable>

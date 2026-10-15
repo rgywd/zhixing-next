@@ -57,6 +57,9 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
   实际停止后暂停其后续队列。取消不删除后续队列。
 - `GET /v1/runs/{id}/events?after=0&limit=100`: `{items: [{seq,run_id,type,data,created_at}],next_cursor}`。
   类型包括 started/progress/tool/steer_applied/execution/artifact/operation/approval/paused/recovering/completed/failed/cancelled/interrupted；序号单调递增。
+  模型实时显示使用 additive 事件 `assistant.reset`、`assistant.snapshot`、`reasoning.snapshot`。reset 的 data 为 `{stream_id}`，每次运行实际开始或从 checkpoint 恢复时先发，清除同一 run 旧的未确认实时正文／思考，不删除工具回执或已落库消息。snapshot 为 `{stream_id,message_id,text,truncated?}`：同一 key 的 text 是完整替换快照，禁止拼接；不同模型回合／重试使用不同 message_id。客户端按 run 隔离、按 event seq 排序去重，仅接受当前 stream_id，正文优先最新回合；最终助手消息落库后优先显示最终消息。
+  快照只含模型实际提供的正文或显式 reasoning 内容；不发送系统提示、模型请求、签名、工具参数或完整 graph state。仅投影主图 `model` 节点，内部摘要及子图 token 不冒充当前助手正文。首片立即发送，之后约 100ms 或累计 1024 字符更新，步骤结束刷新；每字段上限 65536 个 UTF-16 code units（与手机字符串长度一致，不截断 emoji 代理对），每次运行实际执行最多 64 个模型消息、512 个快照及 1 MiB JSON 快照负载。超出后停止实时投影，最终消息仍按原流程完整保存；截断快照可带 `truncated:true`。供应商不提供思考时不产生 reasoning 事件。
+  这些只是展示投影，不是 checkpoint／成功回执，不创建额外聊天消息，不改变 token 预算、工具批准或恢复幂等；取消、失败和恢复仍以原有持久事件及最终状态为准。`tool.data={tool,tool_call_id,status:started|completed|failed,cancel_requested?}` 继续表示实际工具阶段，客户端仅显示安全工具名及状态，不把工具参数或输出直接当聊天正文。
   `operation.data={id,tool,state}`；`approval.data={id,kind?,status}`；`paused.data={reason:approval|resume}`；`recovering.data` 包含自动恢复的 `attempt` 或手动恢复的 `requested:true`。
   `execution.data` 含 `id,status: started|running|completed|failed|timed_out|cancelled|interrupted`，按阶段提供 `timeout_seconds,output,exit_code,truncated,stopped,reason`。命令输出最多 64 KiB；只有确认容器已停止才返回 `stopped:true`。重启清理使用容器 ID 和 `reason:worker_restart`，普通命令使用独立执行 ID。
   `artifact.data` 为 `{resource:Resource,verification:{format,sha256,checks,visual_checked:false,...}}`。结构检查不代表视觉检查；成功运行的助手消息附带该运行所有已发布产物，失败前已发布的资源仍可在资源库查看。

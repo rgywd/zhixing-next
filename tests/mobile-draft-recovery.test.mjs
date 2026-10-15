@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import * as jsxRuntime from "react/jsx-runtime";
 import * as api from "../src/api.ts";
+import * as liveRun from "../src/liveRun.ts";
 import { availablePreference } from "../src/providerEditing.ts";
 import * as theme from "../src/theme.ts";
 
@@ -133,6 +134,7 @@ function chatHarness({ initial = { text: "hello", pending: null }, read, post, c
   let stored = plain(initial), history = [], readCount = 0, sequence = 0;
   const sync = () => {};
   const { useChat } = load("useChat.ts", {
+    "./liveRun": liveRun,
     react: lifecycle.react,
     "react-native": { AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, Alert: { alert: (_title, _body, actions) => confirmation.push(actions) } },
     "expo-crypto": { randomUUID: () => `message-${++sequence}` },
@@ -243,10 +245,11 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "BottomSheet", "FinancePage", "FinanceDashboard", "HealthPage", "LifeSummary", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ProjectsPanel", "ResourcePreview", "OverviewPanels", "LifePanel", "SchedulesPanel", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) {
+  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "BottomSheet", "FinancePage", "FinanceDashboard", "HealthPage", "LifeSummary", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ProjectsPanel", "ResourcePreview", "OverviewPanels", "LifePanel", "SchedulesPanel", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) {
     dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "WorkPanel", "ConstructionPage", "ConnectionForm", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((component) => [component, component]));
   }
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
+  dependencies["./chatPreferences"] = { ChatPreferencesProvider: "ChatPreferencesProvider" };
   dependencies["./useHealthReminders"] = { useHealthReminders() {} };
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
   dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };

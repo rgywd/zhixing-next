@@ -13,7 +13,9 @@ import {
   type Page,
   type Run,
   type Resource,
+  type RunEvent,
 } from "./api";
+import { liveRunFinished, liveRunView, mergeLiveRunEvents, newLiveRun, type LiveRunBuffer } from "./liveRun";
 import {
   clearDraft,
   draftKey,
@@ -31,6 +33,8 @@ export function useChat({
   initialKind = "chat",
   startWithFiles = false,
   focusMessageSeq = null,
+  defaultIntent = "queue",
+  defaultIntentReady = true,
 }: {
   connection: Connection;
   conversation: Conversation;
@@ -38,7 +42,12 @@ export function useChat({
   initialKind?: "chat" | "task";
   startWithFiles?: boolean;
   focusMessageSeq?: number | null;
+  defaultIntent?: "queue" | "steer";
+  defaultIntentReady?: boolean;
 }) {
+  const streamScope = `${connection.url}\n${connection.token}\n${conversation.id}`;
+  const [runScope, setRunScope] = useState(streamScope);
+  const loadedScope = useRef(streamScope);
   const [messages, setMessages] = useState<Message[]>([]);
   const pendingStatusRef = useRef<number | null>(null);
   useEffect(() => {
@@ -65,9 +74,9 @@ export function useChat({
   const sending = useRef(false);
   const acknowledged = useRef(new Set<string>());
   const clearing = useRef(new Map<string, Promise<void>>());
-  const [intent, setIntent] = useState<"queue" | "steer">("queue");
+  const [intent, setIntentValue] = useState<"queue" | "steer">("queue");
   const [kind, setKind] = useState<"chat" | "task">(initialKind);
-  const [target, setTarget] = useState<string | null>(null);
+  const [target, setTargetValue] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
@@ -79,7 +88,17 @@ export function useChat({
   const nearBottomRef = useRef(focusMessageSeq === null);
   const key = draftKey(connection.url, conversation.id);
   const refresh = useRef<() => void>(() => undefined);
+  const refreshLive = useRef<() => void>(() => undefined);
   const reportSync = useSyncStatus(() => refresh.current());
+  const reportLiveSync = useSyncStatus(() => refreshLive.current());
+  const [liveEvents, setLiveEvents] = useState<{ scope: string; buffer: LiveRunBuffer } | null>(null);
+  const retainedLive = useRef<{ scope: string; buffer: LiveRunBuffer } | null>(null);
+  const scopedRuns = runScope === streamScope ? runs.filter((run) => run.conversation_id === conversation.id) : [];
+  const currentRunning = runScope === streamScope && running?.conversation_id === conversation.id ? running : null;
+  const trackedRun = currentRunning
+    ?? scopedRuns.find((run) => run.status === "queued") ?? scopedRuns.at(-1) ?? null;
+  const trackedRunId = trackedRun?.id ?? null;
+  const trackedRunStatus = trackedRun?.status ?? null;
 
   useEffect(() => {
     alive.current = true;
@@ -87,13 +106,22 @@ export function useChat({
     readDraft(key)
       .then((value) => {
         if (active) {
+          if (!value.pending) {
+            // Legacy drafts have no trustworthy original running target. Keep them queued.
+            value = { ...value, delivery: value.text.trim() || value.attachments?.length ? value.delivery?.intent === "steer"
+              ? { intent: "steer", ...(typeof value.delivery.target_run_id === "string" ? { target_run_id: value.delivery.target_run_id } : {}) }
+              : { intent: "queue" } : undefined };
+          }
           setDraft(value);
           draftRef.current = value;
           setDraftReady(true);
           if (value.pending) {
             setKind(value.pending.kind);
-            setIntent(value.pending.intent);
-            setTarget(value.pending.target_run_id ?? null);
+            setIntentValue(value.pending.intent);
+            setTargetValue(value.pending.target_run_id ?? null);
+          } else {
+            setIntentValue(value.delivery?.intent ?? "queue");
+            setTargetValue(value.delivery?.target_run_id ?? null);
           }
         }
       })
@@ -108,9 +136,27 @@ export function useChat({
   }, [key, draftRevision]);
 
   function updateDraft(value: Draft) {
+    if (!value.pending) {
+      const hasContent = !!value.text.trim() || !!value.attachments?.length;
+      const bound = value.delivery ?? draftRef.current.delivery;
+      const delivery = hasContent ? bound ?? { intent: currentRunning && defaultIntentReady ? defaultIntent : "queue",
+        ...(currentRunning && defaultIntentReady && defaultIntent === "steer" ? { target_run_id: currentRunning.id } : {}) } : undefined;
+      value = { ...value, delivery };
+      setIntentValue(delivery?.intent ?? "queue"); setTargetValue(delivery?.target_run_id ?? null);
+    }
     draftRef.current = value;
     setDraft(value);
     return saveDraft(key, value);
+  }
+  function setIntent(value: "queue" | "steer") {
+    if (draftRef.current.pending) return;
+    const delivery = { intent: value, ...(value === "steer" && target ? { target_run_id: target } : {}) };
+    void updateDraft({ ...draftRef.current, delivery }).catch((e) => setError(humanError(e)));
+  }
+  function setTarget(value: string | null) {
+    if (draftRef.current.pending) return;
+    const delivery = { intent: draftRef.current.delivery?.intent ?? intent, ...(value ? { target_run_id: value } : {}) };
+    void updateDraft({ ...draftRef.current, delivery }).catch((e) => setError(humanError(e)));
   }
 
   const settleDraft = useCallback((id: string) => {
@@ -120,60 +166,62 @@ export function useChat({
       // A late receipt must never erase text edited after abandoning that request.
       if (!alive.current || draftRef.current.pending?.id !== id) return;
       draftRef.current = { text: "", pending: null };
-      setDraft(draftRef.current); setIntent("queue"); setTarget(null); setError("");
+      setDraft(draftRef.current); setIntentValue("queue"); setTargetValue(null); setError("");
     }).finally(() => { clearing.current.delete(id); });
     clearing.current.set(id, pending);
     return pending;
   }, [key]);
   useEffect(() => {
     const pending = draft.pending;
-    if (!draftReady || !pending) return;
+    if (!draftReady || !pending || runScope !== streamScope) return;
     const receipt = messages.find((message) => message.id === pending.id && message.role === "user"
       && message.conversation_id === conversation.id && message.content === pending.content && message.intent === pending.intent
       && (message.attachments ?? []).map((item) => item.id).sort().join(",") === [...(pending.attachments ?? [])].sort().join(","));
     if (!receipt) return;
     acknowledged.current.add(pending.id);
     void settleDraft(pending.id).catch((e) => { if (alive.current) setError(humanError(e)); });
-  }, [conversation.id, draft.pending, draftReady, messages, settleDraft]);
+  }, [conversation.id, draft.pending, draftReady, messages, runScope, streamScope, settleDraft]);
 
   useEffect(() => {
     let active = true;
-    let polling = false;
     let initial = true;
     let lastSeq = 0;
     let catchUpTimer: ReturnType<typeof setTimeout> | undefined;
-    const controller = new AbortController();
+    let controller: AbortController | null = null;
     async function poll() {
-      if (!active || polling || AppState.currentState === "background") return;
-      polling = true;
+      if (!active || controller || AppState.currentState !== "active") return;
+      const batch = new AbortController(); controller = batch;
+      const valid = () => active && !batch.signal.aborted && controller === batch && AppState.currentState === "active";
       let hasMore = false;
       try {
         const [history, tasks, activeRuns, receipts] = await Promise.all([
           request<Page<Message>>(
             connection,
             `/conversations/${conversation.id}/messages?${initial ? (focusMessageSeq === null ? "latest=true" : `before=${focusMessageSeq + 1}`) : `cursor=${lastSeq}`}&limit=100`,
-            { signal: controller.signal },
+            { signal: batch.signal },
           ),
           request<Page<Run>>(
             connection,
             `/runs?conversation_id=${conversation.id}&latest=true&limit=100`,
-            { signal: controller.signal },
+            { signal: batch.signal },
           ),
           request<Page<Run>>(
             connection,
             `/runs?conversation_id=${conversation.id}&status=running&limit=1`,
-            { signal: controller.signal },
+            { signal: batch.signal },
           ),
           pendingStatusRef.current === null
             ? Promise.resolve(null)
             : request<Page<Message>>(
                 connection,
                 `/conversations/${conversation.id}/messages?cursor=${pendingStatusRef.current - 1}&limit=100`,
-                { signal: controller.signal },
+                { signal: batch.signal },
               ),
         ]);
-        if (!active) return;
-        setMessages((old) => {
+        if (!valid()) return;
+        const sameScope = loadedScope.current === streamScope;
+        setMessages((previous) => {
+          const old = sameScope ? previous : [];
           const known = new Set(old.map((message) => message.id));
           const updated =
             receipts?.items.filter((message) => known.has(message.id)) ?? [];
@@ -185,6 +233,7 @@ export function useChat({
           lastSeq = history.items[history.items.length - 1].seq;
         hasMore = !!history.next_cursor;
         setRuns(tasks.items);
+        loadedScope.current = streamScope; setRunScope(streamScope);
         setRunning(
           activeRuns.items.find((run) => run.status === "running") ?? null,
         );
@@ -194,11 +243,12 @@ export function useChat({
         }
         reportSync();
       } catch (e) {
-        if (active) reportSync(e);
+        if (valid()) reportSync(e);
       } finally {
-        polling = false;
-        if (active) setLoading(false);
-        if (active && hasMore)
+        const accepted = valid();
+        if (controller === batch) controller = null;
+        if (accepted) setLoading(false);
+        if (accepted && hasMore)
           catchUpTimer = setTimeout(() => {
             void poll();
           }, 100);
@@ -206,6 +256,7 @@ export function useChat({
     }
     refresh.current = () => {
       void poll();
+      refreshLive.current();
     };
     void poll();
     const timer = setInterval(() => {
@@ -213,15 +264,57 @@ export function useChat({
     }, 2500);
     const listener = AppState.addEventListener("change", (state) => {
       if (state === "active") void poll();
+      else { controller?.abort(); controller = null; clearTimeout(catchUpTimer); }
     });
     return () => {
       active = false;
       clearInterval(timer);
       clearTimeout(catchUpTimer);
-      controller.abort();
+      controller?.abort();
       listener.remove();
     };
-  }, [connection, conversation.id, focusMessageSeq, reportSync]);
+  }, [connection, conversation.id, focusMessageSeq, streamScope, reportSync]);
+
+  useEffect(() => {
+    if (!trackedRunId) return;
+    let active = true;
+    let buffer = retainedLive.current?.scope === streamScope && retainedLive.current.buffer.runId === trackedRunId
+      ? retainedLive.current.buffer : newLiveRun(trackedRunId);
+    let controller: AbortController | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const publish = () => { retainedLive.current = { scope: streamScope, buffer }; setLiveEvents({ scope: streamScope, buffer }); };
+    async function poll() {
+      if (!active || controller || AppState.currentState !== "active") return;
+      clearTimeout(timer);
+      const batch = new AbortController(); controller = batch;
+      const valid = () => active && !batch.signal.aborted && controller === batch && AppState.currentState === "active";
+      let more = false;
+      try {
+        const page = await request<Page<RunEvent>>(connection, `/runs/${trackedRunId}/events?after=${buffer.cursor}&limit=100`, { signal: batch.signal });
+        if (!valid()) return;
+        const before = buffer.cursor;
+        buffer = mergeLiveRunEvents(buffer, page.items);
+        more = !!page.next_cursor && buffer.cursor > before;
+        publish(); reportLiveSync();
+      } catch (e) {
+        if (valid()) { buffer = { ...buffer, connectionIssue: true }; publish(); reportLiveSync(e); }
+      } finally {
+        const accepted = valid();
+        if (controller === batch) controller = null;
+        // A resumed run keeps its ID/cursor. Empty pages can precede the new
+        // runtime's reset, so an old terminal event must not stop its new poll.
+        if (accepted && (more || trackedRunStatus === "running" || trackedRunStatus === "queued" || !liveRunFinished(buffer)))
+          timer = setTimeout(() => { void poll(); }, more ? 100 : 800);
+      }
+    }
+    refreshLive.current = () => { void poll(); };
+    void poll();
+    const listener = AppState.addEventListener("change", (state) => {
+      if (state === "active") void poll();
+      else { controller?.abort(); controller = null; clearTimeout(timer); }
+    });
+    return () => { active = false; controller?.abort(); clearTimeout(timer); listener.remove(); refreshLive.current = () => undefined; };
+  }, [connection, streamScope, trackedRunId, trackedRunStatus, reportLiveSync]);
 
   async function loadOlder() {
     if (!previous || busy) return;
@@ -246,20 +339,21 @@ export function useChat({
 
   async function send(options: Pick<MessageInput, "model_id" | "reasoning_effort" | "search_provider_id"> = {}) {
     const source = draftRef.current;
-    if (sending.current || busy || !draftReady || (!source.text.trim() && !source.attachments?.length)) return;
+    if (sending.current || busy || !draftReady || runScope !== streamScope || (!source.text.trim() && !source.attachments?.length)) return;
+    if (!source.pending && !defaultIntentReady) return;
     sending.current = true;
     let received = false;
     let payload: MessageInput;
     try {
       payload = prepareMessage(
         source,
-        intent,
+        source.delivery?.intent ?? (currentRunning ? defaultIntent : "queue"),
         kind,
-        target,
-        running?.id ?? null,
+        source.delivery?.target_run_id ?? target,
+        currentRunning?.id ?? null,
         Crypto.randomUUID,
       );
-      if (!source.pending && intent === "queue") payload = { ...payload, ...options };
+      if (!source.pending && payload.intent === "queue") payload = { ...payload, ...options };
     } catch (e) {
       sending.current = false;
       setError(humanError(e));
@@ -375,14 +469,15 @@ export function useChat({
       }),
     );
   }
-  const pendingRuns = runs.filter(
+  const pendingRuns = scopedRuns.filter(
     (run) => run.status === "queued" || run.status === "running",
   );
 
   return {
-    messages,
-    runs,
-    running,
+    messages: runScope === streamScope ? messages : [],
+    runs: runScope === streamScope ? runs : [],
+    running: currentRunning,
+    liveRun: liveRunView(trackedRun, liveEvents?.scope === streamScope ? liveEvents.buffer : null, messages),
     previous,
     draft,
     draftReady,
