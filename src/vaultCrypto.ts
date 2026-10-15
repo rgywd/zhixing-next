@@ -59,6 +59,23 @@ function base64Valid(value: string): boolean {
   if (padding === 2 && (alphabet.indexOf(value.at(-3)!) & 15) || padding === 1 && (alphabet.indexOf(value.at(-2)!) & 3)) return false;
   return value.length / 4 * 3 - padding >= 29;
 }
+function base64Bytes(value: string): Uint8Array {
+  // Called only after canonical Base64 validation. Expo 57's Android
+  // fromCombined bridge requires Uint8Array despite the public string type.
+  const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
+  const bytes = new Uint8Array(value.length / 4 * 3 - padding);
+  let offset = 0;
+  for (let i = 0; i < value.length; i += 4) {
+    const a = alphabet.indexOf(value[i]), b = alphabet.indexOf(value[i + 1]);
+    const c = value[i + 2] === "=" ? 0 : alphabet.indexOf(value[i + 2]);
+    const d = value[i + 3] === "=" ? 0 : alphabet.indexOf(value[i + 3]);
+    const combined = a << 18 | b << 12 | c << 6 | d;
+    bytes[offset++] = combined >>> 16 & 255;
+    if (offset < bytes.length) bytes[offset++] = combined >>> 8 & 255;
+    if (offset < bytes.length) bytes[offset++] = combined & 255;
+  }
+  return bytes;
+}
 export function parseVaultEnvelope(raw: string): VaultEnvelope {
   try {
     if (typeof raw !== "string" || raw.length > MAX_RAW_BYTES || utf8(raw).length > MAX_RAW_BYTES) throw invalid();
@@ -95,7 +112,7 @@ export async function unlockVault(envelope: VaultEnvelope, master: string): Prom
   const key = await derive(master, verified.salt);
   let bytes: Uint8Array | undefined;
   try {
-    bytes = await aesDecryptAsync(AESSealedData.fromCombined(verified.sealed, { ivLength: 12, tagLength: 16 }), key, { additionalData: aad(verified.salt) });
+    bytes = await aesDecryptAsync(AESSealedData.fromCombined(base64Bytes(verified.sealed), { ivLength: 12, tagLength: 16 }), key, { additionalData: aad(verified.salt) });
     return { key, payload: decodeVaultPayload(text(bytes)) };
   } catch { throw new Error("主密码不正确，或密码库内容已损坏；原加密文件已保留。"); }
   finally { bytes?.fill(0); }

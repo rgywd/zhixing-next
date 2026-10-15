@@ -23,7 +23,7 @@ function harness({ available = true, supported = true, encoding = true, random =
   };
   const crypto = {
     AESEncryptionKey: { async import(hex, encoding) { assert.equal(encoding, "hex"); return { bytes: Buffer.from(hex, "hex"), size: Buffer.from(hex, "hex").length * 8 }; } },
-    AESSealedData: { fromCombined(value, options) { assert.equal(options.ivLength, 12); assert.equal(options.tagLength, 16); return { bytes: Buffer.from(value, "base64") }; } },
+    AESSealedData: { fromCombined(value, options) { assert.ok(value instanceof Uint8Array, "Android Expo ByteArray bridge accepts only Uint8Array"); assert.equal(options.ivLength, 12); assert.equal(options.tagLength, 16); return { bytes: Buffer.from(value) }; } },
     async getRandomBytesAsync(length) { return new Uint8Array(random(length)); },
     async aesEncryptAsync(plaintext, key, options) {
       assert.equal(options.nonce.length, 12); assert.equal(options.tagLength, 16);
@@ -77,6 +77,23 @@ test("authenticated encryption uses a fresh IV and preserves every password and 
   for (const sentinel of ["VAULT_FIXTURE_NOT_REAL", "fixture.invalid", "fixture@example.invalid", "fixture answer", "draft remains encrypted", MASTER]) assert.equal(raw.includes(sentinel), false);
   const result = await app.unlockVault(app.parseVaultEnvelope(raw), MASTER);
   assert.deepEqual(result.payload, payload);
+});
+
+test("Android's byte-only bridge receives correct ciphertext for every Base64 padding and large valid vaults", async () => {
+  const app = harness(), { key, salt } = await app.createVaultKey(MASTER), paddings = new Set();
+  for (let extra = 0; extra < 3; extra++) {
+    const payload = fixture(); payload.entries[0].notes += "x".repeat(extra);
+    const envelope = await app.sealVault(payload, key, salt);
+    paddings.add(envelope.sealed.endsWith("==") ? 2 : envelope.sealed.endsWith("=") ? 1 : 0);
+    assert.deepEqual((await app.unlockVault(envelope, MASTER)).payload, payload);
+  }
+  assert.deepEqual([...paddings].sort(), [0, 1, 2]);
+  const payload = fixture(), source = payload.entries[0];
+  payload.entries = Array.from({ length: 100 }, (_, index) => ({ ...source, id: `large-fixture-${index}`, notes: "x".repeat(15000) }));
+  const envelope = await app.sealVault(payload, key, salt);
+  assert.ok(envelope.sealed.length > 1024 * 1024);
+  const restored = await app.unlockVault(envelope, MASTER);
+  assert.deepEqual(restored.payload, payload);
 });
 
 test("wrong passwords and modifications to IV, ciphertext, tag or authenticated salt cannot return an empty vault", async () => {
