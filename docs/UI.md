@@ -17,9 +17,10 @@ Expo 使用 `userInterfaceStyle: automatic` 与 `expo-system-ui`，状态栏、�
 
 ## 页面组合
 
-- 首页、生活、工作、设置使用 `PageScrollView tabs` 与 `PageHero`。`tabs` 负责浮动底栏留白，
+- 手机顶层入口为首页、生活、知行、施工中、设置。首页、生活、施工中、设置使用 `PageScrollView tabs` 与 `PageHero`。`tabs` 负责浮动底栏留白，
   页头插画通过 `art` 和 `artStyle` 接入；插画位置等专有排版留在所属页面。
 - 管理子页使用普通 `PageScrollView`、`PageHeading`，由外层提供 `BackLink`。子页不预留底栏空白。
+- 财务和健康是生活子页，隐藏底栏，页内返回与 Android 返回键回到生活；服务表单先返回服务页。原工作位置只展示“施工中”“功能待定”，不恢复旧工作操作。
 - 模型、思考、搜索等即时选择与创建项目等短表单使用 `BottomSheet`，保留当前页面背景。支持淡入遮罩、滑入／滑出、下拉手柄、点击遮罩和系统返回；尊重系统减少动态效果设置。文件浏览、任务记录、完整对话列表等长内容页仍使用 `SheetHeader`。
 - 卡片使用 `s.card` 和 `CardHeader`；双列入口使用 `ServiceTile`，纵向入口使用 `ActionRow`。
   `ActionRow compact` 用于最近对话等较密的列表，末行传 `last` 去掉分隔线。窄屏时 `ServiceTile`
@@ -31,11 +32,10 @@ Expo 使用 `userInterfaceStyle: automatic` 与 `expo-system-ui`，状态栏、�
 const { s } = useUi();
 
 <PageScrollView tabs>
-  <PageHero eyebrow="WORK" title="工作" description="对话、项目与计划。" />
+  <PageHero eyebrow="LIFE" title="生活" description="打理收支、饮食和体重。" />
   <View style={s.card}>
-    <CardHeader icon="folder-outline" title="项目" tone="blue"
-      action={<IconAction icon="add" label="创建项目" tone="blue" onPress={onCreateProject} />} />
-    <ActionLink icon="add" tone="blue" onPress={onCreateProject}>创建项目</ActionLink>
+    <CardHeader icon="wallet-outline" title="财务" tone="gold" />
+    <ActionLink icon="arrow-forward" tone="gold" onPress={onFinance}>预算与记录</ActionLink>
   </View>
 </PageScrollView>
 ```
@@ -91,11 +91,11 @@ dismiss("upload");
 
 ## 常用与最近、子页连续性
 
-- 首页上半部保留稳定的常用入口和用户固定的会话/项目，下半部混排最近活动的会话与文件；打开已有内容只更新最近顺序，不复制内容或移动常用排序。常用偏好按服务地址保存在当前设备。
-- 工作页的项目行可以打开项目详情，全部项目和项目会话均可继续分页；全部对话复用 AI 侧栏的历史与搜索，创建项目会直接进入详情。工作目录路径不作为创建表单的操作门槛。
-- 财务与主聊天复用消息、输入和审批组件；财务保留紧凑页头、可收起速览，键盘弹出时优先保留消息空间。搜索目标消息和来源页面在跳转时保留。
+- 首页上半部保留稳定的常用入口和用户固定的会话，下半部混排最近活动的会话与文件；旧项目偏好保留在本机但不显示入口。打开已有内容只更新最近顺序，不复制内容或移动常用排序。常用偏好按服务地址保存在当前设备。
+- 生活页包含财务与健康两张真实速览入口；未连接时显示对应入口卡，其他生活服务保留购物、出行与家居的普通聊天话题。施工页仅作功能待定占位。
+- 财务和健康子页提供记录、设置与服务对话入口；服务对话与主聊天复用消息、输入和审批组件，关闭或 Android 返回可回到原服务页。搜索目标消息和来源页面在跳转时保留。
 - 资源库使用单层紧凑列表；名称搜索由服务器完成，区分加载、失败、空库与无匹配。图片共享加载/失败/重试反馈，列表能回到来源会话；React Native 0.86 Android 的认证图片使用单元素 source 数组，保留 native 请求头。
-- 计划创建在本页选择结果会话，以日期、时间和一次/每天/每周/自定义固定间隔组织；已经提交但未确认的请求保留同一 ID 和参数。已有运行可直接查看所属会话的结果。
+- 旧通用计划入口已停用；健康提醒在健康子页按需设置。
 - 任务详情默认展示 Markdown 结果和可下载文件，执行轨迹按需展开；授权与取消操作仍保持原有安全语义。
 
 ## 草稿与记忆纠错

@@ -29,20 +29,20 @@ function load(filename, dependencies, suffix = "") {
   });
   return exports;
 }
-function appHarness() {
-  const lifecycle = hooks(), calls = [], reminderVersions = [], backHandlers = new Set(); let uuid = 0;
+function appHarness({ connected = true } = {}) {
+  const lifecycle = hooks(), calls = [], reminderVersions = [], backHandlers = new Set(); let uuid = 0, reminderOpen = () => {}, keyboardVisible = false, keyboardDismisses = 0;
   const sync = () => {};
   const conversations = ["finance", "health"].map((agent_id) => ({ id: `${agent_id}-history`, title: `${agent_id} history`, agent_id, model_id: null, reasoning_effort: null, project_id: null, updated_at: "2028-06-02T10:00:00Z" }));
   const preferences = { pins: [{ kind: "project", id: "legacy-project", title: "旧项目" }, { kind: "conversation", id: "finance-history", title: "财务历史" }], visited: [{ kind: "project", id: "legacy-project", title: "旧项目" }], opened: { "project:legacy-project": "2028-06-02T11:00:00Z" } };
-  const welcome = { value: { text: "hello", kind: "task", models: { chat: null, task: null }, efforts: { chat: null, task: null }, searchId: null }, ready: true, error: "", consumeText: async () => {}, retry() {}, setText() {}, setKind() {}, setSearch() {}, setModel() {}, setEffort() {} };
-  const native = { ...Object.fromEntries(["ActivityIndicator", "Image", "KeyboardAvoidingView", "Modal", "Pressable", "Text", "View"].map((name) => [name, name])), Platform: { OS: "android" }, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: (_event, callback) => { backHandlers.add(callback); return { remove: () => backHandlers.delete(callback) }; } }, Keyboard: { isVisible: () => false, dismiss() {}, addListener: () => ({ remove() {} }) } };
+  const welcome = { value: { text: "hello", kind: "task", models: { chat: null, task: null }, efforts: { chat: null, task: null }, searchId: null }, ready: true, error: "", consumeText: async () => {}, retry() {}, setText(next) { welcome.value.text = typeof next === "function" ? next(welcome.value.text) : next; }, setKind() {}, setSearch() {}, setModel() {}, setEffort() {} };
+  const native = { ...Object.fromEntries(["ActivityIndicator", "Image", "KeyboardAvoidingView", "Modal", "Pressable", "Text", "View"].map((name) => [name, name])), Platform: { OS: "android" }, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: (_event, callback) => { backHandlers.add(callback); return { remove: () => backHandlers.delete(callback) }; } }, Keyboard: { isVisible: () => keyboardVisible, dismiss() { keyboardVisible = false; keyboardDismisses++; }, addListener: () => ({ remove() {} }) } };
   const dependencies = {
     "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "react-native": native,
     "react-native-safe-area-context": { SafeAreaProvider: "SafeAreaProvider", SafeAreaView: "SafeAreaView" }, "expo-status-bar": { StatusBar: "StatusBar" }, "expo-crypto": { randomUUID: () => `message-${++uuid}` }, "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
-    "./providerEditing": { availablePreference }, "./ui": { useUi: () => ({ s: {}, colors: theme.lightColors }), humanError: (error) => error.message },
+    "./providerEditing": { availablePreference }, "./ui": { useUi: () => ({ s: {}, colors: theme.lightColors }), humanError: (error) => error.message, ...Object.fromEntries(["BackLink", "Button", "PageScrollView", "PageHeading", "IconAction"].map((name) => [name, name])) },
     "./ConnectionStatus": { useSyncStatus: () => sync, ConnectionStatusProvider: "ConnectionStatusProvider", ServiceStatusNotice: "ServiceStatusNotice" },
     "./useHomePreferences": { useHomePreferences: () => ({ preferences, ready: true, opened() {}, toggle() {}, retry() {} }) }, "./useWelcomeDraft": { useWelcomeDraft: () => welcome }, "./homeEntries": { targetKey },
-    "./useHealthReminders": { useHealthReminders(_connection, revision) { reminderVersions.push(revision); } }, "./storage": { draftKey: () => "draft", saveDraft: async () => {}, clearDraft: async () => {} },
+    "./useHealthReminders": { useHealthReminders(_connection, revision, onOpen) { reminderVersions.push(revision); reminderOpen = onOpen; } }, "./storage": { draftKey: () => "draft", saveDraft: async () => {}, clearDraft: async () => {} },
     "./api": { ...api, request: async (_connection, path, options) => {
       calls.push({ path, ...options });
       if (path === "/status") return { model_ready: true, worker_online: true };
@@ -56,49 +56,98 @@ function appHarness() {
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
-  const exported = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession, BottomTabs };\n");
+  for (const name of ["ThemeProvider", "AppearanceControl", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
+  const exported = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession, DisconnectedShell, BottomTabs };\n");
   const props = { connection: { url: "https://example.test", token: "test" }, onConnect() {}, onDisconnect() {}, connectionError: "" };
-  const render = () => walk(lifecycle.render(() => exported.ConnectedSession(props)));
-  return { render, calls, preferences, welcome, reminderVersions, back() { return [...backHandlers].at(-1)?.(); }, renderTabs() { const node = render().find((item) => item.type === exported.BottomTabs); assert.ok(node, "bottom navigation visible"); return walk(exported.BottomTabs(node.props)); }, unmount: lifecycle.unmount };
+  const render = () => walk(lifecycle.render(() => (connected ? exported.ConnectedSession : exported.DisconnectedShell)(props)));
+  return { render, calls, preferences, welcome, reminderVersions, notification() { reminderOpen(); }, keyboard(visible) { keyboardVisible = visible; }, get keyboardDismisses() { return keyboardDismisses; }, tabsVisible() { return render().some((item) => item.type === exported.BottomTabs); }, back() { return [...backHandlers].at(-1)?.(); }, renderTabs() { const node = render().find((item) => item.type === exported.BottomTabs); assert.ok(node, "bottom navigation visible"); return walk(exported.BottomTabs(node.props)); }, unmount: lifecycle.unmount };
 }
 const find = (app, name) => app.render().find((node) => node.type === name);
 
-test("home finance and health entries open their dedicated pages, agent chats, and return to the right service", async () => {
-  for (const [entry, pageName, agent] of [["onLife", "FinanceDashboard", "finance"], ["onWork", "HealthPage", "health"]]) {
-    const app = appHarness(); app.render(); await settle();
-    find(app, "HomePanel").props[entry]();
-    const service = find(app, pageName); assert.ok(service);
+function openLifeService(app, service) {
+  find(app, "HomePanel").props.onLife();
+  const life = find(app, "LifePanel"); assert.ok(life, "life overview opens first");
+  life.props[service === "finance" ? "onFinance" : "onHealth"]();
+}
+
+test("life services open their own agent chats and return to the exact service before life", async () => {
+  for (const [pageName, agent] of [["FinanceDashboard", "finance"], ["HealthPage", "health"]]) {
+    const app = appHarness(); app.render(); await settle(); openLifeService(app, agent);
+    const service = find(app, pageName); assert.ok(service); assert.equal(app.tabsVisible(), false);
     service.props.onChat(); await settle();
     const chat = find(app, "ChatPanel"); assert.equal(chat.props.conversation.agent_id, agent); assert.equal(chat.props.initialKind, "chat");
-    assert.equal(app.render().some((node) => typeof node.type === "function" && node.type.name === "BottomTabs"), false);
+    assert.equal(app.tabsVisible(), false);
     app.render().find((node) => node.props?.accessibilityLabel === "返回上一页").props.onPress();
     assert.ok(find(app, pageName));
     find(app, pageName).props.onChat(); await settle(); assert.ok(find(app, "ChatPanel"));
     assert.equal(app.back(), true); assert.ok(find(app, pageName));
+    find(app, pageName).props.onBack(); assert.ok(find(app, "LifePanel")); assert.equal(app.tabsVisible(), true);
     assert.equal(app.calls.filter((call) => call.path === "/conversations" && call.method === "POST").length, 0);
     app.unmount();
   }
 });
 
-test("a service prompt starts the correct child agent and posts a chat request before returning to the service", async () => {
-  const app = appHarness(); app.render(); await settle(); find(app, "HomePanel").props.onWork();
+test("a service prompt starts the correct child agent and returns to the originating life service", async () => {
+  const app = appHarness(); app.render(); await settle(); openLifeService(app, "health");
   find(app, "HealthPage").props.onChat("请按当前饮食约定推荐下一餐"); await settle();
   const create = app.calls.find((call) => call.path === "/conversations" && call.method === "POST");
   assert.equal(create.body.agent_id, "health"); assert.equal(create.body.project_id, null);
   const message = app.calls.find((call) => call.path === "/conversations/health-created/messages");
   assert.equal(message.body.kind, "chat"); assert.equal(message.body.content, "请按当前饮食约定推荐下一餐");
   assert.equal(find(app, "ChatPanel").props.conversation.agent_id, "health");
-  app.back(); assert.ok(find(app, "HealthPage")); app.unmount();
+  app.back(); assert.ok(find(app, "HealthPage")); app.back(); assert.ok(find(app, "LifePanel")); app.unmount();
 });
 
-test("the bottom navigation has finance and health and exposes no work or task destination", async () => {
+test("bottom navigation restores life and uses the former work destination for construction", async () => {
   const app = appHarness(); app.render(); await settle();
   const tabs = app.renderTabs().filter((node) => node.props?.accessibilityRole === "tab" || node.props?.accessibilityRole === "button");
-  assert.deepEqual(tabs.map((node) => node.props.accessibilityLabel), ["首页", "财务", "知行", "健康", "设置"]);
-  tabs.find((node) => node.props.accessibilityLabel === "财务").props.onPress(); assert.ok(find(app, "FinanceDashboard"));
-  app.renderTabs().find((node) => node.props.accessibilityLabel === "健康").props.onPress(); assert.ok(find(app, "HealthPage"));
+  assert.deepEqual(tabs.map((node) => node.props.accessibilityLabel), ["首页", "生活", "知行", "施工中", "设置"]);
+  tabs.find((node) => node.props.accessibilityLabel === "生活").props.onPress(); assert.ok(find(app, "LifePanel"));
+  app.renderTabs().find((node) => node.props.accessibilityLabel === "施工中").props.onPress(); assert.ok(find(app, "ConstructionPage"));
+  assert.equal(find(app, "HealthPage"), undefined); assert.equal(find(app, "FinanceDashboard"), undefined);
+  assert.equal(app.back(), true); assert.ok(find(app, "HomePanel"));
+  find(app, "HomePanel").props.onWork(); assert.ok(find(app, "ConstructionPage"));
   app.unmount();
+});
+
+test("Android back dismisses the keyboard before leaving a life service, then returns through life and home", async () => {
+  const app = appHarness(); app.render(); await settle(); openLifeService(app, "finance");
+  app.keyboard(true); assert.equal(app.back(), true); assert.equal(app.keyboardDismisses, 1); assert.ok(find(app, "FinanceDashboard"));
+  assert.equal(app.back(), true); assert.ok(find(app, "LifePanel"));
+  assert.equal(app.back(), true); assert.ok(find(app, "HomePanel")); assert.equal(app.back(), false);
+  app.unmount();
+});
+
+test("notification clicks open health inside life and retain the life return path", async () => {
+  const app = appHarness(); app.render(); await settle(); find(app, "HomePanel").props.onWork();
+  app.notification(); assert.ok(find(app, "HealthPage")); assert.equal(app.tabsVisible(), false);
+  find(app, "HealthPage").props.onChat(); await settle(); assert.ok(find(app, "ChatPanel")); app.back(); assert.ok(find(app, "HealthPage"));
+  app.back(); assert.ok(find(app, "LifePanel")); app.unmount();
+});
+
+test("life topic prompts append to the welcome draft without creating or sending a conversation", async () => {
+  const app = appHarness(); app.render(); await settle(); find(app, "HomePanel").props.onLife();
+  find(app, "LifePanel").props.onChat("帮我规划这次出行：");
+  const ai = find(app, "AiHome"); assert.ok(ai); assert.match(ai.props.draft, /hello/); assert.match(ai.props.draft, /帮我规划这次出行：/);
+  assert.equal(app.calls.filter((call) => call.method === "POST").length, 0);
+  app.back(); assert.ok(find(app, "LifePanel")); app.unmount();
+});
+
+test("disconnected navigation exposes life services and construction before connection", () => {
+  const app = appHarness({ connected: false }); app.render();
+  const labels = () => app.renderTabs().filter((node) => node.props?.accessibilityRole === "tab" || node.props?.accessibilityRole === "button");
+  assert.deepEqual(labels().map((node) => node.props.accessibilityLabel), ["首页", "生活", "知行", "施工中", "设置"]);
+  find(app, "HomePanel").props.onWork(); assert.ok(find(app, "ConstructionPage"));
+  labels().find((node) => node.props.accessibilityLabel === "生活").props.onPress(); assert.ok(find(app, "LifePanel"));
+  for (const action of ["onFinance", "onHealth"]) {
+    find(app, "LifePanel").props[action](); assert.equal(app.tabsVisible(), false);
+    const connect = app.render().find((node) => node.type === "Button"); assert.ok(connect, "service offers a connection action");
+    assert.equal(app.back(), true); assert.ok(find(app, "LifePanel"));
+  }
+  find(app, "LifePanel").props.onFinance();
+  app.render().find((node) => node.type === "Button").props.onPress(); assert.ok(find(app, "ConnectionSettingsPanel"));
+  app.keyboard(true); app.back(); assert.equal(app.keyboardDismisses, 1); assert.ok(find(app, "ConnectionSettingsPanel"));
+  app.back(); assert.ok(find(app, "SettingsHome")); app.unmount();
 });
 
 test("legacy project pins and visits do not produce an unopenable home entry", async () => {
@@ -134,7 +183,7 @@ test("every welcome suggestion keeps chat mode and the composer exposes no task 
 });
 
 test("chat completion refreshes service data and reminders immediately while ordinary polling does not replan", async () => {
-  const app = appHarness(); app.render(); await settle(); find(app, "HomePanel").props.onWork();
+  const app = appHarness(); app.render(); await settle(); openLifeService(app, "health");
   assert.equal(find(app, "HealthPage").props.refreshKey, 0);
   find(app, "HealthPage").props.onChat(); await settle();
   const chat = () => find(app, "ChatPanel");

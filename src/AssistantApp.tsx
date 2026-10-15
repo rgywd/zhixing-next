@@ -51,6 +51,8 @@ import { HomePanel } from "./OverviewPanels";
 import { FinanceDashboard } from "./FinanceDashboard";
 import { HealthPage } from "./HealthPage";
 import { LifeSummary } from "./LifeSummary";
+import { LifePanel } from "./LifePanel";
+import { ConstructionPage } from "./ConstructionPage";
 import { useHealthReminders } from "./useHealthReminders";
 import { ConnectionSettingsPanel, PersonaSettingsPanel } from "./SettingsPanel";
 import { SettingsHome, type SettingsDestination } from "./SettingsHome";
@@ -65,7 +67,9 @@ import {
   saveDraft,
 } from "./storage";
 
-type Tab = "home" | "finance" | "chat" | "health" | "settings";
+type Tab = "home" | "life" | "chat" | "work" | "settings";
+type LifePage = "overview" | "finance" | "health";
+type ChatReturn = { tab: Exclude<Tab, "chat">; lifePage: LifePage };
 
 export default function AssistantApp() {
   return <ThemeProvider><ThemedApp /></ThemeProvider>;
@@ -149,9 +153,9 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
       <View pointerEvents="box-none" style={s.tabItems}>
         {([
           { id: "home", label: "首页", icon: "home-outline" },
-          { id: "finance", label: "财务", icon: "wallet-outline" },
+          { id: "life", label: "生活", icon: "leaf-outline" },
           { id: "chat", label: "知行", icon: null },
-          { id: "health", label: "健康", icon: "heart-outline" },
+          { id: "work", label: "施工中", icon: "construct-outline" },
           { id: "settings", label: "设置", icon: "settings-outline" },
         ] as const).map((item) => (
           <Pressable
@@ -184,24 +188,31 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
 function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection) => void; error: string }) {
   const { s } = useUi();
   const [tab, setTab] = useState<Tab>("home");
+  const [lifePage, setLifePage] = useState<LifePage>("overview");
   const [localSettings, setLocalSettings] = useState<"overview" | "connection" | "device">("overview");
   useEffect(() => {
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
-      if (localSettings !== "overview") { setLocalSettings("overview"); return true; }
+      if (tab === "settings" && localSettings !== "overview") { setLocalSettings("overview"); return true; }
+      if (tab === "life" && lifePage !== "overview") { setLifePage("overview"); return true; }
       if (tab !== "home") { setTab("home"); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, localSettings]);
+  }, [tab, localSettings, lifePage]);
   const connect = () => { setLocalSettings("connection"); setTab("settings"); };
+  const selectTab = (next: Tab) => { setTab(next); if (next === "life") setLifePage("overview"); if (next === "settings") setLocalSettings("overview"); };
+  const showTabs = (tab !== "life" || lifePage === "overview") && (tab !== "settings" || localSettings === "overview");
   return <View style={s.body}>
-    {tab === "home" ? <HomePanel conversations={[]} onChat={connect} onOpenConversation={connect} onLife={() => setTab("finance")} onWork={() => setTab("health")} />
+    {tab === "home" ? <HomePanel conversations={[]} onChat={connect} onOpenConversation={connect} onLife={() => selectTab("life")} onWork={() => selectTab("work")} />
+      : tab === "work" ? <ConstructionPage />
+      : tab === "life" ? lifePage === "overview" ? <LifePanel onFinance={() => setLifePage("finance")} onHealth={() => setLifePage("health")} onChat={connect} />
+        : <><BackLink label="生活" onPress={() => setLifePage("overview")} /><PageScrollView><PageHeading title={lifePage === "finance" ? "财务" : "健康"} description="连接服务后，记录收支与饮食，继续自己的目标。" /><Button onPress={connect}>连接服务</Button></PageScrollView></>
       : tab === "settings" ? localSettings === "overview" ? <SettingsHome onOpen={(destination) => setLocalSettings(destination === "device" ? "device" : "connection")} />
         : <><BackLink label="设置" onPress={() => setLocalSettings("overview")} />{localSettings === "device" ? <DeviceCapabilitiesPanel /> : <ConnectionSettingsPanel onConnect={onConnect} />}</>
-      : <PageScrollView tabs><PageHeading title={tab === "finance" ? "财务" : tab === "health" ? "健康" : "连接知行"} description="连接服务后，记录收支与饮食，继续自己的目标。" /><Button onPress={connect}>连接服务</Button></PageScrollView>}
+      : <PageScrollView tabs><PageHeading title="连接知行" description="连接服务后，和知行聊聊。" /><Button onPress={connect}>连接服务</Button></PageScrollView>}
     {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
-    {localSettings === "overview" ? <BottomTabs value={tab} onChange={setTab} /> : null}
+    {showTabs ? <BottomTabs value={tab} onChange={selectTab} /> : null}
   </View>;
 }
 
@@ -222,7 +233,8 @@ function ConnectedSession({
 }) {
   const { s, colors } = useUi();
   const [tab, setTab] = useState<Tab>("home");
-  const [returnTab, setReturnTab] = useState<Exclude<Tab, "chat">>("home");
+  const [lifePage, setLifePage] = useState<LifePage>("overview");
+  const [chatReturn, setChatReturn] = useState<ChatReturn>({ tab: "home", lifePage: "overview" });
   const [settingsView, setSettingsView] = useState<"overview" | Exclude<SettingsDestination, "search">>("overview");
   const navigation = useRef(0);
   const [resourceReturnTab, setResourceReturnTab] = useState<Tab>("settings");
@@ -264,8 +276,8 @@ function ConnectedSession({
   const selectedModel = catalog?.items.find((item) => item.id === (currentComposer ? currentComposer.modelId : selected?.model_id ?? catalog.roles.chat));
   const [serviceVersion, setServiceVersion] = useState(0);
   const observedRunStates = useRef(new Map<string, Run["status"]>());
-  const showTabs = tab !== "chat" && (tab !== "settings" || settingsView === "overview");
-  useHealthReminders(connection, serviceVersion, () => setTab("health"));
+  const showTabs = tab !== "chat" && (tab !== "life" || lifePage === "overview") && (tab !== "settings" || settingsView === "overview");
+  useHealthReminders(connection, serviceVersion, () => openLifePage("health"));
   useEffect(() => {
     const show = Keyboard.addListener("keyboardDidShow", () => setKeyboardVisible(true));
     const hide = Keyboard.addListener("keyboardDidHide", () => setKeyboardVisible(false));
@@ -275,15 +287,27 @@ function ConnectedSession({
     const listener = BackHandler.addEventListener("hardwareBackPress", () => {
       navigation.current++;
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
-      if (tab === "chat") { setTab(returnTab); return true; }
+      if (tab === "chat") { setTab(chatReturn.tab); setLifePage(chatReturn.lifePage); return true; }
       if (tab === "settings" && settingsView !== "overview") { setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); return true; }
+      if (tab === "life" && lifePage !== "overview") { setLifePage("overview"); return true; }
+      if (tab !== "home") { setTab("home"); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, returnTab, settingsView, resourceReturnTab]);
+  }, [tab, chatReturn, lifePage, settingsView, resourceReturnTab]);
+  function closeChat() {
+    navigation.current++;
+    setTab(chatReturn.tab);
+    setLifePage(chatReturn.lifePage);
+  }
+  function openLifePage(page: LifePage) {
+    navigation.current++;
+    setLifePage(page);
+    setTab("life");
+  }
   function openMainChat() {
     navigation.current++;
-    if (tab !== "chat") setReturnTab(tab);
+    if (tab !== "chat") setChatReturn({ tab, lifePage });
     setShowWelcome(true);
     setTab("chat");
   }
@@ -291,6 +315,7 @@ function ConnectedSession({
     navigation.current++;
     if (next === "chat") openMainChat();
     else setTab(next);
+    if (next === "life") setLifePage("overview");
     if (next === "settings") setSettingsView("overview");
   }
   async function openConversation(id: string, messageSeq?: number) {
@@ -310,7 +335,7 @@ function ConnectedSession({
     selectedRef.current = id;
     setShowAiDrawer(false);
     setShowWelcome(false);
-    if (tab !== "chat") setReturnTab(tab);
+    if (tab !== "chat") setChatReturn({ tab, lifePage });
     setTab("chat");
     refresh();
   }
@@ -463,7 +488,7 @@ function ConnectedSession({
       setShowAiDrawer(false);
       setShowWelcome(false);
       setChatStart(initial ? { id: conversation.id, kind: initial.kind, taskModelId: initial.kind === "task" ? initial.modelId : null, taskEffort: initial.kind === "task" ? initial.effort : null, searchId: initial.searchId, files: !!initial.filesOnly } : null);
-      if (tab !== "chat") setReturnTab(tab);
+      if (tab !== "chat") setChatReturn({ tab, lifePage });
       setTab("chat");
       refresh();
     } catch (e) {
@@ -502,6 +527,10 @@ function ConnectedSession({
     }
     if (settled) serviceChanged();
   }, [serviceChanged]);
+  function lifeChat(prompt: string) {
+    setWelcomeDraft((old) => `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${prompt}`);
+    openMainChat();
+  }
   function serviceChat(agentId: string, prompt?: string) {
     if (prompt) void newConversation(false, agentId, true, { text: prompt, kind: "chat", modelId: null, effort: null, searchId: null });
     else openAgent(agentId);
@@ -531,12 +560,16 @@ function ConnectedSession({
           preferences={{ ...home.preferences, pins: home.preferences.pins.filter((item) => item.kind !== "project"), visited: home.preferences.visited?.filter((item) => item.kind !== "project") ?? [] }}
           preferencesReady={home.ready} preferenceError={home.error} onPreferenceRetry={home.retry} onTogglePin={home.toggle}
           onOpenResource={openResource} onResources={openResources} onChat={openMainChat} onOpenConversation={openConversation}
-          onLife={() => selectTab("finance")} onWork={() => selectTab("health")}
-          intro={<LifeSummary connection={connection} refreshKey={serviceVersion} onFinance={() => selectTab("finance")} onHealth={() => selectTab("health")} />} />
-      ) : tab === "finance" ? (
-        <FinanceDashboard connection={connection} onChat={(prompt) => serviceChat("finance", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
-      ) : tab === "health" ? (
-        <HealthPage connection={connection} onChat={(prompt) => serviceChat("health", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
+          onLife={() => selectTab("life")} onWork={() => selectTab("work")} />
+      ) : tab === "work" ? (
+        <ConstructionPage />
+      ) : tab === "life" ? lifePage === "overview" ? (
+        <LifePanel onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} onChat={lifeChat}
+          intro={<LifeSummary connection={connection} refreshKey={serviceVersion} onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} />} />
+      ) : lifePage === "finance" ? (
+        <FinanceDashboard connection={connection} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("finance", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
+      ) : (
+        <HealthPage connection={connection} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("health", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
       ) : tab === "chat" ? (
         <>
           <View style={{ flexDirection: "row", alignItems: "center", paddingHorizontal: 12, paddingVertical: 5, gap: 5 }}>
@@ -554,7 +587,7 @@ function ConnectedSession({
             <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => setShowWelcome(true)} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
               <Ionicons name="create-outline" size={23} color={colors.ink} />
             </Pressable>
-            <Pressable accessibilityRole="button" accessibilityLabel="返回上一页" onPress={() => { navigation.current++; setTab(returnTab); }} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
+            <Pressable accessibilityRole="button" accessibilityLabel="返回上一页" onPress={closeChat} style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}>
               <Ionicons name="close" size={22} color={colors.ink} />
             </Pressable>
           </View>
@@ -594,7 +627,7 @@ function ConnectedSession({
           {settingsView === "device" ? (
             <DeviceCapabilitiesPanel onUseLocation={(text) => {
               setWelcomeDraft((old) => `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${text}\n\n`);
-              setShowWelcome(true); setReturnTab("settings"); setTab("chat");
+              setShowWelcome(true); setChatReturn({ tab: "settings", lifePage }); setTab("chat");
             }} />
           ) : settingsView === "agents" ? (
             <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />

@@ -51,8 +51,8 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
         {pins.map((item, index) => <ActionRow key={targetKey(item)} icon={icon(item)} title={item.title} description={kindLabel(item)} compact last={index === pins.length - 1} onPress={() => open(item)} tone={item.kind === "project" ? "blue" : "red"} />)}
       </View>
       <View style={s.serviceGrid}>
-        <ServiceTile icon="wallet-outline" title="财务" description="记录开销，看看还能花多少" onPress={onLife} tone="gold" />
-        <ServiceTile icon="heart-outline" title="健康" description="饮食建议、记录与体重趋势" onPress={onWork} tone="blue" />
+        <ServiceTile icon="leaf-outline" title="生活" description="财务、饮食与体重管理" onPress={onLife} tone="gold" />
+        <ServiceTile icon="construct-outline" title="施工中" description="功能待定" onPress={onWork} tone="blue" />
       </View>
       {preferenceError ? <View><Text accessibilityRole="alert" style={s.error}>{preferenceError}</Text>{!preferencesReady && onPreferenceRetry ? <ActionLink icon="refresh-outline" onPress={onPreferenceRetry}>重试读取常用</ActionLink> : null}</View> : null}
       <View style={s.sectionHeading}>

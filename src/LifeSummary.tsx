@@ -30,14 +30,14 @@ export function LifeSummary({ connection, refreshKey, onFinance, onHealth }: {
   const latest = health?.review.weight_trend.latest_kg;
   return <View style={s.stack}>
     <View style={s.card}>
-      <CardHeader icon="wallet-outline" title="本月开销" tone="gold" />
+      <CardHeader icon="wallet-outline" title="财务 · 本月开销" tone="gold" />
       <Text style={s.text}>{finance ? `已记 ¥${finance.totals.expense}` : "从一笔消费或本月预算开始。"}</Text>
       <Text style={s.muted}>{finance?.remaining.daily_budget != null ? `剩余日常额度 ¥${finance.remaining.daily_budget}` : "预算可以随时聊着调整。"}</Text>
       {finance?.projection.savings != null ? <Text style={s.description}>预计结余 ¥{finance.projection.savings} · 按当前已知收支</Text> : null}
       <ActionLink icon="arrow-forward" onPress={onFinance}>看看预算与记录</ActionLink>
     </View>
     <View style={s.card}>
-      <CardHeader icon="restaurant-outline" title="下一餐与最近变化" tone="blue" />
+      <CardHeader icon="restaurant-outline" title="健康 · 饮食与体重" tone="blue" />
       <Text style={s.text}>{health ? `${health.rules.length} 条当前饮食约定 · 最近已记 ${health.review.recorded_meals} 餐` : "聊聊饮食习惯，让建议适合自己的生活。"}</Text>
       {latest != null ? <Text style={s.description}>最近体重 {latest} kg</Text> : null}
       <Text style={s.muted}>按当前约定推荐，记录后再一起调整。</Text>
