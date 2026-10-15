@@ -33,6 +33,10 @@ class ZhixingVaultModule : Module() {
   private val handler = Handler(Looper.getMainLooper())
   private var clipboardToken: String? = null
   private var clipboardDeadline = 0L
+  private var pendingClear = false
+  private var clearRetry: Runnable? = null
+  // Retry at 100/300/700/1000ms without moving the original copy deadline.
+  private val clearRetryDelays = longArrayOf(100L, 200L, 400L, 300L)
   private val expiry = Runnable { clearOwnedClipboard() }
 
   private fun failure(code: String): Nothing = throw CodedException(code, "密码库操作未完成，原数据已保留。", null)
@@ -82,7 +86,6 @@ class ZhixingVaultModule : Module() {
       requireSupported()
       if (value.length > 20000) failure("ERR_VAULT_INPUT")
       try {
-        handler.removeCallbacks(expiry)
         val token = UUID.randomUUID().toString()
         val clip = ClipData.newPlainText("知行密码库", value)
         clip.description.extras = PersistableBundle().apply {
@@ -90,6 +93,10 @@ class ZhixingVaultModule : Module() {
           putString(CLIP_OWNER, token)
         }
         clipboard().setPrimaryClip(clip)
+        // A failed replacement must leave the previous copy's cleanup intact.
+        handler.removeCallbacks(expiry)
+        cancelClearRetry()
+        pendingClear = false
         clipboardToken = token
         clipboardDeadline = SystemClock.elapsedRealtime() + CLIP_TTL
         handler.postDelayed(expiry, CLIP_TTL)
@@ -98,7 +105,7 @@ class ZhixingVaultModule : Module() {
 
     AsyncFunction("clearClipboard") { clearOwnedClipboard() }.runOnQueue(Queues.MAIN)
     OnActivityEntersForeground {
-      handler.post { if (clipboardToken != null && SystemClock.elapsedRealtime() >= clipboardDeadline) clearOwnedClipboard() }
+      handler.post { if (clipboardToken != null && (pendingClear || SystemClock.elapsedRealtime() >= clipboardDeadline)) clearOwnedClipboard() }
     }
     OnDestroy { handler.post { clearOwnedClipboard() } }
   }
@@ -118,18 +125,41 @@ class ZhixingVaultModule : Module() {
 
   private fun clearOwnedClipboard() {
     val token = clipboardToken ?: return
+    pendingClear = true
+    cancelClearRetry()
+    tryClearOwnedClipboard(token, 0)
+  }
+
+  private fun cancelClearRetry() {
+    clearRetry?.let { handler.removeCallbacks(it) }
+    clearRetry = null
+  }
+
+  private fun tryClearOwnedClipboard(token: String, attempt: Int) {
+    if (!pendingClear || clipboardToken != token) return
+    clearRetry = null
     try {
       val manager = clipboard()
       // Android can deny clipboard reads in the background. Retain the token so
-      // the foreground callback can retry; never erase an unknown clipboard.
-      val description = manager.primaryClipDescription ?: return
-      if (description.extras?.getString(CLIP_OWNER) == token) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) manager.clearPrimaryClip()
-        else manager.setPrimaryClip(ClipData.newPlainText("", ""))
+      // bounded retries and the foreground callback can retry after focus returns.
+      val description = manager.primaryClipDescription
+      if (description != null) {
+        if (description.extras?.getString(CLIP_OWNER) == token) {
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) manager.clearPrimaryClip()
+          else manager.setPrimaryClip(ClipData.newPlainText("", ""))
+        }
+        // A different owner is never cleared and ends this old owner's request.
+        clipboardToken = null
+        pendingClear = false
+        handler.removeCallbacks(expiry)
+        return
       }
-      clipboardToken = null
-      handler.removeCallbacks(expiry)
     } catch (_: Exception) { /* A foreground retry owns the remaining token. */ }
+    if (attempt < clearRetryDelays.size && pendingClear && clipboardToken == token) {
+      val retry = Runnable { tryClearOwnedClipboard(token, attempt + 1) }
+      clearRetry = retry
+      handler.postDelayed(retry, clearRetryDelays[attempt])
+    }
   }
 
   private fun atomicFile(): AtomicFile = AtomicFile(File(context().noBackupFilesDir, "zhixing-password-vault.json"))
