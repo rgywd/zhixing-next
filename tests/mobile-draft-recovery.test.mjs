@@ -248,6 +248,8 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
   }
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./useHealthReminders"] = { useHealthReminders() {} };
+  dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
+  dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };
   const { ConnectedSession } = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession };\n");
   const args = { connection: { url: "https://example.test", token: "test" }, onConnect() {}, onDisconnect() {}, connectionError: "" };
   const render = () => walk(lifecycle.render(() => ConnectedSession(args)));

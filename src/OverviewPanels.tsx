@@ -1,13 +1,15 @@
-import { useUi, ActionLink, ActionRow, CardHeader, IconAction, Field, PageHero, PageScrollView, ServiceTile, timeLabel } from "./ui";
+import { useUi, ActionLink, ActionRow, CardHeader, IconAction, Field, PageHero, PageScrollView, timeLabel } from "./ui";
 import { Pressable, StyleSheet, Text, View, ScrollView } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Conversation, Project, Schedule, Resource } from "./api";
 
 import { useState, type ReactNode } from "react";
 import { BottomSheet } from "./BottomSheet";
+import { TodayHomeView } from "./TodayHomeView";
+import type { TodayHomeView as TodayView } from "./todayTypes";
 import { emptyHomePreferences, homeEntries, targetKey, type HomePreferences, type HomeTarget } from "./homeEntries";
 
-export function HomePanel({ conversations, projects = [], resources = [], preferences = emptyHomePreferences, preferencesReady = false, preferenceError, onPreferenceRetry, onTogglePin, onChat, onOpenConversation, onOpenProject, onOpenResource, onResources, onLife, onWork, intro }: {
+export function HomePanel({ conversations, projects = [], resources = [], preferences = emptyHomePreferences, preferencesReady = false, preferenceError, onPreferenceRetry, onTogglePin, onChat, onOpenConversation, onOpenProject, onOpenResource, onResources, onLife, intro, today, onTodaySettings, onTodayCalendar, onTodayPrompt, onFinance, onHealth, onRecordExpense, promptReady }: {
   conversations: Conversation[];
   projects?: Project[];
   resources?: Resource[];
@@ -24,6 +26,14 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
   onLife: () => void;
   onWork: () => void;
   intro?: ReactNode;
+  today?: TodayView;
+  onTodaySettings?: () => void;
+  onTodayCalendar?: () => void;
+  onTodayPrompt?: (text: string) => void;
+  onFinance?: () => void;
+  onHealth?: () => void;
+  onRecordExpense?: () => void;
+  promptReady?: boolean;
 }) {
   const { s } = useUi();
   const [managing, setManaging] = useState(false);
@@ -40,23 +50,17 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
   const kindLabel = (item: HomeTarget) => item.kind === "project" ? "项目" : item.kind === "resource" ? "文件" : "对话";
   return (
     <PageScrollView tabs>
-      <PageHero eyebrow="TODAY" title="今天" description="照顾好开销，也照顾好自己。" />
+      <TodayHomeView today={today} onSettings={onTodaySettings} onCalendar={onTodayCalendar} onPrompt={onTodayPrompt} promptReady={promptReady}
+        onFinance={onFinance ?? onLife} onHealth={onHealth ?? onLife} onRecordExpense={onRecordExpense ?? onFinance ?? onLife} onChat={onChat}
+        onManage={onTogglePin ? () => setManaging(true) : undefined} manageReady={preferencesReady} />
       {intro}
-      <View style={s.sectionHeading}>
-        <Text accessibilityRole="header" style={s.title}>常用</Text>
-        {onTogglePin ? <ActionLink icon="options-outline" disabled={!preferencesReady} onPress={() => setManaging(true)}>整理</ActionLink> : null}
-      </View>
-      <View style={s.card}>
-        <ActionRow icon="chatbubble-ellipses-outline" title="开始对话" description="说一句话，把事情交给知行" onPress={onChat} compact last={!pins.length} />
-        {pins.map((item, index) => <ActionRow key={targetKey(item)} icon={icon(item)} title={item.title} description={kindLabel(item)} compact last={index === pins.length - 1} onPress={() => open(item)} tone={item.kind === "project" ? "blue" : "red"} />)}
-      </View>
-      <View style={s.serviceGrid}>
-        <ServiceTile icon="leaf-outline" title="生活" description="财务、饮食与体重管理" onPress={onLife} tone="gold" />
-        <ServiceTile icon="construct-outline" title="施工中" description="功能待定" onPress={onWork} tone="blue" />
-      </View>
+      {pins.length ? <>
+        <View style={s.sectionHeading}><Text accessibilityRole="header" style={s.heading}>已固定常用</Text></View>
+        <View style={s.card}>{pins.map((item, index) => <ActionRow key={targetKey(item)} icon={icon(item)} title={item.title} description={kindLabel(item)} compact last={index === pins.length - 1} onPress={() => open(item)} tone={item.kind === "project" ? "blue" : "gold"} />)}</View>
+      </> : null}
       {preferenceError ? <View><Text accessibilityRole="alert" style={s.error}>{preferenceError}</Text>{!preferencesReady && onPreferenceRetry ? <ActionLink icon="refresh-outline" onPress={onPreferenceRetry}>重试读取常用</ActionLink> : null}</View> : null}
       <View style={s.sectionHeading}>
-        <Text accessibilityRole="header" style={s.title}>最近</Text>
+        <View style={s.row}><Text accessibilityRole="header" style={s.heading}>最近动态</Text><Text style={s.muted}>{recent.length} 条记录</Text></View>
         {onResources ? <ActionLink icon="folder-open-outline" tone="blue" onPress={onResources}>资源库</ActionLink> : null}
       </View>
       {recent.length ? <View style={s.card}>{recent.map((item, index) => <ActionRow key={targetKey(item)} icon={icon(item)} title={item.title} description={`${kindLabel(item)} · ${timeLabel(item.time)}`} compact last={index === recent.length - 1} onPress={() => open(item)} tone={item.kind === "conversation" ? "red" : "blue"} />)}</View> : <Text style={s.description}>聊过的话题和最近的文件会出现在这里。</Text>}
@@ -72,7 +76,7 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
               <IconAction icon={pinned ? "bookmark" : "bookmark-outline"} label={`${pinned ? "取消固定" : "固定"}：${item.title}`} onPress={() => onTogglePin?.(item)} />
             </View>;
           })}
-          {!choices.length ? <Text style={s.muted}>没有匹配的内容，也可以在对话或项目页直接固定。</Text> : null}
+          {!choices.length ? <Text style={s.muted}>没有匹配的内容，也可以在对话中直接固定。</Text> : null}
         </ScrollView>
       </BottomSheet>
     </PageScrollView>
