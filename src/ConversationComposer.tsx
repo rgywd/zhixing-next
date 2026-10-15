@@ -9,6 +9,7 @@ import { thinkingLabel } from "./reasoning";
 import { radius, space, typography } from "./theme";
 
 type Props = {
+  appearance?: "default" | "welcome";
   text: string; placeholder?: string; onText: (text: string) => void; onSend: () => void; onFiles: () => void;
   editable: boolean; canSend: boolean; busy: boolean; pending?: boolean; attachmentLocked?: boolean;
   kind: "chat" | "task"; kindLocked?: boolean; onKind: (kind: "chat" | "task") => void;
@@ -22,14 +23,44 @@ export function ConversationComposer(props: Props) {
   const styles = useThemedStyles(createStyles);
   const { text, placeholder, onText, onSend, onFiles, editable, canSend, busy, pending, kind,
     model, depth = "auto", searchId, onModel, onReasoning, onSearch, optionsLocked, children, hint } = props;
-  const [provider, setProvider] = useState<SearchProvider | null>(null);
+  const [providerState, setProvider] = useState<{ connection: Connection; id: string; item: SearchProvider | null } | null>(null);
+  const provider = providerState && providerState.connection === props.connection && providerState.id === searchId ? providerState.item : null;
   useEffect(() => {
     if (!props.connection || !searchId) return;
     const controller = new AbortController();
     void request<{ items: SearchProvider[] }>(props.connection, "/search/providers", { signal: controller.signal })
-      .then((page) => { if (!controller.signal.aborted) setProvider(page.items.find((item) => item.id === searchId) ?? null); }).catch(() => undefined);
+      .then((page) => { if (!controller.signal.aborted) setProvider({ connection: props.connection!, id: searchId, item: page.items.find((item) => item.id === searchId) ?? null }); }).catch(() => undefined);
     return () => controller.abort();
   }, [props.connection, searchId]);
+  if (props.appearance === "welcome") {
+    const canReason = !!model?.reasoning_levels.length;
+    const reasoningText = canReason ? thinkingLabel(model, depth) : "不可调整";
+    const reasoningColor = !canReason || depth === "none" ? colors.strongLine : depth === "auto" ? colors.gold : colors.green;
+    const searchText = searchId ? `搜索 · ${provider?.name ?? "已开启"}` : "联网搜索";
+    return <View style={[styles.area, styles.welcomeArea]}>
+      <View style={styles.welcomeOptions}>
+        {onModel ? <Pressable accessibilityRole="button" accessibilityLabel={`选择${kind === "task" ? "任务" : "聊天"}模型，当前${model?.name ?? "未配置"}`} accessibilityState={{ disabled: optionsLocked }} disabled={optionsLocked} onPress={onModel} style={[styles.welcomeChip, optionsLocked && styles.disabled]}><View style={[styles.welcomeChipSurface, styles.welcomeModelChip]}>
+          <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={17} /><Text style={styles.welcomeChipText}>{model?.name ?? "选择模型"}</Text><Ionicons name="chevron-down" size={12} color={colors.muted} />
+        </View></Pressable> : null}
+        {onReasoning ? <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${reasoningText}`} accessibilityState={{ disabled: optionsLocked || !canReason }} disabled={optionsLocked || !canReason} onPress={onReasoning} style={[styles.welcomeChip, (optionsLocked || !canReason) && styles.disabled]}><View style={styles.welcomeChipSurface}>
+          <Ionicons name="bulb-outline" size={17} color={canReason && depth !== "none" ? colors.gold : colors.muted} /><Text style={styles.welcomeChipText}>思考 · {reasoningText}</Text><View accessible={false} style={[styles.welcomeStatusDot, { backgroundColor: reasoningColor }]} />
+        </View></Pressable> : null}
+        {onSearch ? <Pressable accessibilityRole="button" accessibilityLabel={`联网搜索${searchId ? `已开启${provider ? `，${provider.name}` : ""}` : "已关闭"}`} accessibilityState={{ selected: !!searchId, disabled: optionsLocked }} disabled={optionsLocked} onPress={onSearch} style={[styles.welcomeChip, optionsLocked && styles.disabled]}><View style={[styles.welcomeChipSurface, searchId && styles.welcomeSearchOn]}>
+          {searchId ? <BrandIcon name={provider?.kind ?? ""} search size={17} /> : <Ionicons name="globe-outline" size={17} color={colors.muted} />}
+          <Text style={[styles.welcomeChipText, searchId && { color: colors.blue }]}>{searchText}</Text>
+        </View></Pressable> : null}
+      </View>
+      <View style={styles.welcomeComposer}>
+        {children ? <View style={styles.welcomeAttachments}>{children}</View> : null}
+        <View style={styles.welcomeInputRow}>
+          <Pressable accessibilityRole="button" accessibilityLabel="添加资料" accessibilityState={{ disabled: props.attachmentLocked }} disabled={props.attachmentLocked} onPress={onFiles} style={[styles.welcomeFiles, props.attachmentLocked && styles.disabled]}><Ionicons name="add" size={26} color={colors.ink} /></Pressable>
+          <TextInput accessibilityLabel="消息" multiline maxLength={20000} placeholder={placeholder ?? "说说你的想法…"} placeholderTextColor={colors.muted} value={text} editable={editable} onChangeText={onText} style={[styles.input, styles.welcomeInput]} />
+          <Pressable accessibilityRole="button" accessibilityLabel={pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: !canSend }} disabled={!canSend} onPress={onSend} style={[styles.welcomeSend, !canSend && styles.welcomeSendDisabled]}>{busy ? <ActivityIndicator size="small" color={colors.onInk} /> : <Ionicons name={pending ? "refresh" : "arrow-up"} size={25} color={colors.onInk} />}</Pressable>
+        </View>
+        {hint ? <View style={styles.welcomeHint}>{hint}</View> : null}
+      </View>
+    </View>;
+  }
   return <View style={styles.area}>
     <View style={styles.composer}>
       {children}
@@ -67,4 +98,20 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   send: { width: 40, height: 40, marginLeft: space.xs, borderRadius: radius.pill, alignItems: "center", justifyContent: "center", backgroundColor: colors.ink },
   sendDisabled: { backgroundColor: colors.neutral },
   disabled: { opacity: 0.4 },
+  welcomeArea: { paddingHorizontal: space.lg, paddingTop: space.sm, gap: space.sm },
+  welcomeOptions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm },
+  welcomeChip: { minHeight: 44, minWidth: 0, maxWidth: "100%", flexShrink: 1, justifyContent: "center" },
+  welcomeChipSurface: { flexDirection: "row", alignItems: "center", gap: 5, minHeight: 30, minWidth: 0, maxWidth: "100%", borderRadius: radius.pill, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surface, paddingHorizontal: 10, paddingVertical: 5 },
+  welcomeModelChip: { backgroundColor: colors.goldSoft, borderColor: colors.strongLine },
+  welcomeChipText: { ...typography.detail, color: colors.ink, flexShrink: 1 },
+  welcomeStatusDot: { width: 6, height: 6, borderRadius: 3 },
+  welcomeSearchOn: { backgroundColor: colors.blueSoft, borderColor: colors.blueLine },
+  welcomeComposer: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.gold, borderRadius: 24, padding: 6, shadowColor: colors.gold, shadowOpacity: 0.09, shadowRadius: 12, shadowOffset: { width: 0, height: 2 } },
+  welcomeInputRow: { flexDirection: "row", alignItems: "center", gap: 5 },
+  welcomeInput: { flex: 1, minWidth: 0, paddingHorizontal: 5 },
+  welcomeFiles: { width: 44, height: 44, alignItems: "center", justifyContent: "center", borderRadius: radius.item, backgroundColor: colors.surfaceRaised },
+  welcomeSend: { width: 46, height: 46, alignItems: "center", justifyContent: "center", borderRadius: radius.item, backgroundColor: colors.gold },
+  welcomeSendDisabled: { opacity: 0.42 },
+  welcomeAttachments: { paddingHorizontal: space.xs, paddingTop: space.xs },
+  welcomeHint: { paddingHorizontal: space.sm, paddingBottom: space.xs },
 });

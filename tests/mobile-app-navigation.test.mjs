@@ -29,25 +29,25 @@ function load(filename, dependencies, suffix = "") {
   });
   return exports;
 }
-function appHarness({ connected = true } = {}) {
+function appHarness({ connected = true, modelPage = { items: [], roles: { chat: null } }, serviceStatus = { model_ready: true, worker_online: true }, failStatus = false } = {}) {
   const lifecycle = hooks(), calls = [], reminderVersions = [], backHandlers = new Set(); let uuid = 0, reminderOpen = () => {}, keyboardVisible = false, keyboardDismisses = 0;
   const sync = () => {};
   const conversations = ["finance", "health"].map((agent_id) => ({ id: `${agent_id}-history`, title: `${agent_id} history`, agent_id, model_id: null, reasoning_effort: null, project_id: null, updated_at: "2028-06-02T10:00:00Z" }));
   const preferences = { pins: [{ kind: "project", id: "legacy-project", title: "旧项目" }, { kind: "conversation", id: "finance-history", title: "财务历史" }], visited: [{ kind: "project", id: "legacy-project", title: "旧项目" }], opened: { "project:legacy-project": "2028-06-02T11:00:00Z" } };
   const welcome = { value: { text: "hello", kind: "task", models: { chat: null, task: null }, efforts: { chat: null, task: null }, searchId: null }, ready: true, error: "", consumeText: async () => {}, retry() {}, setText(next) { welcome.value.text = typeof next === "function" ? next(welcome.value.text) : next; }, setKind() {}, setSearch() {}, setModel() {}, setEffort() {} };
-  const native = { ...Object.fromEntries(["ActivityIndicator", "Image", "KeyboardAvoidingView", "Modal", "Pressable", "Text", "View"].map((name) => [name, name])), Platform: { OS: "android" }, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: (_event, callback) => { backHandlers.add(callback); return { remove: () => backHandlers.delete(callback) }; } }, Keyboard: { isVisible: () => keyboardVisible, dismiss() { keyboardVisible = false; keyboardDismisses++; }, addListener: () => ({ remove() {} }) } };
+  const native = { ...Object.fromEntries(["ActivityIndicator", "Image", "KeyboardAvoidingView", "Modal", "Pressable", "Text", "View"].map((name) => [name, name])), StyleSheet: { create: (value) => value }, Platform: { OS: "android" }, AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: (_event, callback) => { backHandlers.add(callback); return { remove: () => backHandlers.delete(callback) }; } }, Keyboard: { isVisible: () => keyboardVisible, dismiss() { keyboardVisible = false; keyboardDismisses++; }, addListener: () => ({ remove() {} }) } };
   const dependencies = {
     "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "react-native": native,
     "react-native-safe-area-context": { SafeAreaProvider: "SafeAreaProvider", SafeAreaView: "SafeAreaView" }, "expo-status-bar": { StatusBar: "StatusBar" }, "expo-crypto": { randomUUID: () => `message-${++uuid}` }, "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
-    "./providerEditing": { availablePreference }, "./ui": { useUi: () => ({ s: {}, colors: theme.lightColors }), humanError: (error) => error.message, ...Object.fromEntries(["BackLink", "Button", "PageScrollView", "PageHeading", "IconAction"].map((name) => [name, name])) },
+    "./theme": theme, "./providerEditing": { availablePreference }, "./ui": { useUi: () => ({ s: {}, colors: theme.lightColors }), humanError: (error) => error.message, ...Object.fromEntries(["BackLink", "Button", "PageScrollView", "PageHeading", "IconAction"].map((name) => [name, name])) },
     "./ConnectionStatus": { useSyncStatus: () => sync, ConnectionStatusProvider: "ConnectionStatusProvider", ServiceStatusNotice: "ServiceStatusNotice" },
     "./useHomePreferences": { useHomePreferences: () => ({ preferences, ready: true, opened() {}, toggle() {}, retry() {} }) }, "./useWelcomeDraft": { useWelcomeDraft: () => welcome }, "./homeEntries": { targetKey },
     "./useHealthReminders": { useHealthReminders(_connection, revision, onOpen) { reminderVersions.push(revision); reminderOpen = onOpen; } }, "./storage": { draftKey: () => "draft", saveDraft: async () => {}, clearDraft: async () => {} },
     "./api": { ...api, request: async (_connection, path, options) => {
       calls.push({ path, ...options });
-      if (path === "/status") return { model_ready: true, worker_online: true };
+      if (path === "/status") { if (failStatus) throw new Error("status unavailable"); return serviceStatus; }
       if (path === "/assistant") return { name: "知行" };
-      if (path === "/models") return { items: [], roles: { chat: null } };
+      if (path === "/models") return modelPage;
       if (path === "/agents") return { items: ["finance", "health"].map((id) => ({ id, name: id === "finance" ? "财务助手" : "健康助手", model_id: null })) };
       if (path === "/conversations" && options?.method === "POST") return { ...options.body, id: `${options.body.agent_id}-created`, model_id: null, reasoning_effort: null };
       if (path.startsWith("/conversations/") && !path.includes("?") && !path.endsWith("/messages")) return conversations.find((item) => path === `/conversations/${item.id}`) ?? { id: "loaded", agent_id: null };
@@ -57,6 +57,7 @@ function appHarness({ connected = true } = {}) {
     } },
   };
   for (const name of ["ThemeProvider", "AppearanceControl", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
+  dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   const exported = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession, DisconnectedShell, BottomTabs };\n");
   const props = { connection: { url: "https://example.test", token: "test" }, onConnect() {}, onDisconnect() {}, connectionError: "" };
   const render = () => walk(lifecycle.render(() => (connected ? exported.ConnectedSession : exported.DisconnectedShell)(props)));
@@ -174,7 +175,7 @@ test("every welcome suggestion keeps chat mode and the composer exposes no task 
   const props = { name: "知行", draft: "", kind: "chat", busy: false, connection: {}, catalog: null, modelId: null, effort: null, onDraft: (text) => prompts.push(text), onKind: (kind) => kinds.push(kind), onSend() {}, onFiles() {}, onModelId() {}, onEffort() {}, onSearchProviderId() {} };
   const nodes = walk(lifecycle.render(() => AiHome(props)));
   nodes.filter((node) => node.type === "Pressable" && node.props.accessibilityRole === "button").forEach((node) => node.props.onPress());
-  assert.equal(kinds.length, 6); assert.ok(kinds.every((kind) => kind === "chat")); assert.equal(prompts.length, 6);
+  assert.equal(kinds.length, 7); assert.ok(kinds.every((kind) => kind === "chat")); assert.equal(prompts.length, 7);
   const composerLife = hooks();
   const { ConversationComposer } = load("ConversationComposer.tsx", { ...dependencies, react: composerLife.react, "./ThemeProvider": { useTheme: () => ({ colors: theme.lightColors }), useThemedStyles: (factory) => factory(theme.lightColors) }, "./api": { request: async () => ({ items: [] }) }, "./BrandIcon": { BrandIcon: "BrandIcon" }, "./reasoning": { thinkingLabel: () => "默认" } });
   const composer = nodes.find((node) => node.type === "ConversationComposer");
@@ -201,4 +202,23 @@ test("chat completion refreshes service data and reminders immediately while ord
   find(app, "HealthPage").props.onChat(); await settle();
   chat().props.onRunsChanged([run("meal-run", "completed")]); app.render(); assert.equal(app.reminderVersions.at(-1), 3, "opening the same saved chat does not reschedule old completion receipts");
   app.unmount();
+});
+
+
+test("welcome readiness follows the service, selected model, and latest sync instead of a fixed badge", async () => {
+  const modelPage = { items: [{ id: "ready-model", name: "Actual model", ready: true, reasoning_levels: [] }], roles: { chat: "ready-model" } };
+  for (const [options, expected] of [
+    [{ modelPage }, "待命中"],
+    [{ modelPage, serviceStatus: { model_ready: true, worker_online: false } }, "服务离线"],
+    [{ modelPage, serviceStatus: { model_ready: false, worker_online: true } }, "未就绪"],
+    [{ modelPage: { ...modelPage, items: [{ ...modelPage.items[0], ready: false }] } }, "未就绪"],
+    [{ modelPage, failStatus: true }, "重新连接"],
+  ]) {
+    const app = appHarness(options);
+    app.render(); find(app, "HomePanel").props.onChat();
+    assert.ok(app.render().some((node) => node.type === "Text" && node.props.children === "连接中"));
+    await settle();
+    assert.ok(app.render().some((node) => node.type === "Text" && node.props.children === expected), expected);
+    app.unmount();
+  }
 });

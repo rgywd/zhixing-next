@@ -6,6 +6,7 @@ import ts from "typescript";
 import * as jsxRuntime from "react/jsx-runtime";
 import * as api from "../src/api.ts";
 import { availablePreference } from "../src/providerEditing.ts";
+import * as theme from "../src/theme.ts";
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
@@ -218,12 +219,12 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
   let modelFailures = failModel ? 1 : 0;
   const dependencies = {
     "react/jsx-runtime": jsxRuntime, react: lifecycle.react,
-    "react-native": { ...Object.fromEntries(["ActivityIndicator", "Image", "KeyboardAvoidingView", "Modal", "Pressable", "Text", "View"].map((name) => [name, name])), Platform: { OS: "android" },
+    "react-native": { ...Object.fromEntries(["ActivityIndicator", "Image", "KeyboardAvoidingView", "Modal", "Pressable", "Text", "View"].map((name) => [name, name])), StyleSheet: { create: (value) => value }, Platform: { OS: "android" },
       AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, BackHandler: { addEventListener: () => ({ remove() {} }) }, Keyboard: { isVisible: () => false, addListener: () => ({ remove() {} }) } },
     "react-native-safe-area-context": { SafeAreaProvider: "SafeAreaProvider", SafeAreaView: "SafeAreaView" },
     "expo-status-bar": { StatusBar: "StatusBar" }, "expo-crypto": { randomUUID: () => "first-message" },
     "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
-    "./providerEditing": { availablePreference },
+    "./theme": theme, "./providerEditing": { availablePreference },
     "./ui": { useUi: () => ({ s: {}, colors: {} }), humanError: (error) => error.message },
     "./ConnectionStatus": { useSyncStatus: () => sync, ConnectionStatusProvider: "ConnectionStatusProvider" },
     "./useHomePreferences": { useHomePreferences: () => ({ preferences: { pins: [], opened: {} }, ready: true, opened() {} }) },
@@ -245,6 +246,7 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
   for (const name of ["ThemeProvider", "AppearanceControl", "Notice", "ChatPanel", "AiHome", "AiDrawer", "BottomSheet", "FinancePage", "FinanceDashboard", "HealthPage", "LifeSummary", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ProjectsPanel", "ResourcePreview", "OverviewPanels", "LifePanel", "SchedulesPanel", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) {
     dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "WorkPanel", "ConstructionPage", "ConnectionForm", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((component) => [component, component]));
   }
+  dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./useHealthReminders"] = { useHealthReminders() {} };
   const { ConnectedSession } = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession };\n");
   const args = { connection: { url: "https://example.test", token: "test" }, onConnect() {}, onDisconnect() {}, connectionError: "" };

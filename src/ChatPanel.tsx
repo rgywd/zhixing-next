@@ -336,6 +336,7 @@ export function ChatPanel({
         </View>
       ) : null}
       <ConversationComposer
+        appearance={conversation.agent_id ? "default" : "welcome"}
         text={draft.text} editable={draftReady && !draft.pending && !busy}
         onText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}
         canSend={draftReady && !busy && !modelBusy && !!(draft.text.trim() || draft.attachments?.length)} busy={busy} pending={!!draft.pending}
