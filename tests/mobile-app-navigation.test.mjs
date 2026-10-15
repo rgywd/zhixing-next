@@ -58,6 +58,8 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
   };
   for (const name of ["ThemeProvider", "AppearanceControl", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
+  dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
+  dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };
   const exported = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession, DisconnectedShell, BottomTabs };\n");
   const props = { connection: { url: "https://example.test", token: "test" }, onConnect() {}, onDisconnect() {}, connectionError: "" };
   const render = () => walk(lifecycle.render(() => (connected ? exported.ConnectedSession : exported.DisconnectedShell)(props)));
@@ -158,6 +160,36 @@ test("legacy project pins and visits do not produce an unopenable home entry", a
   assert.equal(entries.recent.some((item) => item.kind === "project"), false);
   assert.equal(entries.pins.some((item) => item.kind === "conversation"), true);
   assert.equal(app.preferences.pins.some((item) => item.kind === "project"), true, "legacy saved data is retained");
+  app.unmount();
+});
+
+test("today home appends its prepared prompt to the existing main draft without creating or sending", async () => {
+  const app = appHarness(); app.render(); await settle();
+  const home = find(app, "HomePanel").props;
+  assert.equal(home.promptReady, true);
+  home.onPrompt("今天的手机信息与想法");
+  assert.ok(find(app, "AiHome"));
+  assert.equal(app.welcome.value.text, "hello\n\n今天的手机信息与想法");
+  assert.equal(app.calls.some((call) => call.method === "POST"), false);
+  app.back(); app.welcome.ready = false;
+  const locked = find(app, "HomePanel").props;
+  assert.equal(locked.promptReady, false);
+  locked.onPrompt("不能覆盖未读取草稿");
+  assert.ok(find(app, "HomePanel"));
+  assert.equal(app.welcome.value.text, "hello\n\n今天的手机信息与想法");
+  app.unmount();
+});
+
+test("today finance and health shortcuts retain the life return path and record starts explicitly", async () => {
+  const app = appHarness(); app.render(); await settle();
+  find(app, "HomePanel").props.onRecordExpense();
+  assert.equal(find(app, "FinanceDashboard").props.initialAction, "record");
+  assert.equal(app.back(), true); assert.ok(find(app, "LifePanel"));
+  app.back(); find(app, "HomePanel").props.onFinance();
+  assert.equal(find(app, "FinanceDashboard").props.initialAction, undefined);
+  app.back(); app.render(); app.back(); find(app, "HomePanel").props.onHealth();
+  assert.ok(find(app, "HealthPage")); app.back(); assert.ok(find(app, "LifePanel"));
+  assert.equal(app.calls.some((call) => call.method === "POST"), false);
   app.unmount();
 });
 

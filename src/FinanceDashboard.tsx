@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, BackHandler, Pressable, Text, View } from "react-native";
 import type { Connection } from "./api";
 import { useNotice } from "./Notice";
@@ -16,7 +16,7 @@ const assumptionLabels: Record<string, string> = {
 };
 const bucketLabels = { daily: "日常", fixed: "固定", one_time: "一次性" } as const;
 export type ServicePageProps = { onBack?: () => void; connection: Connection; onChat: (prompt?: string) => void; onChanged?: () => void; refreshKey?: number };
-export function FinanceDashboard({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
+export function FinanceDashboard({ connection, onBack, onChat, onChanged, refreshKey, initialAction }: ServicePageProps & { initialAction?: "record" }) {
   const { s, colors } = useUi();
   const styles = useServiceStyles();
   const { show, dismiss } = useNotice();
@@ -33,10 +33,17 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
   }, [editor]);
   const data = snapshot.data;
   const budget = data?.summary.budget;
-  const openTransaction = (item?: FinanceTransaction) => editor.open("transaction", {
+  const initialOpened = useRef(false);
+  const openTransaction = useCallback((item?: FinanceTransaction) => editor.open("transaction", {
     kind: item?.kind ?? "expense", amount: item?.amount ?? "", date: item?.occurred_on ?? localDate(), bucket: item?.bucket ?? "daily",
     category: item?.category ?? "", note: item?.note ?? "", commitment: item?.commitment_key ?? "", related: item?.related_transaction_id ?? "",
-  }, { record: item ?? null, commitments: budget?.commitments ?? [] });
+  }, { record: item ?? null, commitments: budget?.commitments ?? [] }), [editor, budget]);
+  useEffect(() => {
+    if (initialAction !== "record" || initialOpened.current || !editor.ready || snapshot.loading) return;
+    initialOpened.current = true;
+    dismiss("finance-draft");
+    openTransaction();
+  }, [initialAction, editor.ready, snapshot.loading, dismiss, openTransaction]);
   const openBudget = () => editor.open("budget", {
     month, income: budget?.expected_income ?? "", savings: budget?.savings_target ?? "", daily: budget?.daily_budget ?? "",
     recurring: (budget?.recurring ?? true) ? "yes" : "no", commitments: (budget?.commitments ?? []).map((item) => `${item.label} | ${item.amount} | ${item.kind === "fixed" ? "固定" : "大件"}`).join("\n"),

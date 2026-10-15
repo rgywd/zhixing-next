@@ -49,7 +49,8 @@ import { ResourcePreview } from "./ResourcePreview";
 import { useHomePreferences } from "./useHomePreferences";
 import { useWelcomeDraft } from "./useWelcomeDraft";
 import { targetKey } from "./homeEntries";
-import { HomePanel } from "./OverviewPanels";
+import { TodayHomePanel as HomePanel } from "./TodayHomePanel";
+import { useTodayDeviceContext } from "./useTodayDeviceContext";
 import { FinanceDashboard } from "./FinanceDashboard";
 import { HealthPage } from "./HealthPage";
 import { LifeSummary } from "./LifeSummary";
@@ -190,6 +191,7 @@ function BottomTabs({ value, onChange }: { value: Tab; onChange: (tab: Tab) => v
 function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection) => void; error: string }) {
   const { s } = useUi();
   const [tab, setTab] = useState<Tab>("home");
+  const todayDevice = useTodayDeviceContext(tab === "home");
   const [lifePage, setLifePage] = useState<LifePage>("overview");
   const [localSettings, setLocalSettings] = useState<"overview" | "connection" | "device">("overview");
   useEffect(() => {
@@ -206,7 +208,8 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
   const selectTab = (next: Tab) => { setTab(next); if (next === "life") setLifePage("overview"); if (next === "settings") setLocalSettings("overview"); };
   const showTabs = (tab !== "life" || lifePage === "overview") && (tab !== "settings" || localSettings === "overview");
   return <View style={s.body}>
-    {tab === "home" ? <HomePanel conversations={[]} onChat={connect} onOpenConversation={connect} onLife={() => selectTab("life")} onWork={() => selectTab("work")} />
+    {tab === "home" ? <HomePanel device={todayDevice} conversations={[]} promptReady={false} onChat={connect} onOpenConversation={connect} onLife={() => selectTab("life")} onWork={() => selectTab("work")}
+      onFinance={() => { setLifePage("finance"); setTab("life"); }} onHealth={() => { setLifePage("health"); setTab("life"); }} onRecordExpense={connect} />
       : tab === "work" ? <ConstructionPage />
       : tab === "life" ? lifePage === "overview" ? <LifePanel onFinance={() => setLifePage("finance")} onHealth={() => setLifePage("health")} onChat={connect} />
         : <><BackLink label="生活" onPress={() => setLifePage("overview")} /><PageScrollView><PageHeading title={lifePage === "finance" ? "财务" : "健康"} description="连接服务后，记录收支与饮食，继续自己的目标。" /><Button onPress={connect}>连接服务</Button></PageScrollView></>
@@ -236,6 +239,7 @@ function ConnectedSession({
   const { s, colors } = useUi();
   const chatStyles = useThemedStyles(createChatHeaderStyles);
   const [tab, setTab] = useState<Tab>("home");
+  const todayDevice = useTodayDeviceContext(tab === "home");
   const [lifePage, setLifePage] = useState<LifePage>("overview");
   const [chatReturn, setChatReturn] = useState<ChatReturn>({ tab: "home", lifePage: "overview" });
   const [settingsView, setSettingsView] = useState<"overview" | Exclude<SettingsDestination, "search">>("overview");
@@ -279,6 +283,7 @@ function ConnectedSession({
   const currentComposer = composerContext?.conversationId === selectedId ? composerContext : null;
   const selectedModel = catalog?.items.find((item) => item.id === (currentComposer ? currentComposer.modelId : selected?.model_id ?? catalog.roles.chat));
   const [serviceVersion, setServiceVersion] = useState(0);
+  const [financeEntry, setFinanceEntry] = useState<"record" | undefined>();
   const observedRunStates = useRef(new Map<string, Run["status"]>());
   const showTabs = tab !== "chat" && (tab !== "life" || lifePage === "overview") && (tab !== "settings" || settingsView === "overview");
   useHealthReminders(connection, serviceVersion, () => openLifePage("health"));
@@ -304,8 +309,9 @@ function ConnectedSession({
     setTab(chatReturn.tab);
     setLifePage(chatReturn.lifePage);
   }
-  function openLifePage(page: LifePage) {
+  function openLifePage(page: LifePage, financeAction?: "record") {
     navigation.current++;
+    setFinanceEntry(page === "finance" ? financeAction : undefined);
     setLifePage(page);
     setTab("life");
   }
@@ -539,6 +545,10 @@ function ConnectedSession({
     setWelcomeDraft((old) => `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${prompt}`);
     openMainChat();
   }
+  function homeChat(prompt: string) {
+    if (!welcome.ready || busy || creatingConversation.current) return;
+    lifeChat(prompt);
+  }
   function serviceChat(agentId: string, prompt?: string) {
     if (prompt) void newConversation(false, agentId, true, { text: prompt, kind: "chat", modelId: null, effort: null, searchId: null });
     else openAgent(agentId);
@@ -564,18 +574,21 @@ function ConnectedSession({
         </Text>
       ) : null}
       {tab === "home" ? (
-        <HomePanel conversations={conversations} resources={recentResources}
+        <HomePanel device={todayDevice} conversations={conversations} resources={recentResources}
+          connection={connection} refreshKey={serviceVersion} status={status ? { ...status, model_ready: !!welcomeModel?.ready && (!!welcomePreference.modelId || status.model_ready) } : null}
+          loading={loading || !catalog} syncFailed={lastSyncFailed} onPrompt={homeChat} promptReady={welcome.ready && !busy}
           preferences={{ ...home.preferences, pins: home.preferences.pins.filter((item) => item.kind !== "project"), visited: home.preferences.visited?.filter((item) => item.kind !== "project") ?? [] }}
           preferencesReady={home.ready} preferenceError={home.error} onPreferenceRetry={home.retry} onTogglePin={home.toggle}
           onOpenResource={openResource} onResources={openResources} onChat={openMainChat} onOpenConversation={openConversation}
-          onLife={() => selectTab("life")} onWork={() => selectTab("work")} />
+          onLife={() => selectTab("life")} onWork={() => selectTab("work")}
+          onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} onRecordExpense={() => openLifePage("finance", "record")} />
       ) : tab === "work" ? (
         <ConstructionPage />
       ) : tab === "life" ? lifePage === "overview" ? (
         <LifePanel onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} onChat={lifeChat}
           intro={<LifeSummary connection={connection} refreshKey={serviceVersion} onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} />} />
       ) : lifePage === "finance" ? (
-        <FinanceDashboard connection={connection} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("finance", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
+        <FinanceDashboard connection={connection} initialAction={financeEntry} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("finance", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
       ) : (
         <HealthPage connection={connection} onBack={() => openLifePage("overview")} onChat={(prompt) => serviceChat("health", prompt)} onChanged={serviceChanged} refreshKey={serviceVersion} />
       ) : tab === "chat" ? (

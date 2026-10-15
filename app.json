@@ -8,7 +8,10 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "dev.zhixing.next",
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCalendarsWriteOnlyAccessUsageDescription": "仅在你添加日程时使用系统日历。"
+      }
     },
     "android": {
       "package": "dev.zhixing.next",
@@ -18,7 +21,6 @@
       },
       "predictiveBackGestureEnabled": false,
       "blockedPermissions": [
-        "android.permission.READ_CALENDAR",
         "android.permission.WRITE_CALENDAR",
         "android.permission.ACCESS_BACKGROUND_LOCATION",
         "android.permission.FOREGROUND_SERVICE_LOCATION",
@@ -42,16 +44,16 @@
       [
         "expo-calendar",
         {
-          "calendarPermission": false,
+          "calendarPermission": "允许知行读取今天的日程并显示在首页；默认留在本机，只有你发送包含日程的对话时才分享给知行服务。",
           "remindersPermission": false,
-          "writeOnlyAccess": true,
+          "writeOnlyAccess": false,
           "writeOnlyCalendarPermission": "仅在你添加日程时使用系统日历。"
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "点击获取当前位置时，知行使用一次手机定位。",
+          "locationWhenInUsePermission": "启用首页位置天气或点击获取位置时，知行在前台定位，用于显示地区与当地天气。",
           "locationAlwaysPermission": false,
           "locationAlwaysAndWhenInUsePermission": false,
           "motionUsagePermission": false,

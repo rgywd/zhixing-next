@@ -10,6 +10,8 @@
 
 **[0.2.1 正式版](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.1)** 汇总生活入口、财务／健康和主 Agent 界面调整，以及透明模型图标与一次性草稿恢复提醒。[下载最新 ARM64 APK](https://work.8-208-118-119.sslip.io/assistant-downloads/zhixing-next-0.2.1-arm64.apk)，安装与覆盖升级见[0.2.1 发布说明](docs/RELEASE-0.2.1.md)。安装包内嵌 JS，无需 Metro；首次连接仍需自己的服务访问令牌。后端代码与 0.2.0 相同，现网继续使用 `adeeb65`／数据库 v12。
 
+源码中的首页新增位置天气、今日日程与财务／健康速览，手机信息按需授权，开始后进入可编辑的主 Agent 草稿。此首页更新不包含在上方既有 0.2.1 正式包中，具体使用与验证见[今天首页说明](docs/TODAY-HOME.md)。
+
 ## 本地开发
 
 使用当前 Expo SDK 支持的 Node.js LTS；本仓库开发环境为 Node.js 24。依赖使用 npm 与 lockfile。

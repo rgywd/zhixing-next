@@ -227,7 +227,7 @@ function walk(node) {
   if (Array.isArray(node)) return node.flatMap(walk);
   return [node, ...walk(node.props?.children)];
 }
-function screen(name, data, editing = null, { visible = Boolean(editing) } = {}) {
+function screen(name, data, editing = null, { visible = Boolean(editing), initialAction } = {}) {
   const opened = [], saved = [], backs = [], notices = [], recovery = [];
   const editor = { draft: editing, visible, busy: false, ready: true, locked: false, error: "", storageError: "", open: (...args) => opened.push(args), close: () => backs.push(true), resume() { editor.visible = true; }, discard() {}, set() {}, submit: (...args) => saved.push(args) };
   const lifecycle = hooks(); const actual = setup().forms;
@@ -239,7 +239,7 @@ function screen(name, data, editing = null, { visible = Boolean(editing) } = {})
     "./deviceCapabilities": { allowNotifications: async () => {} }, "./healthNotifications": { pauseHealthNotificationsForToday: async () => {} },
   })[name];
   const chats = [];
-  const render = () => walk(lifecycle.render(() => component({ connection, onChat: (prompt) => chats.push(prompt) })));
+  const render = () => walk(lifecycle.render(() => component({ connection, initialAction, onChat: (prompt) => chats.push(prompt) })));
   const nodes = render();
   return { nodes, render, opened, saved, backs, chats, editor, notices, recovery };
 }
@@ -255,6 +255,17 @@ test("health empty state starts manual records without personal numeric defaults
   page.nodes.find((node) => node.type === "ActionLink" && node.props.children === "记录体重").props.onPress();
   assert.equal(page.opened[1][0], "weight"); assert.equal(page.opened[1][1].value, "");
   assert.equal(page.chats.length, 0);
+});
+
+test("the explicit home expense shortcut opens a manual form once and never posts automatically", () => {
+  const page = screen("FinanceDashboard", null, null, { initialAction: "record" });
+  assert.equal(page.opened.length, 1);
+  assert.equal(page.opened[0][0], "transaction");
+  assert.equal(page.opened[0][1].kind, "expense");
+  assert.equal(page.opened[0][1].amount, "");
+  page.render(); page.render();
+  assert.equal(page.opened.length, 1);
+  assert.equal(page.saved.length, 0);
 });
 
 test("service form uses shared fields and Android back returns to the overview while preserving its draft", () => {
