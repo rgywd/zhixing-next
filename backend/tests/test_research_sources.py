@@ -152,8 +152,8 @@ async def test_actual_tool_requires_source_paths_but_internal_manager_default_is
     ("read_text_file", {"path": "./source.txt"}, False),
     ("list_directory", {"path": "."}, False),
     ("search_history", {"query": "more"}, False),
-    ("calculate", {"expression": "1+1"}, True),
-    ("date_info", {}, True),
+    ("calculate", {"expression": "1+1"}, False),
+    ("date_info", {}, False),
     ("read_file", {"file_path": "source.txt"}, False),
     ("record_meal", {}, False),
 ])

@@ -82,12 +82,9 @@ class ResumeCoordinator(LimitCoordinator):
 @pytest.mark.parametrize("notification_inflight", [False, True])
 async def test_limited_research_can_continue_same_history_and_root_budget(tmp_path, monkeypatch, with_summary, notification_inflight):
     settings = make_settings(tmp_path)
-    run = make_run("resume-limited-research")
+    run = make_run("resume-limited-research", "虚构供货方案 PINE-17：按订单备货，需要提前两天确认。资料没有说明价格和库存，不能推断。")
     child_id = "a_" + hashlib.sha256(f"{run['id']}:start".encode()).hexdigest()[:16]
-    upload = settings.workspace_root / "conversations" / run["conversation_id"] / "uploads" / "supply.txt"
-    upload.parent.mkdir(parents=True)
-    upload.write_text("虚构供货方案 PINE-17：按订单备货，需要提前两天确认。资料没有说明价格和库存，不能推断。")
-    read_source = AIMessage(content="", tool_calls=[{"name": "read_text_file", "args": {"path": "uploads/supply.txt"}, "id": "read-source", "type": "tool_call"}])
+    read_source = AIMessage(content="", tool_calls=[{"name": "read_history_message", "args": {"message_id": run["message_id"]}, "id": "read-source", "type": "tool_call"}])
     first = ScriptedModel(replies=[read_source, *[calculation(index) for index in range(4)], AIMessage(content="The source is read; prices and inventory remain unknown.") if with_summary else calculation(99)])
     continued = ScriptedModel(replies=[AIMessage(content="Final findings: PINE-17 prepares against orders; prices and inventory remain unknown.")])
     models = iter([first, continued])
@@ -99,7 +96,7 @@ async def test_limited_research_can_continue_same_history_and_root_budget(tmp_pa
             failed_notice.set()
             await release.wait()
 
-    parent = ResumeCoordinator(replies=[], child_id=child_id, source_paths=["uploads/supply.txt"], failure_release=release if notification_inflight else None)
+    parent = ResumeCoordinator(replies=[], child_id=child_id, source_paths=[], failure_release=release if notification_inflight else None)
     answer = await asyncio.wait_for(fixture_run_agent(settings, run, persona="", emit=emit, controls=no_controls, acknowledge=ignore, model_override=parent), 3)
     assert "same assistant" in answer
     initial, final = parent.receipts
@@ -119,7 +116,7 @@ async def test_limited_research_can_continue_same_history_and_root_budget(tmp_pa
     context = continued.seen[0]
     assert sum(isinstance(message, ToolMessage) and message.name == "calculate" for message in context) == 4
     source = next(message for message in context if isinstance(message, ToolMessage) and message.tool_call_id == "read-source")
-    assert json.loads(source.content)["complete"] is True and "PINE-17" in source.content
+    assert json.loads(source.content)["next_offset"] is None and "PINE-17" in source.content
     assert any(isinstance(message, AIMessage) and message.additional_kwargs.get("zhixing_research_limit") == "research_limit_with_summary" for message in context) is with_summary
     assert any(isinstance(message, HumanMessage) and "Do not use tools" in str(message.content) for message in context)
     store = Store(settings)

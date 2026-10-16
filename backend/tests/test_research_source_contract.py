@@ -70,9 +70,7 @@ class ReusingSourceReader(SchemaModel):
             path = json.loads(receipt.content)["path"]
             response = call("read_text_file", {"path": path}, "reuse-receipt-path")
         elif len(self.seen) == 3:
-            response = call("calculate", {"expression": "1+2"}, "calc")
-        elif len(self.seen) == 4:
-            response = call("date_info", {"operation": "weekday", "date": "2026-10-17"}, "date")
+            response = call("read_text_file", {"path": "uploads/delivery.txt"}, "second-source")
         else:
             response = AIMessage(content="Selected supply evidence read; other facts remain unknown.")
         return ChatResult(generations=[ChatGeneration(message=response)])
@@ -83,27 +81,28 @@ async def test_selected_child_only_sees_bound_readers_and_receipt_path_is_callab
     run = make_run("selected-source")
     workspace = workspace_for(settings, run)
     (workspace / "uploads" / "supply.txt").write_text("SYNTHETIC-SUPPLY-FACT")
-    (workspace / "uploads" / "delivery.txt").write_text("UNSELECTED-DELIVERY")
+    (workspace / "uploads" / "delivery.txt").write_text("SELECTED-DELIVERY")
+    (workspace / "unselected.txt").write_text("UNSELECTED-EVIDENCE")
     child = ReusingSourceReader(replies=[])
     monkeypatch.setattr("zhixing_next.runtime.create_model", lambda *args, **kwargs: child)
     child_id = "a_" + hashlib.sha256(f"{run['id']}:start".encode()).hexdigest()[:16]
-    parent = Coordinator(replies=[], child_id=child_id, source_paths=["uploads/supply.txt"])
+    parent = Coordinator(replies=[], child_id=child_id, source_paths=["uploads/supply.txt", "uploads/delivery.txt"])
     await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=parent)
     assert set(child.menus[0]) == SCOPED_RESEARCH_TOOLS
     for name in ("read_text_file", "read_document", "view_image"):
         schema = child.menus[0][name]["schema"]
         assert schema["required"] == ["path"]
-        assert schema["properties"]["path"]["const"] == "uploads/supply.txt"
+        assert set(schema["properties"]["path"]["enum"]) == {"uploads/supply.txt", "uploads/delivery.txt"}
         assert "resource_id" not in schema["properties"]
     assert "by resource_id" not in child.menus[0]["view_image"]["description"]
     receipts = {message.tool_call_id: message for message in child.seen[-1] if isinstance(message, ToolMessage)}
-    assert set(receipts) == {"first-read", "reuse-receipt-path", "calc", "date"}
+    assert set(receipts) == {"first-read", "reuse-receipt-path", "second-source"}
     assert all(message.status == "success" for message in receipts.values())
     for identifier in ("first-read", "reuse-receipt-path"):
         receipt = json.loads(receipts[identifier].content)
         assert receipt["path"] == "uploads/supply.txt"
         assert receipt["content"] == "SYNTHETIC-SUPPLY-FACT" and receipt["complete"] is True
-    assert "UNSELECTED-DELIVERY" not in str(child.seen)
+    assert "UNSELECTED-EVIDENCE" not in str(child.seen)
     assert ChildLedger(Store(settings), run["id"]).get(child_id)["status"] == "completed"
 
 

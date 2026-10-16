@@ -148,6 +148,33 @@ def _research_readers(tools, source_paths):
     return result
 
 
+def _research_sources_complete(messages) -> bool:
+    """Use the latest real read of each bound source since the last instruction."""
+    from .agent_collaboration import SOURCE_READERS, child_source_paths
+
+    sources = set(child_source_paths(messages))
+    if not sources:
+        return False
+    since = next((index + 1 for index in range(len(messages) - 1, -1, -1) if isinstance(messages[index], HumanMessage)), 0)
+    calls, complete = {}, {}
+    for message in messages[since:]:
+        if isinstance(message, AIMessage):
+            calls.update({call["id"]: call for call in message.tool_calls})
+        elif isinstance(message, ToolMessage) and (call := calls.get(message.tool_call_id)):
+            path = call.get("args", {}).get("path")
+            if call["name"] not in SOURCE_READERS or not isinstance(path, str) or path not in sources:
+                continue
+            complete[path] = False
+            if call["name"] != "read_text_file" or message.name != "read_text_file" or message.status != "success":
+                continue
+            try:
+                receipt = json.loads(message.content)
+            except (TypeError, ValueError):
+                continue
+            complete[path] = isinstance(receipt, dict) and receipt.get("path") == path and receipt.get("complete") is True and receipt.get("truncated") is False and "error" not in receipt
+    return all(complete.get(path) is True for path in sources)
+
+
 def _business_time_prompt(store: Store, message_id: str, *, now: datetime | None = None, include_record_workflow: bool = True) -> str:
     from datetime import datetime as MessageDatetime
 
@@ -550,7 +577,8 @@ class RunControls(AgentMiddleware):
 
         if self.research and self.research_model_calls >= 6:
             raise ResearchLimitError("The research turn reached its local model limit before a current summary could be delivered.")
-        research_summary = self.research and self.research_model_calls == 5
+        research_sources_complete = self.research and _research_sources_complete(request.messages)
+        research_summary = self.research and self.research_model_calls == 5 and not research_sources_complete
         analysis_requested, report_completion = False, None
         if self.finance_completion and not await self.pending(request.state):
             source = await asyncio.to_thread(_finance_source, self.settings, self.run_id, request.messages)
@@ -600,6 +628,17 @@ class RunControls(AgentMiddleware):
         await self.emit("progress", {"stage": "model"})
         messages = hydrate_messages(self.settings, request.messages, image_input=self.image_input) if self.settings else request.messages
         prepared = request.override(tools=tools, messages=messages)
+        if research_sources_complete:
+            # The SDK ignores request.tool_choice when tools=[]; pass the native
+            # no-tool setting as model settings as well so it reaches transport.
+            closed_settings = {**prepared.model_settings, "tool_choice": "none"}
+            if request.model._llm_type == "chat-google-generative-ai":
+                closed_settings.pop("tool_choice")
+                closed_settings["tool_config"] = {"function_calling_config": {"mode": "NONE"}}
+            prepared = prepared.override(
+                tools=[], tool_choice="none", model_settings=closed_settings,
+                system_message=SystemMessage(content=(_text(request.system_message) if request.system_message else "") + "\nAll selected source files have now been completely read for the current instruction, as verified by actual reader receipts. No further tools are available for this turn. Return the requested concise findings now from that evidence and the user's factual clarifications, preserving relevant limits and unknowns. Do not reread, expand the research or claim facts absent from the sources."),
+            )
         if research_summary:
             prepared = prepared.override(
                 tools=[], tool_choice=None,
@@ -639,6 +678,13 @@ class RunControls(AgentMiddleware):
         envelope = response.model_response if isinstance(response, ExtendedModelResponse) else response
         results = envelope.result if isinstance(envelope, ModelResponse) else [envelope]
         final = next((message for message in reversed(results) if isinstance(message, AIMessage)), None)
+        if research_sources_complete and await self.pending(request.state):
+            # A retry wakeup or in-flight factual correction is handled by the
+            # existing after_model steer path before any obsolete tools execute.
+            return response
+        if research_sources_complete and (final is None or final.tool_calls or final.invalid_tool_calls or not _text(final).strip()):
+            await self.emit("progress", {"stage": "research_sources_read", "error_code": "research_tools_closed"})
+            raise ResearchLimitError("The provider did not return a summary after all selected sources were read; no requested tool was executed.")
         if research_summary:
             if final is None or final.tool_calls or final.invalid_tool_calls:
                 await self.emit("progress", {"stage": "research_limit", "error_code": "research_tools_closed"})

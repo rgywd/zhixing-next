@@ -35,7 +35,7 @@ RESULT_WINDOW = 16000
 SOURCE_SCOPE_KEY = "zhixing_research_source_paths"
 MAX_SOURCE_PATHS = 8
 SOURCE_READERS = frozenset({"read_text_file", "read_document", "view_image"})
-SCOPED_RESEARCH_TOOLS = SOURCE_READERS | {"calculate", "date_info"}
+SCOPED_RESEARCH_TOOLS = SOURCE_READERS
 FILESYSTEM_TOOLS = SOURCE_READERS | frozenset({
     "inspect_environment", "list_directory", "write_text_file", "copy_file",
     "ls", "read_file", "write_file", "edit_file", "delete_file", "glob", "grep", "execute",
