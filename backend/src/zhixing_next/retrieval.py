@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 from pydantic import Field
 
 from .resources import resource_bytes
+from .tool_errors import ToolFailure
 from .tools import extract_document
 
 
@@ -60,8 +61,9 @@ def create_retrieval_tools(store):
         }
 
     @tool
-    def read_saved_resource(resource_id: str, start: Annotated[int, Field(ge=1)] = 1) -> dict:
-        """Read a hash-checked saved upload/deliverable across this single user's resource library. PDF pages and DOCX paragraphs are extracted as text; UTF-8 files use lines. This does not perform OCR or claim to read images."""
+    def read_saved_resource(resource_id: str, start: Annotated[int, Field(ge=1)] = 1,
+                            char_offset: Annotated[int, Field(ge=0)] = 0) -> dict:
+        """Read a hash-checked saved upload/deliverable. PDF/DOCX use page/paragraph start; UTF-8 files use lines. Continue with next_start and, when supplied, next_char_offset as char_offset so long lines are not lost. No OCR or image interpretation."""
         resource = store.get_resource(resource_id)
         data = resource_bytes(store.settings, resource)
         suffix = Path(resource["name"]).suffix.lower()
@@ -69,19 +71,22 @@ def create_retrieval_tools(store):
             result = extract_document(data, suffix, resource["name"], start=start, count=5)
         else:
             if resource["mime_type"].startswith("image/") or b"\0" in data[:8000]:
-                raise ValueError(
-                    "This resource requires visual or format-specific reading; text extraction is unavailable."
-                )
+                raise ToolFailure("resource_format_unsupported", "This resource requires visual or format-specific reading; text extraction is unavailable.",
+                                  "Use view_image when available for an image resource, or find a supported text/PDF/DOCX copy.")
             lines = data.decode("utf-8-sig").splitlines()
             selected = lines[start - 1 : start + 39]
+            window = "\n".join(selected)
+            text = window[char_offset : char_offset + 12000]
+            partial = char_offset + len(text) < len(window)
             result = {
-                "text": "\n".join(selected)[:12000],
+                "text": text,
                 "unit": "line",
                 "start": start,
-                "next_start": start + len(selected)
+                "next_start": start if partial else start + len(selected)
                 if start + len(selected) <= len(lines)
                 else None,
-                "truncated": len("\n".join(selected)) > 12000,
+                "next_char_offset": char_offset + len(text) if partial else None,
+                "truncated": partial,
             }
         return {
             "resource_id": resource_id,

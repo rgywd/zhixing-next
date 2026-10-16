@@ -83,7 +83,7 @@ class DatedToolInput(FinanceInput):
     date_evidence: str | None = Field(
         default=None,
         max_length=240,
-        description="A short verbatim user quote stating the actual transaction date/month, e.g. 今天午饭32 or 9月10日交的. Required for precise AI day/month attribution. Observation balances, review cutoffs, fee coverage and payday schedules are not occurrence evidence; unknown history stays range without asking the user for a form.",
+        description="Optional hint quoting the actual transaction date/month, e.g. 今天午饭32 or 9月10日交的. The service automatically reads the bound real user message; no repeated quote is required. Observation balances, review cutoffs, fee coverage and payday schedules are not occurrence evidence; unknown history stays range without asking the user for a form.",
     )
     date_source_message_id: str | None = Field(
         default=None,
@@ -147,10 +147,14 @@ class BatchOperation(FinanceInput):
 
 
 class AIBatchOperation(BatchOperation):
+    entry_key: str | None = Field(
+        default=None, max_length=200,
+        description="Optional item label; the outer batch entry_key controls atomic replay.",
+    )
     date_evidence: str | None = Field(
         default=None,
         max_length=240,
-        description="Verbatim actual event-date quote, required for create/precise-date changes; do not put this inside fields",
+        description="Optional actual event-date quote; source text is read automatically for create/precise-date changes. Do not put this inside fields",
     )
     date_source_message_id: str | None = Field(default=None, max_length=200)
     fact_evidence: str | None = Field(default=None, max_length=240)

@@ -1,5 +1,7 @@
 # 文档入口
 
+- [工具调用体验与 harness 取舍](TOOL-HARNESS.md)：对照 Codex、OpenCode、Pi，简化参数、自动合并、可修复失败与验证边界。
+
 - [对话布局与流式显示](CHAT-STREAMING.md)：横向工具栏、对话设置、正文／思考／工具事件、草稿目标绑定和验证边界。
 
 - [0.2.5 对话体验、共享 Agent 能力与财务闭环](RELEASE-0.2.5.md)：正式标签触发 GitHub Actions 验证、签名构建及发布；versionCode 7、同签覆盖安装、报告预览与失败重试，实际结果以工作流和发布附件为准。

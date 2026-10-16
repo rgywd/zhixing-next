@@ -19,9 +19,11 @@ Android 正式安装包由 [Android release](../.github/workflows/release.yml) �
 
 签名沿用既有正式证书，仓库 Actions Secrets 使用 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEY_ALIAS`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_PASSWORD`。凭据通过受控标准输入设置，不进入 Git、命令参数或发布附件。构建时仅在 runner 临时目录中以私有权限还原，结束后清理；缺少签名输入会失败。发布步骤使用当前仓库的 `GITHUB_TOKEN`，只授予所需的 `contents: write`。
 
-发布先建立草稿，上传并校验 `zhixing-next-<version>-arm64.apk`、对应 `.apk.build.json` 构建回执及 `SHA256SUMS`，准备完整后再公开 Release。回执包含源码提交、原生版本、ABI、正式签名证书摘要和 APK SHA-256；公开后再次核对下载内容。失败草稿可在同标签工作流中重试；已公开版本保持附件内容，后续修改使用新版本。
+发布先建立草稿，上传并校验 `zhixing-next-<version>-arm64.apk`、对应 `.apk.build.json` 构建回执、`SHA256SUMS` 及 `app-update.json` 更新清单，准备完整后再公开 Release。回执包含源码提交、原生版本、ABI、正式签名证书摘要和 APK SHA-256；公开后再次核对下载内容。失败草稿可在同标签工作流中重试；已公开版本保持附件内容，后续修改使用新版本。
 
-“设置 → 关于 → 检查更新”由用户手动请求公开 GitHub 最新正式 Release，不访问知行服务、不发送访问令牌或个人资料。应用按语义版本比较，展示发布说明并将 APK 下载交给系统浏览器；安装由 Android 系统处理。当前安装包内嵌 JS、未启用 OTA，设置版本来自与原生构建校验一致的 `package.json`。网络失败或 GitHub 限流可重试；只有测试版、暂无正式版或新版本缺少 APK 时显示对应状态。
+“设置 → 关于 → 检查更新”由用户手动触发，使用公开 GitHub API；限流、网络错误或单源超时时自动读取官方 `releases/latest/download/app-update.json`，不访问知行服务、不发送访问令牌或个人资料。成功结果按设备持久缓存 10 分钟，并保留 API 限流冷却；重新检查跳过缓存但避开尚在限流的 API，直接使用官方清单。两种在线来源均不可用时展示已核验缓存及其时间，不把缓存冒称实时最新，并保留 APK 下载按钮。应用按语义版本比较，展示发布说明并将 APK 下载交给系统浏览器；安装由 Android 系统处理。当前安装包内嵌 JS、未启用 OTA，设置版本来自与原生构建校验一致的 `package.json`。API 与清单分别有独立超时。仅从本仓正式版本的固定官方链接下载安装包；缓存损坏忽略，缓存保存失败不影响本次在线结果。只有测试版、暂无正式版或新版本缺少 APK 时显示对应状态。
+
+每次正式发布自动生成 `app-update.json`，包含版本、说明和已验证 APK 的下载地址、大小与摘要；随 APK 一起在草稿中上传并校验，再公开。旧 0.2.5 仅补充同结构更新清单，原正式 APK、回执和 SHA256SUMS 保持原样。该清单不占 REST API 的查询配额，不需要用户设置 GitHub 令牌。
 
 修改发布配置与完成本地验证不等于完成云端发版。只有用户要求的新正式标签实际触发、工作流成功、Release 附件可下载且哈希一致，才记录为 Actions 发布验收；本轮不为测试流程额外创建版本。
 

@@ -243,13 +243,13 @@ class ReleasePublish(ReleaseBuild):
             self.uploads[name] = body
             return {"id": len(self.uploads), "size": len(body), "digest": "sha256:" + ("wrong" if self.wrong_digest else hashlib.sha256(body).hexdigest())}
         if method == "PATCH":
-            self.assertEqual(len(self.uploads), 3)
+            self.assertEqual(len(self.uploads), 4)
             return self.published()
         return None
 
     def published(self):
         return {"id": 1, "draft": False, "assets": [
-            {"name": name, "digest": "sha256:" + hashlib.sha256(body).hexdigest(),
+            {"name": name, "size": len(body), "state": "uploaded", "digest": "sha256:" + hashlib.sha256(body).hexdigest(),
              "browser_download_url": f"https://github.com/{release.REPOSITORY}/releases/download/v0.2.3/{name}"}
             for name, body in self.uploads.items()
         ]}
@@ -266,7 +266,7 @@ class ReleasePublish(ReleaseBuild):
     def test_release_is_draft_until_every_upload_is_verified(self):
         self.publish()
         mutations = [call for call in self.calls if call[0] != "GET"]
-        self.assertEqual([call[0] for call in mutations], ["POST", "POST", "POST", "POST", "PATCH"])
+        self.assertEqual([call[0] for call in mutations], ["POST", "POST", "POST", "POST", "POST", "PATCH"])
         self.assertEqual(mutations[-1][2], {"draft": False, "make_latest": "true"})
 
     def test_failed_upload_keeps_draft_unpublished(self):
@@ -298,7 +298,41 @@ class ReleasePublish(ReleaseBuild):
         self.existing = self.published()
         self.uploads["zhixing-next-0.2.3-arm64.apk"] = b"corrupt"
         self.calls.clear()
-        with self.assertRaisesRegex(release.ReleaseError, "checksum"):
+        with self.assertRaisesRegex(release.ReleaseError, "verification|checksum"):
+            self.publish()
+        self.assertEqual([call[0] for call in self.calls], ["GET"])
+
+    def test_static_manifest_matches_the_signed_apk_and_official_download(self):
+        self.publish()
+        manifest = json.loads(self.uploads[release.UPDATE_MANIFEST])
+        apk_name = "zhixing-next-0.2.3-arm64.apk"
+        self.assertFalse(manifest["draft"])
+        self.assertFalse(manifest["prerelease"])
+        self.assertEqual(manifest["tag_name"], "v0.2.3")
+        self.assertEqual(manifest["html_url"], "https://github.com/rgywd/zhixing-next/releases/tag/v0.2.3")
+        self.assertEqual(manifest["assets"], [{
+            "name": apk_name, "state": "uploaded", "size": len(self.uploads[apk_name]),
+            "browser_download_url": f"https://github.com/rgywd/zhixing-next/releases/download/v0.2.3/{apk_name}",
+            "digest": "sha256:" + hashlib.sha256(self.uploads[apk_name]).hexdigest(),
+        }])
+
+    def test_valid_json_manifest_cannot_point_to_a_different_apk(self):
+        self.publish()
+        manifest = json.loads(self.uploads[release.UPDATE_MANIFEST])
+        manifest["assets"][0]["browser_download_url"] = "https://example.com/untrusted.apk"
+        self.uploads[release.UPDATE_MANIFEST] = json.dumps(manifest).encode()
+        self.existing = self.published()
+        self.calls.clear()
+        with self.assertRaisesRegex(release.ReleaseError, "manifest does not match"):
+            self.publish()
+        self.assertEqual([call[0] for call in self.calls], ["GET"])
+
+    def test_missing_static_manifest_does_not_count_as_a_complete_release(self):
+        self.publish()
+        self.uploads.pop(release.UPDATE_MANIFEST)
+        self.existing = self.published()
+        self.calls.clear()
+        with self.assertRaisesRegex(release.ReleaseError, "incomplete"):
             self.publish()
         self.assertEqual([call[0] for call in self.calls], ["GET"])
 

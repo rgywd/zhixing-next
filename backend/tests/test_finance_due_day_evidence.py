@@ -87,7 +87,7 @@ async def test_explicit_recurring_payment_day_saves_without_user_forms(state, qu
     store, conversation = state
     message = source(store, conversation, quote)
     receipt = await tool(store, conversation, message).ainvoke(
-        {**arguments(12), "date_evidence": quote}
+        arguments(12)
     )
     assert receipt["commitments"][0]["due_day"] == 12
     assert (

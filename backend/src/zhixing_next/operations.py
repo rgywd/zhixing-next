@@ -395,7 +395,11 @@ class OperationRunner:
         try:
             return await self._invoke(call, handler)
         except (OSError, ValueError, StoreError) as exc:
-            result = ToolMessage(content=str(exc)[:2000], tool_call_id=call["id"], status="error")
+            from .tool_errors import safe_tool_failure
+
+            failure = safe_tool_failure(exc, call["name"])
+            content = _json({"error": failure}) if failure is not None else str(exc)[:2000]
+            result = ToolMessage(content=content, tool_call_id=call["id"], status="error")
             identifier = str(uuid5(NAMESPACE_URL, f"{self.run['id']}:{call['id']}"))
             previous = self.journal.operation(identifier)
             if (

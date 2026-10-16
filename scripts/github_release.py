@@ -27,6 +27,7 @@ SECRETS = (
     "ANDROID_KEYSTORE_BASE64", "ANDROID_KEY_ALIAS",
     "ANDROID_STORE_PASSWORD", "ANDROID_KEY_PASSWORD",
 )
+UPDATE_MANIFEST = "app-update.json"
 
 
 class ReleaseError(Exception):
@@ -217,6 +218,22 @@ class GitHub:
             raise ReleaseError("GitHub release request failed; retry this tag run") from None
 
 
+def update_manifest(metadata, *, apk_size, apk_sha256, notes=""):
+    """Public release metadata served by an ordinary asset download, not REST."""
+    tag, version = metadata["tag"], metadata["version"]
+    apk_name = f"zhixing-next-{version}-arm64.apk"
+    return {
+        "tag_name": tag, "draft": False, "prerelease": False,
+        "name": f"知行 Next {version}", "body": notes,
+        "html_url": f"https://github.com/{REPOSITORY}/releases/tag/{tag}",
+        "assets": [{
+            "name": apk_name, "state": "uploaded", "size": apk_size,
+            "browser_download_url": f"https://github.com/{REPOSITORY}/releases/download/{tag}/{apk_name}",
+            "digest": f"sha256:{apk_sha256}",
+        }],
+    }
+
+
 def remote_files(release, metadata, files):
     required = {path.name for path in files}
     assets = {asset["name"]: asset for asset in release.get("assets", [])}
@@ -243,7 +260,9 @@ def remote_files(release, metadata, files):
         with urllib.request.urlopen(assets[name]["browser_download_url"], timeout=120) as response:
             content = response.read()
         digest = hashlib.sha256(content).hexdigest()
-        downloaded[name] = (digest, content if name == "SHA256SUMS" else None)
+        downloaded[name] = (digest, content if name in {"SHA256SUMS", UPDATE_MANIFEST} else None)
+        if assets[name].get("size") != len(content):
+            raise ReleaseError("Published release download size verification failed")
         if assets[name].get("digest") != f"sha256:{digest}":
             raise ReleaseError("Published release download checksum verification failed")
         if name.endswith(".apk") and receipt.get("apk_sha256") != digest:
@@ -252,6 +271,16 @@ def remote_files(release, metadata, files):
     sums = "".join(f"{downloaded[name][0]}  {name}\n" for name in (apk_name, receipt_name))
     if downloaded["SHA256SUMS"][1] != sums.encode():
         raise ReleaseError("Published checksums do not match the APK and build receipt")
+    if UPDATE_MANIFEST in required:
+        manifest = json.loads(downloaded[UPDATE_MANIFEST][1])
+        if not isinstance(manifest, dict) or not isinstance(manifest.get("body"), str):
+            raise ReleaseError("Published update manifest is invalid")
+        expected = update_manifest(
+            metadata, apk_size=assets[apk_name]["size"],
+            apk_sha256=downloaded[apk_name][0], notes=manifest.get("body", ""),
+        )
+        if manifest != expected:
+            raise ReleaseError("Published update manifest does not match the signed APK")
 
 
 def publish(root=ROOT, environ=None, github=None):
@@ -270,6 +299,17 @@ def publish(root=ROOT, environ=None, github=None):
     checksums = "".join(f"{sha256(path)}  {path.name}\n" for path in (apk, receipt_file))
     if checksum_file.read_text() != checksums:
         raise ReleaseError("Release asset checksums do not match")
+    notes_file = root / "docs" / f"RELEASE-{metadata['version']}.md"
+    notes = notes_file.read_text() if notes_file.is_file() else (
+        f"知行 Next {metadata['version']}\n\n"
+        "下载下方 ARM64 APK，可覆盖同签名旧版本，请勿先卸载。\n"
+        "SHA256SUMS 和构建回执随安装包提供。"
+    )
+    manifest_file = directory / UPDATE_MANIFEST
+    manifest_file.write_text(json.dumps(update_manifest(
+        metadata, apk_size=apk.stat().st_size, apk_sha256=sha256(apk), notes=notes,
+    ), ensure_ascii=False, indent=2) + "\n")
+    files.append(manifest_file)
     github = github or GitHub(environ.get("GH_TOKEN", ""))
     prefix = f"/repos/{REPOSITORY}"
     release = github.request("GET", f"{prefix}/releases/tags/{metadata['tag']}")
@@ -278,12 +318,6 @@ def publish(root=ROOT, environ=None, github=None):
         print("This release is already published and its downloads are verified")
         return
     if release is None:
-        notes_file = root / "docs" / f"RELEASE-{metadata['version']}.md"
-        notes = notes_file.read_text() if notes_file.is_file() else (
-            f"知行 Next {metadata['version']}\n\n"
-            "下载下方 ARM64 APK，可覆盖同签名旧版本，请勿先卸载。\n"
-            "SHA256SUMS 和构建回执随安装包提供。"
-        )
         release = github.request("POST", f"{prefix}/releases", {
             "tag_name": metadata["tag"], "target_commitish": metadata["commit"],
             "name": f"知行 Next {metadata['version']}", "body": notes,

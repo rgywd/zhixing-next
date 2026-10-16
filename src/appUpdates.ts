@@ -1,5 +1,10 @@
 export const GITHUB_RELEASES_URL = "https://github.com/rgywd/zhixing-next/releases";
 export const GITHUB_LATEST_RELEASE_API = "https://api.github.com/repos/rgywd/zhixing-next/releases/latest";
+export const GITHUB_UPDATE_MANIFEST = `${GITHUB_RELEASES_URL}/latest/download/app-update.json`;
+export const UPDATE_CACHE_KEY = "zhixing.app-update.v1";
+export const UPDATE_CACHE_TTL_MS = 10 * 60 * 1000;
+export const UPDATE_API_TIMEOUT_MS = 5000;
+export const UPDATE_MANIFEST_TIMEOUT_MS = 8000;
 
 type Semver = { core: number[]; prerelease: string[] };
 const semverPattern = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
@@ -66,32 +71,46 @@ export function readReleaseResponse(value: unknown, currentVersion: string): Upd
 }
 
 const abortError = () => Object.assign(new Error("检查已取消"), { name: "AbortError" });
+const assertActive = (signal?: AbortSignal) => { if (signal?.aborted) throw abortError(); };
+type ReleaseRead = { result: UpdateResult; payload: unknown };
+type ReadOptions = { skipApi?: boolean; onRateLimit?: (retryAt: number) => void; now?: () => number };
 
-/** Public GitHub request: no service connection, Authorization or user credentials. */
-export async function checkGitHubUpdate(currentVersion: string, signal?: AbortSignal, fetcher: typeof fetch = fetch): Promise<UpdateResult> {
-  if (signal?.aborted) throw abortError();
+/** Each source has its own deadline, including response-body parsing. */
+async function readSource(url: string, currentVersion: string, timeoutMs: number, signal: AbortSignal | undefined, fetcher: typeof fetch, options: ReadOptions): Promise<ReleaseRead> {
+  assertActive(signal);
   const controller = new AbortController();
   let rejectInterrupted: (error: Error) => void = () => {};
   const interrupted = new Promise<never>((_resolve, reject) => { rejectInterrupted = reject; });
   const abort = () => { controller.abort(); rejectInterrupted(abortError()); };
   signal?.addEventListener("abort", abort, { once: true });
   let timedOut = false;
-  const timeout = setTimeout(() => { timedOut = true; controller.abort(); rejectInterrupted(new UpdateCheckError("检查更新超时，请检查网络后重试。")); }, 15000);
+  const timeout = setTimeout(() => {
+    timedOut = true; controller.abort(); rejectInterrupted(new UpdateCheckError("检查更新超时，请检查网络后重试。"));
+  }, timeoutMs);
   try {
-    return await Promise.race([interrupted, (async (): Promise<UpdateResult> => {
-      const response = await fetcher(GITHUB_LATEST_RELEASE_API, { headers: { Accept: "application/vnd.github+json" }, credentials: "omit", signal: controller.signal });
-      if (signal?.aborted) throw abortError();
+    return await Promise.race([interrupted, (async (): Promise<ReleaseRead> => {
+      const response = await fetcher(url, { headers: { Accept: url === GITHUB_LATEST_RELEASE_API ? "application/vnd.github+json" : "application/json" }, credentials: "omit", signal: controller.signal });
+      assertActive(signal);
       if (timedOut) throw new UpdateCheckError("检查更新超时，请检查网络后重试。");
-      if (response.status === 404) return { kind: "unpublished" };
-      if (response.status === 403 || response.status === 429) throw new UpdateCheckError("GitHub 暂时限制访问，请稍后重试，或直接查看发布页。");
+      if (response.status === 403 || response.status === 429) {
+        if (url === GITHUB_LATEST_RELEASE_API) {
+          const now = (options.now ?? Date.now)();
+          const reset = Number(response.headers.get("x-ratelimit-reset")) * 1000;
+          const retry = Number(response.headers.get("retry-after")) * 1000;
+          const wait = Math.max(reset - now, retry, 60_000);
+          options.onRateLimit?.(now + Math.min(Number.isFinite(wait) ? Math.max(wait, 15 * 60_000) : 15 * 60_000, 6 * 60 * 60_000));
+        }
+        throw new UpdateCheckError("GitHub 暂时限制访问，请稍后重新检查。");
+      }
+      if (response.status === 404) return { result: { kind: "unpublished" }, payload: null };
       if (!response.ok) throw new UpdateCheckError(`GitHub 暂时无法访问（${response.status}），请稍后重试。`);
       const payload: unknown = await response.json();
-      if (signal?.aborted) throw abortError();
+      assertActive(signal);
       if (timedOut) throw new UpdateCheckError("检查更新超时，请检查网络后重试。");
-      return readReleaseResponse(payload, currentVersion);
+      return { result: readReleaseResponse(payload, currentVersion), payload };
     })()]);
   } catch (error) {
-    if (signal?.aborted) throw abortError();
+    assertActive(signal);
     if (timedOut) throw new UpdateCheckError("检查更新超时，请检查网络后重试。");
     if (error instanceof UpdateCheckError) throw error;
     throw new UpdateCheckError("未能获取 GitHub 版本信息，请检查网络后重试。");
@@ -99,4 +118,121 @@ export async function checkGitHubUpdate(currentVersion: string, signal?: AbortSi
     clearTimeout(timeout);
     signal?.removeEventListener("abort", abort);
   }
+}
+
+async function readLatestRelease(currentVersion: string, signal: AbortSignal | undefined, fetcher: typeof fetch, options: ReadOptions): Promise<ReleaseRead> {
+  let failure: unknown;
+  for (const [url, timeout] of options.skipApi ? [[GITHUB_UPDATE_MANIFEST, UPDATE_MANIFEST_TIMEOUT_MS]] as const
+    : [[GITHUB_LATEST_RELEASE_API, UPDATE_API_TIMEOUT_MS], [GITHUB_UPDATE_MANIFEST, UPDATE_MANIFEST_TIMEOUT_MS]] as const) {
+    try {
+      const read = await readSource(url, currentVersion, timeout, signal, fetcher, options);
+      if (read.result.kind !== "unpublished") return read;
+    } catch (error) { assertActive(signal); failure ??= error; }
+  }
+  if (failure) throw failure;
+  return { result: { kind: "unpublished" }, payload: null };
+}
+
+/** Public official sources only; fallback assets do not use the REST API quota. */
+export async function checkGitHubUpdate(currentVersion: string, signal?: AbortSignal, fetcher: typeof fetch = fetch): Promise<UpdateResult> {
+  return (await readLatestRelease(currentVersion, signal, fetcher, {})).result;
+}
+
+export type CheckedUpdate = { result: UpdateResult; verifiedAt: number; source: "network" | "cache"; offline: boolean; cacheSaved: boolean };
+type UpdateStore = { getItem(key: string): Promise<string | null>; setItem(key: string, value: string): Promise<unknown> };
+type CacheRecord = { schema: 1; apiRetryAt: number; verifiedAt: number | null; release: unknown };
+
+/** Persist only bounded, validated public release metadata, never connection or account data. */
+function releasePayload(release: AppRelease, payload: unknown) {
+  const tag = release.url.slice(`${GITHUB_RELEASES_URL}/tag/`.length);
+  const name = `zhixing-next-${release.version}-arm64.apk`;
+  const asset = object(payload) && Array.isArray(payload.assets) ? payload.assets.find((item) => object(item) && item.name === name
+    && item.state === "uploaded" && typeof item.size === "number" && Number.isSafeInteger(item.size) && item.size > 0 && item.browser_download_url === release.apkUrl) : null;
+  return { tag_name: tag, draft: false, prerelease: false, html_url: release.url, name: release.name, body: release.notes,
+    assets: release.apkUrl && object(asset) ? [{ name, state: "uploaded", size: asset.size, browser_download_url: release.apkUrl }] : [] };
+}
+
+export function createAppUpdateChecker(store: UpdateStore, fetcher: typeof fetch = fetch, now: () => number = Date.now) {
+  let record: CacheRecord = { schema: 1, apiRetryAt: 0, verifiedAt: null, release: null };
+  let loaded: Promise<void> | null = null;
+  let writes = Promise.resolve();
+  let cacheSaved = true;
+  const jobs = new Map<string, { controller: AbortController; promise: Promise<CheckedUpdate>; readers: number }>();
+  async function load() {
+    loaded ??= (async () => {
+      try {
+        const raw = await store.getItem(UPDATE_CACHE_KEY);
+        if (!raw || raw.length > 24_000) return;
+        const value: unknown = JSON.parse(raw);
+        if (!object(value) || value.schema !== 1 || typeof value.apiRetryAt !== "number" || !Number.isFinite(value.apiRetryAt)) return;
+        record.apiRetryAt = value.apiRetryAt > now() && value.apiRetryAt <= now() + 6 * 60 * 60_000 ? value.apiRetryAt : 0;
+        if (typeof value.verifiedAt !== "number" || !Number.isSafeInteger(value.verifiedAt) || value.verifiedAt <= 0 || value.verifiedAt > now() + 60_000) return;
+        const parsed = readReleaseResponse(value.release, "0.0.0");
+        if (parsed.kind !== "unpublished" && parsed.release.apkUrl) record = { ...record, verifiedAt: value.verifiedAt, release: releasePayload(parsed.release, value.release) };
+      } catch { /* A damaged or unavailable cache must not prevent an online check. */ }
+    })();
+    await loaded;
+  }
+  async function persist() {
+    const snapshot = JSON.stringify(record);
+    const saving = writes.then(() => store.setItem(UPDATE_CACHE_KEY, snapshot)).then(() => true, () => false);
+    writes = saving.then(() => {});
+    cacheSaved = await saving;
+    return cacheSaved;
+  }
+  async function perform(currentVersion: string, signal: AbortSignal, force: boolean): Promise<CheckedUpdate> {
+    await load(); assertActive(signal);
+    const cachedAt = record.verifiedAt;
+    const cachedResult = cachedAt && record.release ? readReleaseResponse(record.release, currentVersion) : null;
+    const cached = (offline: boolean): CheckedUpdate => ({ result: cachedResult!, verifiedAt: cachedAt!, source: "cache", offline, cacheSaved });
+    if (!force && cachedResult && now() - record.verifiedAt! < UPDATE_CACHE_TTL_MS) return cached(false);
+    try {
+      const read = await readLatestRelease(currentVersion, signal, fetcher, { now, skipApi: record.apiRetryAt > now(),
+        onRateLimit: (retryAt) => { record.apiRetryAt = retryAt; } });
+      assertActive(signal);
+      const verifiedAt = now();
+      if (read.result.kind !== "unpublished" && read.result.release.apkUrl) {
+        record = { ...record, verifiedAt, release: releasePayload(read.result.release, read.payload) };
+      }
+      const cacheSaved = await persist(); assertActive(signal);
+      return { result: read.result, verifiedAt, source: "network", offline: false, cacheSaved };
+    } catch (error) {
+      assertActive(signal);
+      await persist(); assertActive(signal);
+      if (cachedResult) return cached(true);
+      throw error;
+    }
+  }
+  return {
+    check(currentVersion: string, signal?: AbortSignal, force = false): Promise<CheckedUpdate> {
+      assertActive(signal);
+      let job = jobs.get(currentVersion);
+      if (!job) {
+        const controller = new AbortController();
+        const promise = perform(currentVersion, controller.signal, force);
+        job = { controller, promise, readers: 0 };
+        jobs.set(currentVersion, job);
+        const ownJob = job;
+        void promise.finally(() => { if (jobs.get(currentVersion) === ownJob) jobs.delete(currentVersion); }).catch(() => {});
+      }
+      const shared = job;
+      shared.readers++;
+      return new Promise<CheckedUpdate>((resolve, reject) => {
+        let complete = false;
+        const finish = (result: CheckedUpdate | null, error?: unknown) => {
+          if (complete) return;
+          complete = true; signal?.removeEventListener("abort", abort);
+          shared.readers--;
+          if (!shared.readers) {
+            shared.controller.abort();
+            if (jobs.get(currentVersion) === shared) jobs.delete(currentVersion);
+          }
+          if (error) reject(error); else resolve(result!);
+        };
+        const abort = () => finish(null, abortError());
+        signal?.addEventListener("abort", abort, { once: true });
+        shared.promise.then((result) => finish(result), (error) => finish(null, error));
+      });
+    },
+  };
 }

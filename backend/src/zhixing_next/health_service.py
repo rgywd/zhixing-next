@@ -315,17 +315,26 @@ class HealthService:
             db.execute("INSERT INTO health_mutations VALUES(?,?,?)", (operation_key, request, _json(result)))
         return result
 
-    def _set_singleton(self, kind, data, *, operation_key=None):
-        payload = self._validate(ProfileInput if kind == "profile" else RemindersInput, data)
-        revision = payload.pop("revision")
-        serialized = _json(payload)
-        request = _json({"kind": kind, "data": data})
+    def _set_singleton(self, kind, data, *, operation_key=None, patch=False):
+        if not isinstance(data, dict):
+            raise _error("Provide the fields to change as an object")
+        request_fields = {"kind": kind, "data": data}
+        if patch:
+            request_fields["patch"] = True
+        request = _json(request_fields)
         with self.store._connection(write=True) as db:
             replay = self._replay(db, operation_key, request)
             if replay is not None:
                 return replay
             state = self._state(db)
             current = state[f"{kind}_revision"]
+            fields = ({**json.loads(state[f"{kind}_json"]), "revision": current, **data}
+                      if patch else data)
+            payload = self._validate(ProfileInput if kind == "profile" else RemindersInput, fields)
+            revision = payload.pop("revision")
+            serialized = _json(payload)
+            if patch and revision != current:
+                raise _error("This setting changed; reload it before saving", "revision_conflict", 409)
             if serialized == state[f"{kind}_json"]:
                 return self._receipt(db, operation_key, request, {**payload, "revision": current})
             if revision is None or revision != current:
@@ -340,6 +349,13 @@ class HealthService:
 
     def set_reminders(self, data, *, operation_key=None):
         return self._set_singleton("reminders", data, operation_key=operation_key)
+
+    def patch_profile(self, changes, *, operation_key=None):
+        """AI changes preserve omitted restrictions; merge and revision are atomic."""
+        return self._set_singleton("profile", changes, operation_key=operation_key, patch=True)
+
+    def patch_reminders(self, changes, *, operation_key=None):
+        return self._set_singleton("reminders", changes, operation_key=operation_key, patch=True)
 
     @staticmethod
     def _entry_date(kind, payload):
@@ -455,15 +471,15 @@ class HealthService:
                 return self._recommendation(db, result)
             return self._weight(result) if kind == "weights" else result
 
-    def update(self, kind, identifier, data, *, operation_key=None):
+    def update(self, kind, identifier, data, *, operation_key=None, patch=False):
         if kind not in {"rules", "meals", "weights", "steps"}:
             raise _error("This health record cannot be edited")
-        payload = self._validate(_MODELS[kind], data)
-        supplied_id = payload.pop("id")
-        if supplied_id and supplied_id != identifier:
-            raise _error("The record ID cannot change")
-        revision = payload.pop("revision")
-        request = _json({"kind": kind, "id": identifier, "data": data})
+        if not isinstance(data, dict):
+            raise _error("Provide the fields to change as an object")
+        request_fields = {"kind": kind, "id": identifier, "data": data}
+        if patch:
+            request_fields["patch"] = True
+        request = _json(request_fields)
         with self.store._connection(write=True) as db:
             replay = self._replay(db, operation_key, request)
             if replay is not None:
@@ -471,6 +487,15 @@ class HealthService:
             current = self._require(db, kind, identifier)
             current_payload = {key: value for key, value in current.items()
                                if key not in {"id", "revision", "created_at", "updated_at"}}
+            fields = ({**current_payload, "revision": current["revision"], **data}
+                      if patch else data)
+            payload = self._validate(_MODELS[kind], fields)
+            supplied_id = payload.pop("id")
+            if supplied_id and supplied_id != identifier:
+                raise _error("The record ID cannot change")
+            revision = payload.pop("revision")
+            if patch and revision != current["revision"]:
+                raise _error("This record changed; reload it before correcting", "revision_conflict", 409)
             # Preserve provenance unless explicitly supplied.
             for field in ("source_id", "conversation_id"):
                 if payload[field] is None:
@@ -488,7 +513,10 @@ class HealthService:
             result = self._weight(result) if kind == "weights" else result
             return self._receipt(db, operation_key, request, result)
 
-    def delete(self, kind, identifier, revision, *, operation_key=None):
+    def patch_record(self, kind, identifier, changes, *, operation_key=None):
+        return self.update(kind, identifier, changes, operation_key=operation_key, patch=True)
+
+    def delete(self, kind, identifier, revision=None, *, operation_key=None):
         if kind not in {"rules", "meals", "weights", "steps"}:
             raise _error("This health record cannot be deleted")
         request = _json({"kind": kind, "id": identifier, "revision": revision})
@@ -500,7 +528,7 @@ class HealthService:
             current = self._row(row)
             if row["deleted"]:
                 return self._receipt(db, operation_key, request, {"id": identifier, "deleted": True})
-            if revision != current["revision"]:
+            if revision is not None and revision != current["revision"]:
                 raise _error("This record changed; reload it before deleting", "revision_conflict", 409)
             db.execute(f"UPDATE {_TABLES[kind]} SET deleted=1,revision=revision+1,updated_at=? WHERE id=?", (_now(), identifier))
             self._bump(db)

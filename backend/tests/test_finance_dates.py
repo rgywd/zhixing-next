@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from test_runtime import ScriptedModel, ignore, make_settings, no_controls
 
+from zhixing_next.finance_dates import normalize_history_range
 from zhixing_next.finance_service import FinanceService
 from zhixing_next.finance_tools import create_finance_service_tools
 from zhixing_next.runtime import run_agent
@@ -174,7 +175,7 @@ async def test_relative_date_is_bound_to_original_message_clock_not_replay_clock
     assert result["occurred_on"] == "2026-04-09"
 
 
-async def test_range_to_day_correction_needs_actual_event_quote_but_amount_change_does_not(setup):
+async def test_range_to_day_correction_reads_actual_event_source_without_repeated_quote(setup):
     store, conversation = setup
     service = FinanceService(store)
     original = service.create_transaction(
@@ -193,11 +194,7 @@ async def test_range_to_day_correction_needs_actual_event_quote_but_amount_chang
         "entry_key": "actual-date",
         "changes": {"occurred_on": "2026-04-09"},
     }
-    with pytest.raises(StoreError):
-        await available["correct_finance_transaction"].ainvoke(args)
-    corrected = await available["correct_finance_transaction"].ainvoke(
-        {**args, "date_evidence": "这次四月九交的"}
-    )
+    corrected = await available["correct_finance_transaction"].ainvoke(args)
     assert corrected["date_precision"] == "day"
     assert (
         await available["correct_finance_transaction"].ainvoke(
@@ -374,6 +371,192 @@ async def test_partial_range_end_correction_does_not_become_false_single_day(set
     )
     assert result["date_precision"] == "range" and result["date_start"] == "2026-03-01"
     assert result["date_end"] == result["occurred_on"] == "2026-04-09"
+
+
+@pytest.mark.parametrize("content,category", [
+    ("今天午饭32元", "午饭"), ("今天打车32元", "交通"),
+    ("今天订阅32", "订阅"), ("4月9日电影票32元", "娱乐"),
+])
+@pytest.mark.parametrize("hint", [None, "今天这笔消费"])
+async def test_current_explicit_transactions_need_no_repeated_verbatim_quote(setup, content, category, hint):
+    store, conversation = setup
+    source = user(store, conversation, content)
+    result = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category=category, date_evidence=hint)
+    )
+    assert result["date_verification"]["source_message_id"] == source
+    assert result["occurred_on"] == "2026-04-09"
+
+
+@pytest.mark.parametrize("category,content", [
+    ("图书", "4月9日打车32元，之前买书32元记一下"),
+    ("买书", "4月9日打车32元，之前买书32元记一下"),
+    ("手机", "4月9日买手机32元，之前还买过一部手机32元但日期不清楚"),
+    ("其他", "4月9日打车32元，之前订阅32元记一下"),
+])
+@pytest.mark.parametrize("cropped_hint", [False, True])
+async def test_equal_amount_events_cannot_lend_a_date_to_undated_history(setup, category, content, cropped_hint):
+    store, conversation = setup
+    source = user(store, conversation, content)
+    hint = content.split("，")[0] if cropped_hint else None
+    with pytest.raises(StoreError) as error:
+        await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+            fields(category=category, date_evidence=hint)
+        )
+    assert error.value.code == "unverified_finance_date"
+    assert FinanceService(store).list_transactions(month="2026-04")["total"] == 0
+
+
+@pytest.mark.parametrize("separator", ["、", "以及", "还有", " ", ""])
+@pytest.mark.parametrize("hint", [None, "4月9日打车32元"])
+async def test_unseparated_equal_amount_events_cannot_borrow_a_date(setup, separator, hint):
+    store, conversation = setup
+    source = user(store, conversation, f"4月9日打车32元{separator}之前买书32元记一下")
+    with pytest.raises(StoreError) as error:
+        await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+            fields(category="图书", date_evidence=hint)
+        )
+    assert error.value.code == "unverified_finance_date"
+    assert FinanceService(store).list_transactions(month="2026-04")["total"] == 0
+
+
+async def test_separable_enumerated_equal_amount_events_can_bind_to_their_own_dates(setup):
+    store, conversation = setup
+    source = user(store, conversation, "4月9日打车32元、昨天买书32元")
+    book = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category="买书", occurred_on="2026-04-08")
+    )
+    assert book["occurred_on"] == "2026-04-08"
+
+
+async def test_equal_amount_events_with_explicit_subject_binding_keep_their_own_dates(setup):
+    store, conversation = setup
+    source = user(store, conversation, "4月9日打车32元，昨天买书32元")
+    available = tools(store, conversation, source)["record_finance_transaction"]
+    taxi = await available.ainvoke(fields(category="打车"))
+    book = await available.ainvoke(fields(category="买书", occurred_on="2026-04-08", entry_key="book"))
+    assert taxi["occurred_on"] == "2026-04-09" and book["occurred_on"] == "2026-04-08"
+
+
+async def test_automatic_quote_receipt_is_bounded_without_truncating_validation(setup):
+    store, conversation = setup
+    content = "一些背景说明。" * 60 + "今天打车32元"
+    source = user(store, conversation, content)
+    receipt = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category="打车")
+    )
+    assert receipt["occurred_on"] == "2026-04-09"
+    assert len(receipt["date_verification"]["quote"]) == 240
+    assert receipt["date_verification"]["quote_truncated"]
+
+
+@pytest.mark.parametrize("precision,text,expected", [
+    ("day", "今天打车32元", "2026-04-09"),
+    ("month", "3月订阅32元", "2026-03-01"),
+])
+async def test_tool_resolves_omitted_unambiguous_date_from_actual_input(setup, precision, text, expected):
+    store, conversation = setup
+    source = user(store, conversation, text)
+    result = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category="交通", occurred_on=None, date_precision=precision)
+    )
+    assert result["date_start"] == expected
+
+
+async def test_historical_message_id_is_enough_without_copying_quote(setup):
+    store, conversation = setup
+    historical = user(store, conversation, "3月手机1200元", created_at="2026-04-09T07:00:00Z")
+    current = user(store, conversation, "把之前这笔手机支出记上")
+    result = await tools(store, conversation, current)["record_finance_transaction"].ainvoke(
+        fields(category="手机", amount="1200", occurred_on=None, date_precision="month",
+               date_start="2026-03", date_source_message_id=historical)
+    )
+    assert result["date_verification"]["source_message_id"] == historical
+    assert result["date_start"] == "2026-03-01"
+
+
+async def test_unsupported_exact_date_gives_known_range_without_dating_purchase(setup):
+    import json
+
+    store, conversation = setup
+    source = user(store, conversation, "3月2日资产6000，到现在资产7000。历史大件手机1200。")
+    with pytest.raises(StoreError) as error:
+        await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+            fields(category="手机", amount="1200")
+        )
+    suggestion = json.loads(str(error.value).split("suggested_fields=", 1)[1])
+    assert suggestion == {"date_precision": "range", "date_start": "2026-03-02",
+                          "date_end": "2026-04-09", "occurred_on": None}
+    result = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category="手机", amount="1200", **suggestion)
+    )
+    assert result["date_precision"] == "range"
+
+
+def test_history_range_keeps_real_span_instead_of_deriving_months_from_counts(setup):
+    store, conversation = setup
+    source = user(store, conversation,
+                  "8月5日资产6000，到现在发了两个月工资加公积金提取，各自两笔。九月到11月房租5100。",
+                  created_at="2026-10-15T07:00:00Z")
+    original = {"kind": "transfer", "category": "公积金提取", "amount": "200",
+                "date_precision": "range", "date_start": "2026-09-01", "date_end": "2026-10-15",
+                "occurred_on": "2026-10-15", "note": "9月至今提取两次"}
+    normalized = normalize_history_range(store, source_id=source, fields=original)
+    assert normalized == {**original, "date_start": "2026-08-05", "occurred_on": None}
+    assert original["date_start"] == "2026-09-01"
+    # A later request may select a real historical source; no copied quote or
+    # model-authored note can grant another narrower period.
+    current = user(store, conversation, "请整理之前的记录")
+    assert normalize_history_range(store, source_id=current, fields=original,
+                                   evidence_source_id=source) == normalized
+
+
+@pytest.mark.parametrize("statement,end", [
+    ("9月10日提取公积金200元", "2026-10-15"),
+    ("9月1日到9月20日期间提取公积金200元", "2026-09-20"),
+    ("9月提取公积金200元", "2026-09-30"),
+    ("9月1日至今提取公积金200元", "2026-10-15"),
+])
+def test_history_range_preserves_source_bound_actual_event_periods(setup, statement, end):
+    store, conversation = setup
+    source = user(store, conversation, f"8月5日资产6000，到现在资产7000。{statement}。",
+                  created_at="2026-10-15T07:00:00Z")
+    original = {"category": "公积金提取", "amount": "200", "date_precision": "range",
+                "date_start": "2026-09-01", "date_end": end}
+    assert normalize_history_range(store, source_id=source, fields=original) == original
+
+
+@pytest.mark.parametrize("statement", [
+    "公积金提取两次。9月10日付房租200元",
+    "9月到11月覆盖的公积金提取金额200元",
+    "公积金每月9月10日提取200元",
+    "9月至今提取公积金200元",
+])
+def test_history_range_does_not_borrow_coverage_rules_or_truncate_until_now(setup, statement):
+    store, conversation = setup
+    source = user(store, conversation, f"8月5日资产6000，到现在资产7000。{statement}。",
+                  created_at="2026-10-15T07:00:00Z")
+    original = {"category": "公积金提取", "amount": "200", "date_precision": "range",
+                "date_start": "2026-09-01", "date_end": "2026-09-30"}
+    normalized = normalize_history_range(store, source_id=source, fields=original)
+    assert (normalized["date_start"], normalized["date_end"]) == ("2026-08-05", "2026-10-15")
+
+
+def test_history_range_normalization_requires_real_source_and_explicit_whole_span(setup):
+    store, conversation = setup
+    original = {"category": "公积金提取", "amount": "200", "date_precision": "range",
+                "date_start": "2026-09-01", "date_end": "2026-10-15"}
+    no_span = user(store, conversation, "之前提取过两次公积金", created_at="2026-10-15T07:00:00Z")
+    assistant = user(store, conversation, "8月5日到现在提取了公积金", role="assistant",
+                     created_at="2026-10-15T07:00:00Z")
+    for source in (None, "missing", no_span, assistant):
+        assert normalize_history_range(store, source_id=source, fields=original) is original
+    valid = user(store, conversation, "8月5日资产6000，到现在提取过公积金",
+                 created_at="2026-10-15T07:00:00Z")
+    for change in ({"date_precision": "day"}, {"date_precision": "month"},
+                   {"date_end": "2026-09-01"}, {"date_start": None}):
+        unchanged = {**original, **change}
+        assert normalize_history_range(store, source_id=valid, fields=unchanged) is unchanged
 
 
 @pytest.mark.parametrize("agent_id", [None, "finance"])
