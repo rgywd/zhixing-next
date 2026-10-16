@@ -138,8 +138,12 @@ def _event_clause(clause, fields):
     """
     if _EVENT.search(clause):
         return True
+    return _same_amount(clause, fields.get("amount"))
+
+
+def _same_amount(clause, value):
     try:
-        amount = Decimal(str(fields.get("amount", "")))
+        amount = Decimal(str(value))
     except InvalidOperation:
         return False
     return any(
@@ -244,9 +248,35 @@ def verify_date_evidence(
         for index, aliases in enumerate(_SUBJECTS)
         if any(re.sub(r"\s", "", alias).casefold() in subject for alias in aliases)
     }
+    contexts = list(re.finditer(r"[^，,。；;\n]+", row["content"]))
+    amount_contexts = [
+        match for match in contexts
+        if not _NON_EVENT.search(match.group()) and _same_amount(match.group(), effective.get("amount"))
+    ]
+    bound_contexts = None
+    if len(amount_contexts) > 1:
+        # Equal amounts cannot identify which event a date belongs to. Bind
+        # using the original subject text, independently of any cropped quote.
+        # If that subject also has an undated event, narrowing either occurrence
+        # needs more information; an amount match must never borrow its date.
+        bound_contexts = {
+            match.start() for match in amount_contexts
+            if (len(subject) > 1 and subject in re.sub(r"\s", "", match.group()).casefold())
+            or any(
+                any(alias.casefold() in match.group().casefold() for alias in _SUBJECTS[index])
+                for index in target_subjects
+            )
+        }
+        if not bound_contexts or any(
+            match.start() in bound_contexts
+            and not _dates(match.group(), reference)
+            and not (precision == "month" and re.search(r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})月", match.group()))
+            for match in amount_contexts
+        ):
+            fail("Several equal-amount events have no unambiguous subject/date binding. Keep their known period; a date on another event cannot narrow undated history.")
     clauses = []
     previous_subjects = set()
-    for match in re.finditer(r"[^，,。；;\n]+", row["content"]):
+    for match in contexts:
         context = match.group()
         context_subjects = {
             index
@@ -256,6 +286,8 @@ def verify_date_evidence(
         prior_subjects = previous_subjects
         previous_subjects = context_subjects
         if _NON_EVENT.search(context):
+            continue
+        if bound_contexts is not None and match.start() not in bound_contexts:
             continue
         if target_subjects and context_subjects and not target_subjects & context_subjects:
             continue
@@ -319,7 +351,8 @@ def verify_date_evidence(
         effective = value[:7]
     return {
         "source_message_id": row["id"],
-        "quote": quote,
+        "quote": quote[:240],
+        "quote_truncated": len(quote) > 240,
         "value": effective,
         "basis": "user_stated_event_date",
         "message_business_date": reference.isoformat(),
@@ -481,7 +514,8 @@ def verify_budget_due_days(
                 "key": item["key"],
                 "due_day": item["due_day"],
                 "source_message_id": row["id"],
-                "quote": quote,
+                "quote": quote[:240],
+                "quote_truncated": len(quote) > 240,
                 "basis": "user_stated_recurring_payment_day",
             }
         )

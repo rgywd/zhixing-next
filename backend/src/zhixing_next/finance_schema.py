@@ -147,6 +147,10 @@ class BatchOperation(FinanceInput):
 
 
 class AIBatchOperation(BatchOperation):
+    entry_key: str | None = Field(
+        default=None, max_length=200,
+        description="Optional item label; the outer batch entry_key controls atomic replay.",
+    )
     date_evidence: str | None = Field(
         default=None,
         max_length=240,

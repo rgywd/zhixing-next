@@ -387,6 +387,46 @@ async def test_current_explicit_transactions_need_no_repeated_verbatim_quote(set
     assert result["occurred_on"] == "2026-04-09"
 
 
+@pytest.mark.parametrize("category,content", [
+    ("图书", "4月9日打车32元，之前买书32元记一下"),
+    ("买书", "4月9日打车32元，之前买书32元记一下"),
+    ("手机", "4月9日买手机32元，之前还买过一部手机32元但日期不清楚"),
+    ("其他", "4月9日打车32元，之前订阅32元记一下"),
+])
+@pytest.mark.parametrize("cropped_hint", [False, True])
+async def test_equal_amount_events_cannot_lend_a_date_to_undated_history(setup, category, content, cropped_hint):
+    store, conversation = setup
+    source = user(store, conversation, content)
+    hint = content.split("，")[0] if cropped_hint else None
+    with pytest.raises(StoreError) as error:
+        await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+            fields(category=category, date_evidence=hint)
+        )
+    assert error.value.code == "unverified_finance_date"
+    assert FinanceService(store).list_transactions(month="2026-04")["total"] == 0
+
+
+async def test_equal_amount_events_with_explicit_subject_binding_keep_their_own_dates(setup):
+    store, conversation = setup
+    source = user(store, conversation, "4月9日打车32元，昨天买书32元")
+    available = tools(store, conversation, source)["record_finance_transaction"]
+    taxi = await available.ainvoke(fields(category="打车"))
+    book = await available.ainvoke(fields(category="买书", occurred_on="2026-04-08", entry_key="book"))
+    assert taxi["occurred_on"] == "2026-04-09" and book["occurred_on"] == "2026-04-08"
+
+
+async def test_automatic_quote_receipt_is_bounded_without_truncating_validation(setup):
+    store, conversation = setup
+    content = "一些背景说明。" * 60 + "今天打车32元"
+    source = user(store, conversation, content)
+    receipt = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category="打车")
+    )
+    assert receipt["occurred_on"] == "2026-04-09"
+    assert len(receipt["date_verification"]["quote"]) == 240
+    assert receipt["date_verification"]["quote_truncated"]
+
+
 @pytest.mark.parametrize("precision,text,expected", [
     ("day", "今天打车32元", "2026-04-09"),
     ("month", "3月订阅32元", "2026-03-01"),

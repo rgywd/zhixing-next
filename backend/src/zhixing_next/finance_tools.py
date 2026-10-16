@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+from decimal import ROUND_HALF_UP, Decimal
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
@@ -19,7 +20,7 @@ from .finance_schema import (
     RecordArguments,
     TransactionChanges,
 )
-from .finance_service import FinanceService
+from .finance_service import FinanceService, _money
 
 FINANCE_TOOL_NAMES = [
     "get_finance_summary",
@@ -56,6 +57,10 @@ class ReconcileArguments(FinanceInput):
 
 
 class FinanceReportArguments(FinanceInput):
+    entry_key: str | None = Field(
+        default=None, max_length=200,
+        description="Optional compatibility label; report replay is derived automatically from actual source and scope.",
+    )
     start_date: str | None = None
     end_date: str | None = None
     opening_assets: str | None = None
@@ -91,6 +96,17 @@ def _changes(value, legacy, schema):
         return schema.model_validate(raw).model_dump(exclude_unset=True)
     except (ValueError, TypeError) as exc:
         raise StoreError("invalid_finance_record", f"Invalid changes: {exc}", 422) from None
+
+
+def _canonical_ai_dates(fields):
+    """Precision and explicit range/month bounds outrank a redundant day hint."""
+    fields = dict(fields)
+    precision = fields.get("date_precision")
+    if fields.get("date_start") and (
+        precision == "month" or (precision == "range" and fields.get("date_end"))
+    ):
+        fields["occurred_on"] = None
+    return fields
 
 
 def create_finance_service_tools(
@@ -144,6 +160,10 @@ def create_finance_service_tools(
         fact_source_message_id: str | None = None,
     ) -> dict:
         """Record explicit CNY cash flow with stable distinct entry_key. Exact day: occurred_on YYYY-MM-DD. Month-only: date_precision=month,date_start=YYYY-MM. Uncertain range: date_precision=range,date_start/date_end YYYY-MM-DD. Never invent today. coverage_start/end are YYYY-MM costs covered by a payment. Withdrawals of provident funds, deposits or returned principal are existing-asset transfer, never income; new external earnings/contributions are income. A count of past payments does not prove months: preserve the user's stated whole period as range. Precise day/month or same-day range is verified automatically from the bound real user message; date_evidence is an optional hint, never required; do not use an asset observation date, review cutoff, cost coverage or recurring rule. Refund references an expense. aggregate is an explicit cumulative total with period_start."""
+        occurred_on = _canonical_ai_dates({
+            "date_precision": date_precision, "date_start": date_start,
+            "date_end": date_end, "occurred_on": occurred_on,
+        })["occurred_on"]
         fact_proof = verify_income_facts(
             service.store,
             source_id=actual_source(),
@@ -212,7 +232,7 @@ def create_finance_service_tools(
         fact_source_message_id: str | None = None,
     ) -> dict:
         """Correct an existing ID with structured changes object, e.g. changes={amount:'42'}. Read ID/revision first. Do not place amount at top level. Unknown fields are rejected. Legacy changes_json is accepted instead of changes, never together. Keep entry_key stable across retry. Precise date changes are verified from the actual current input automatically; optional date_source_message_id selects a retrieved historical user message and date_evidence is only a hint; other non-date changes need no new evidence."""
-        fields = _changes(changes, changes_json, TransactionChanges)
+        fields = _canonical_ai_dates(_changes(changes, changes_json, TransactionChanges))
         if not fields:
             raise StoreError(
                 "invalid_finance_record", "At least one changed field is required", 422
@@ -267,6 +287,12 @@ def create_finance_service_tools(
     ) -> dict:
         """Patch only user-mentioned budget fields for YYYY-MM. Structured changes supports expected_income,savings_target,daily_budget,income_schedule,coverage_start/through,commitments_upsert,commitment_keys_remove,clear_fields. Missing fields inherit. Null is rejected: explicit clearing names clear_fields. New/changed due_day is automatically checked against the user's explicit recurring rule in current input; date_evidence is optional and date_source_message_id may select retrieved history. One actual payment date, covered months or balance date do not establish a recurring day. Omit unknown due_day; never guess the 1st or ask for a date form. Unchanged existing due_day needs no new proof. Commitment amount is actual due cash; every_months/anchor_month/due_day define cycle, monthly_cost is amount/every_months rounded to cents, paid_through marks explicitly paid coverage. Reuse existing same-purpose keys when changing cycle/amount, or explicitly remove old keys in the same patch. Only clearly independent costs may list separate_from_keys; purpose is an optional stable expense identity. recurring=false overrides only changed fields for that month. Legacy changes_json is accepted instead of changes; legacy commitments list is safe keyed upsert, never implicit deletion."""
         fields = _changes(changes, changes_json, BudgetChanges)
+        for name in ("commitments", "commitments_upsert"):
+            for item in fields.get(name) or []:
+                if item.get("monthly_cost") is not None:
+                    item["monthly_cost"] = str((
+                        Decimal(_money(item["amount"])) / item.get("every_months", 1)
+                    ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
         mutation_key = key("budget", entry_key)
         with service.store._connection() as db:
             replay = (
@@ -306,6 +332,10 @@ def create_finance_service_tools(
         ]
         proofs, fact_proofs = [], []
         for operation in values:
+            # Common per-item labels do not replace the batch's stable receipt.
+            operation.pop("entry_key", None)
+            if operation.get("fields") is not None:
+                operation["fields"] = _canonical_ai_dates(operation["fields"])
             evidence = operation.pop("date_evidence", None)
             evidence_source_id = operation.pop("date_source_message_id", None)
             fact_evidence = operation.pop("fact_evidence", None)
@@ -425,6 +455,7 @@ def create_finance_service_tools(
             approximate: bool = True,
             filename: str = "财务回顾.md",
             period_evidence: str | None = None,
+            entry_key: str | None = None,
         ) -> dict:
             """Deliver a verified finance report as a real attachment from a fresh ledger snapshot. Optional dates/assets default to the latest verified report in THIS conversation; model arguments cannot shrink that scope unless the actual current user explicitly requests new report dates/month. Optional period_evidence quotes that current request. Current real balance updates replace stale observations. Without prior context use supplied dates or the known ledger range. No content/title input, no user form. Transfers are excluded from income and differences are not new consumption. Finish required reads/calculations BEFORE publishing; after success provide only requested user analysis and the attachment, not repeated calculate calls."""
             arguments = {
