@@ -93,6 +93,18 @@ class ChildLedger:
         return dict(row)
 
     @staticmethod
+    def can_send(row):
+        if row["status"] in {"queued", "running", "completed"}:
+            return True
+        if row["status"] != "failed" or row["error_code"] != "research_limit_with_summary" or not row["result"]:
+            return False
+        try:
+            history = _decode_history(row["history_json"])
+            return isinstance(history, list) and bool(history)
+        except Exception:
+            return False
+
+    @staticmethod
     def public(row, *, result_offset=0):
         if type(result_offset) is not int or result_offset < 0:
             raise StoreError("invalid_result_offset", "result_offset must be a nonnegative integer.", 422)
@@ -101,6 +113,7 @@ class ChildLedger:
         end = result_offset + RESULT_WINDOW
         return {key: row[key] for key in ("id", "name", "status", "error_code", "result_version")} | {
             "agent_id": row["id"], "stopped": row["status"] not in ACTIVE,
+            "can_send": ChildLedger.can_send(row),
             "result": result[result_offset:end] if result is not None else None,
             "result_offset": result_offset, "result_length": length,
             "result_truncated": end < length,
@@ -156,11 +169,11 @@ class ChildLedger:
                 if old["content"] != message:
                     raise StoreError("child_delivery_conflict", "This send call already delivered a different instruction.")
                 return dict(old), False
-            if child["status"] in {"closed", "closing", "interrupted", "failed"}:
-                raise StoreError("child_unavailable", "This agent has stopped and cannot accept instructions. Start a new research agent.", 422)
+            if not self.can_send(child):
+                raise StoreError("child_unavailable", "This agent has stopped and cannot accept instructions (can_send=false). Use its saved result or start a new research agent.", 422)
             db.execute("INSERT INTO agent_child_inputs(id,child_id,call_id,content,status,created_at) VALUES(?,?,?,?,'queued',?)", (identifier, child_id, call_id, message, timestamp()))
-            if child["status"] == "completed":
-                db.execute("UPDATE agent_children SET status='queued',updated_at=? WHERE id=?", (timestamp(), child_id))
+            if child["status"] in {"completed", "failed"}:
+                db.execute("UPDATE agent_children SET status='queued',error_code=NULL,updated_at=? WHERE id=?", (timestamp(), child_id))
             self._event(db, child_id, "instruction_queued")
             return dict(db.execute("SELECT * FROM agent_child_inputs WHERE id=?", (identifier,)).fetchone()), True
 
@@ -385,7 +398,7 @@ def create_agent_tools(collaboration):
         message: Annotated[str, Field(min_length=1, max_length=12000)],
         tool_call_id: Annotated[str, InjectedToolCallId],
     ) -> dict:
-        """Add an instruction to a research agent returned by start_agent. Running agents consume it at model/tool boundaries; completed agents continue with their own history. A queued delivery is not proof it has been applied. Closed/interrupted agents cannot continue."""
+        """Add an instruction to a research agent whose receipt has can_send=true. Running agents consume it at model/tool boundaries; completed agents continue with their own history. A failed research_limit_with_summary result is partial, not complete; it can continue with its saved evidence and a narrower follow-up, such as summarizing without more tools. Each continuation keeps the same root budget and local research limit. A queued delivery is not proof it has been applied. Closed/interrupted agents and other failures cannot continue."""
         return await collaboration.send(agent_id, message, tool_call_id)
 
     @tool
@@ -395,7 +408,7 @@ def create_agent_tools(collaboration):
         timeout_ms: Annotated[int, Field(ge=0, le=30000)] = 10000,
         result_offset: Annotated[int, Field(ge=0)] = 0,
     ) -> dict:
-        """Read research-agent status/results; wait for new results (default up to 10 seconds). Omit agent_ids for all agents. Reuse the returned cursor as after while agents are queued/running; timeout is not completion. Results include result_version, stopped, result_length, result_truncated and next_result_offset. The first result window contains up to 16000 characters; select one agent_id and pass its next_result_offset as result_offset to read more immediately. Check result_version across pages; restart at offset zero if a follow-up produced a new version."""
+        """Read research-agent status/results; wait for new results (default up to 10 seconds). Omit agent_ids for all agents. Reuse the returned cursor as after while agents are queued/running; timeout is not completion. Results include result_version, stopped, can_send, result_length, result_truncated and next_result_offset. A failed research_limit_with_summary result is partial; when can_send=true, send_agent can continue the same agent with its saved context. The first result window contains up to 16000 characters; select one agent_id and pass its next_result_offset as result_offset to read more immediately. Check result_version across pages; restart at offset zero if a follow-up produced a new version."""
         return await collaboration.wait(agent_ids, after=after, timeout_ms=timeout_ms, result_offset=result_offset)
 
     @tool
