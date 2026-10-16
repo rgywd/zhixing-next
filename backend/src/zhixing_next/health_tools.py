@@ -7,7 +7,14 @@ from typing import TYPE_CHECKING, Any, Literal
 from langchain_core.tools import tool
 
 from .finance_context import active_finance_input, delegated_finance_input
-from .health_service import HealthService, source_key
+from .health_schema import DietRuleFields, HealthRecordChanges, ReminderChanges, supplied
+from .health_service import (
+    EnergyEstimate,
+    HealthService,
+    ProfileInput,
+    RecommendationOption,
+    source_key,
+)
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -64,14 +71,14 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
         return context
 
     @tool
-    async def save_health_profile(profile: dict[str, Any], entry_key: str) -> dict[str, Any]:
+    async def save_health_profile(profile: ProfileInput, entry_key: str) -> dict[str, Any]:
         """Patch only user-mentioned profile fields. Omitted allergies, activity limitations and preferences are preserved. Optional revision detects an explicitly stale edit; otherwise the service reads it atomically. Fields: height_cm,activity_limitations,food_allergies,food_exclusions,preferences,goals,note. No invented numeric targets. Reuse entry_key on retry."""
-        return service.patch_profile(profile, operation_key=operation("profile", entry_key))
+        return service.patch_profile(supplied(profile), operation_key=operation("profile", entry_key))
 
     @tool
-    async def save_diet_rule(rule: dict[str, Any], entry_key: str) -> dict[str, Any]:
+    async def save_diet_rule(rule: DietRuleFields, entry_key: str) -> dict[str, Any]:
         """Create a user agreement or proposed AI rule. Fields: content, kind(restriction/preference/guideline), status(active/paused/proposed), optional effective_from/effective_until, excluded_terms, origin(user/professional/assistant_proposal), confirmed. AI proposals do not become active without confirmation."""
-        return creating("rules", rule, entry_key)
+        return creating("rules", supplied(rule), entry_key)
 
     @tool
     async def record_meal(
@@ -79,13 +86,13 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
         meal_type: Literal["breakfast", "lunch", "dinner", "snack", "other"] = "other",
         portion: str = "", status: Literal["recorded", "skipped"] = "recorded",
         recommendation_id: str | None = None, note: str = "",
-        estimated_energy: dict[str, Any] | None = None,
+        estimated_energy: EnergyEstimate | None = None,
     ) -> dict[str, Any]:
         """Record actual food or an explicitly skipped meal, never a plan. occurred_at must include UTC offset. Unknown portions stay unknown. Energy estimates require minimum, maximum and basis; photos are not exact grams. Link recommendation_id when actual food follows that choice; stable entry_key survives retries."""
         return creating("meals", {"occurred_at": occurred_at, "description": description,
                                   "meal_type": meal_type, "portion": portion, "status": status,
                                   "recommendation_id": recommendation_id, "note": note,
-                                  "estimated_energy": estimated_energy}, entry_key)
+                                  "estimated_energy": supplied(estimated_energy)}, entry_key)
 
     @tool
     async def record_weight(measured_at: str, value: float, entry_key: str,
@@ -101,13 +108,13 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
     @tool
     async def save_meal_recommendation(
         context_revision: int, target_date: str,
-        options: list[dict[str, Any]], entry_key: str,
+        options: list[RecommendationOption], entry_key: str,
         meal_type: Literal["breakfast", "lunch", "dinner", "snack", "other"] = "other",
         context: str = "", note: str = "",
     ) -> dict[str, Any]:
         """Publish 1–5 next-meal choices grounded in query_health_context revision. Each option has unique id, title, description, ingredients, portion, substitutions and reason. Candidate fields list only actual proposed food and replacements. Put avoidance/allergy/cross-contact notices in top-level note, never candidate food lists; checks conservatively match restriction words. Allergy profiles require a visible note to verify ingredients/cross-contact, never a safety guarantee. No invented restaurants/prices or nutritional deficiency inferred from unknown portions. Current restrictions/revision are revalidated atomically; stale context must be read and regenerated. Saved choices are not actual intake."""
         return creating("recommendations", {"context_revision": context_revision, "target_date": target_date,
-                                            "meal_type": meal_type, "options": options,
+                                            "meal_type": meal_type, "options": [supplied(option) for option in options],
                                             "context": context, "note": note}, entry_key)
 
     @tool
@@ -124,10 +131,10 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
     @tool
     async def correct_health_record(
         kind: Literal["rules", "meals", "weights", "steps"], identifier: str,
-        record: dict[str, Any], entry_key: str,
+        record: HealthRecordChanges, entry_key: str,
     ) -> dict[str, Any]:
         """Patch an existing record by its ID: supply only changed editable fields. The service preserves omitted facts/provenance and reads the current revision atomically; optional explicit revision still detects stale edits. Rule pause/resume uses {status:paused|active}. Reuse entry_key on retry."""
-        return service.patch_record(kind, identifier, record, operation_key=operation("correct", entry_key))
+        return service.patch_record(kind, identifier, supplied(record), operation_key=operation("correct", entry_key))
 
     @tool
     async def delete_health_record(
@@ -138,9 +145,9 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
         return service.delete(kind, identifier, revision, operation_key=operation("delete", entry_key))
 
     @tool
-    async def save_health_reminders(reminders: dict[str, Any], entry_key: str) -> dict[str, Any]:
+    async def save_health_reminders(reminders: ReminderChanges, entry_key: str) -> dict[str, Any]:
         """Patch only changed local-reminder preferences; omitted slots/timezone/quiet hours are preserved. Revision is optional and read atomically, explicit stale revisions conflict. Fields:enabled,timezone,slots(id,time HH:mm,meal_type,kind meal/review),quiet_start/end,max_per_day,paused_dates,tone. Saving preferences is not proof of phone notification delivery; device must sync schedules."""
-        return service.patch_reminders(reminders, operation_key=operation("reminders", entry_key))
+        return service.patch_reminders(supplied(reminders), operation_key=operation("reminders", entry_key))
 
     return [query_health_context, save_health_profile, save_diet_rule, record_meal,
             record_weight, record_steps, save_meal_recommendation, record_recommendation_feedback,

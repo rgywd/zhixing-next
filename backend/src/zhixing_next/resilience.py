@@ -113,7 +113,7 @@ class RunBudget:
     def check_loop(self, call, state):
         # Polling observes a moving process, so repeat counts are bounded by the
         # global tool budget instead. A new user instruction resets this sequence.
-        if call["name"] in {"read_process", "wait_process"}:
+        if call["name"] in {"read_process", "wait_process", "wait_agents"}:
             return
         human = next((m.id for m in reversed(state.get("messages", [])) if m.type == "human"), "")
         signature = hashlib.sha256(

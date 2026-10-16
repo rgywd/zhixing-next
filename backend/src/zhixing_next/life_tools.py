@@ -2,6 +2,7 @@
 
 from langchain_core.tools import tool
 
+from .health_schema import LifePaymentChanges, MealChanges, MealFields, supplied
 from .life_service import LifeService
 
 LIFE_TOOL_NAMES = ["record_life_meal", "correct_life_meal", "query_life_events"]
@@ -16,7 +17,7 @@ def create_life_tools(settings, conversation_id, source_id):
     @tool
     async def record_life_meal(
         entry_key: str,
-        meal: dict,
+        meal: MealFields,
         amount: str | None = None,
         occurred_on: str | None = None,
         note: str = "",
@@ -26,7 +27,7 @@ def create_life_tools(settings, conversation_id, source_id):
             source_id=source_id,
             entry_key=entry_key,
             conversation_id=conversation_id,
-            meal=meal,
+            meal=supplied(meal),
             amount=amount,
             occurred_on=occurred_on,
             note=note,
@@ -36,16 +37,16 @@ def create_life_tools(settings, conversation_id, source_id):
     async def correct_life_meal(
         event_id: str,
         entry_key: str,
-        meal_changes: dict | None = None,
-        finance_changes: dict | None = None,
+        meal_changes: MealChanges | None = None,
+        finance_changes: LifePaymentChanges | None = None,
     ) -> dict:
         """Correct linked actual meal/payment in one transaction. Read event_id first. meal_changes contains only changed meal fields; finance_changes supports amount,occurred_on,category,note. Correct both date fields when both were wrong. Use a stable new operation entry_key. No duplicate records are created."""
         return service.correct_meal(
             event_id,
             source_id=source_id,
             entry_key=entry_key,
-            meal_changes=meal_changes,
-            finance_changes=finance_changes,
+            meal_changes=supplied(meal_changes),
+            finance_changes=supplied(finance_changes),
         )
 
     @tool

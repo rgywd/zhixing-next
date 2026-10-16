@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 from pydantic import Field
 
 from .resources import resource_bytes
+from .store import _record
 from .tool_errors import ToolFailure
 from .tools import extract_document
 
@@ -24,6 +25,7 @@ def create_retrieval_tools(store):
         page["items"] = [
             {key: item[key] for key in ("id", "seq", "role", "created_at", "attachments")}
             | {"content": item["content"][:4000], "truncated": len(item["content"]) > 4000}
+            | {key: item[key] for key in ("origin", "source_conversation_id", "delivery_id") if key in item}
             for item in page["items"]
             if item["status"] != "rejected"
         ]
@@ -51,6 +53,7 @@ def create_retrieval_tools(store):
             row = store._require(db, "messages", message_id)
             if row["status"] == "rejected":
                 raise ValueError("This message was not applied")
+            origin = _record(row)
         return {
             "message_id": message_id,
             "conversation_id": row["conversation_id"],
@@ -58,6 +61,7 @@ def create_retrieval_tools(store):
             "created_at": row["created_at"],
             "content": row["content"][offset : offset + 8000],
             "next_offset": offset + 8000 if offset + 8000 < len(row["content"]) else None,
+            **{key: origin[key] for key in ("origin", "source_conversation_id", "delivery_id") if key in origin},
         }
 
     @tool

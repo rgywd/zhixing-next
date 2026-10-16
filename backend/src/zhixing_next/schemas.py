@@ -153,6 +153,12 @@ class QueuedSteerInput(Input):
     target_run_id: Identifier
 
 
+class ConversationDeliveryInput(Input):
+    id: Identifier
+    target_conversation_id: Identifier
+    message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=10000)]
+
+
 class MessageInput(Input):
     id: Identifier
     content: str = Field(default="", max_length=100_000)

@@ -42,8 +42,12 @@ def _record(row):
     result = dict(row)
     request_json = result.pop("request_json", None)
     if "role" in result and request_json:
-        submitted = json.loads(request_json)
-        if submitted.get("source_run_id"):
+        submitted = json.loads(request_json) or {}
+        if submitted.get("origin") == "agent_message":
+            result["origin"] = "agent_message"
+            result["source_conversation_id"] = submitted.get("source_conversation_id")
+            result["delivery_id"] = submitted.get("delivery_id")
+        elif submitted.get("source_run_id"):
             result["origin"] = "assistant_task"
         if result.get("intent") == "steer" and submitted.get("intent") == "queue":
             # Delivery may change; the original request remains immutable for retries.
@@ -81,7 +85,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 13:
+            if version > 14:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -196,6 +200,21 @@ class Store:
                     db.execute("UPDATE agents SET instructions=?,tools_json=?,updated_at=? WHERE id='finance'",
                                (instructions, _json(sorted(set(json.loads(finance["tools_json"])) | set(FINANCE_TOOL_NAMES))), timestamp()))
                 db.execute("PRAGMA user_version=13")
+            if version < 14:
+                import hashlib
+
+                from .agent_collaboration import migrate as migrate_agent_collaboration
+                from .conversation_links import migrate as migrate_conversation_links
+                from .health_tools import HEALTH_INSTRUCTIONS
+
+                migrate_agent_collaboration(db)
+                migrate_conversation_links(db)
+                health = db.execute("SELECT instructions FROM agents WHERE id='health'").fetchone()
+                if health and (health["instructions"] == HEALTH_INSTRUCTIONS or hashlib.sha256(health["instructions"].encode()).hexdigest() == "f4bf08b73c6669ca53c2b4e847f16a5b08cb04e08c69480f97ba2aa6c01dcbe4"):
+                    # Built-in protocol lives in code; this column is only for
+                    # user customization. Do not strip arbitrary custom text.
+                    db.execute("UPDATE agents SET instructions='',updated_at=? WHERE id='health'", (timestamp(),))
+                db.execute("PRAGMA user_version=14")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)
@@ -800,7 +819,7 @@ class Store:
         with self._connection() as db:
             rows = db.execute(
                 "SELECT c.id,c.title,c.agent_id,c.updated_at,m.id AS message_id,"
-                "m.seq AS message_seq,m.content FROM conversations c "
+                "m.seq AS message_seq,m.content,m.request_json AS source_request_json FROM conversations c "
                 "LEFT JOIN messages m ON m.seq=(SELECT matching.seq FROM messages matching "
                 "WHERE matching.conversation_id=c.id AND matching.status!='rejected' "
                 f"AND {message_filter} ORDER BY matching.seq DESC LIMIT 1) "
@@ -823,6 +842,7 @@ class Store:
                 "conversation_id": row["id"], "title": title, "agent_id": row["agent_id"],
                 "updated_at": row["updated_at"], "message_id": row["message_id"],
                 "message_seq": row["message_seq"], "snippet": snippet,
+                **({"origin": "agent_message"} if (json.loads(row["source_request_json"] or "{}") or {}).get("origin") == "agent_message" else {}),
             })
         return {"items": results}
 
@@ -921,7 +941,7 @@ class Store:
                 run = self._require(db, "runs", target_run_id)
                 if (
                     run["conversation_id"] != conversation_id
-                    or run["status"] != "running"
+                    or not (run["status"] == "running" or (run["status"] == "queued" and run["phase"] == "agent_wait"))
                     or run["cancel_requested"]
                 ):
                     raise StoreError(
@@ -936,6 +956,9 @@ class Store:
                 db.execute(
                     "UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id)
                 )
+                if run["phase"] == "agent_wait":
+                    db.execute("DELETE FROM conversation_waits WHERE source_run_id=?", (run_id,))
+                    db.execute("UPDATE runs SET phase='recovering' WHERE id=?", (run_id,))
             else:
                 conversation = self._require(db, "conversations", conversation_id)
                 models = self.runtime_settings(db).models
@@ -1021,7 +1044,7 @@ class Store:
         with self._connection(write=True) as db:
             row = db.execute(
                 """SELECT r.*,c.workspace_path,c.agent_id FROM runs r JOIN conversations c ON c.id=r.conversation_id
-                WHERE r.kind=? AND r.status='queued' AND r.phase NOT IN ('approval','input') AND c.blocked=0
+                WHERE r.kind=? AND r.status='queued' AND r.phase NOT IN ('approval','input','agent_wait') AND c.blocked=0
                   AND NOT EXISTS(SELECT 1 FROM runs active WHERE active.conversation_id=r.conversation_id AND active.status='running')
                   AND NOT EXISTS(SELECT 1 FROM runs earlier WHERE earlier.conversation_id=r.conversation_id AND earlier.status='queued' AND earlier.seq<r.seq)
                 ORDER BY r.seq LIMIT 1""",
@@ -1036,6 +1059,9 @@ class Store:
             result = _record(self._require(db, "runs", row["id"]))
             result["workspace_path"] = row["workspace_path"]
             result["agent_id"] = row["agent_id"]
+            from .conversation_links import delivery_for_run
+
+            result["agent_delivery"] = delivery_for_run(db, row["id"])
             return result
 
     def get_controls(self, run_id):
@@ -1168,6 +1194,10 @@ class Store:
                 (str(uuid4()), run["conversation_id"], result, run["id"], now, _json(attachments)),
             )
         self._event(db, run["id"], status, {"result": result, "error": error})
+        from .conversation_links import wake_waiters
+
+        db.execute("DELETE FROM conversation_waits WHERE source_run_id=?", (run["id"],))
+        wake_waiters(db, self)
 
     def finish_run(self, run_id, status, result=None, error=None):
         if status not in TERMINAL:
@@ -1181,26 +1211,32 @@ class Store:
             db.execute("UPDATE runs SET recovery_enabled=1 WHERE id=? AND status='running'", (run_id,))
 
     def pause_run(self, run_id):
+        from .conversation_links import WAIT_PHASE, wait_pending
+
         with self._connection(write=True) as db:
             run = self._require(db, "runs", run_id)
             if run["cancel_requested"]:
                 self._finish(db, run, "cancelled")
                 return
             pending = db.execute("SELECT 1 FROM approvals WHERE run_id=? AND state='pending'", (run_id,)).fetchone()
-            db.execute("UPDATE runs SET status='queued',phase=? WHERE id=?", ("approval" if pending else "input" if db.execute("SELECT 1 FROM input_requests WHERE run_id=? AND state='pending'", (run_id,)).fetchone() else "recovering", run_id))
+            phase = "approval" if pending else "input" if db.execute("SELECT 1 FROM input_requests WHERE run_id=? AND state='pending'", (run_id,)).fetchone() else WAIT_PHASE if wait_pending(db, run_id) else "recovering"
+            db.execute("UPDATE runs SET status='queued',phase=? WHERE id=?", (phase, run_id))
             phase = db.execute("SELECT phase FROM runs WHERE id=?", (run_id,)).fetchone()[0]
-            self._event(db, run_id, "paused", {"reason": phase if phase in {"approval", "input"} else "resume"})
+            self._event(db, run_id, "paused", {"reason": phase if phase in {"approval", "input", WAIT_PHASE} else "resume"})
 
     def interrupt_run(self, run_id):
         with self._connection(write=True) as db:
             self._recover_run(db, self._require(db, "runs", run_id))
 
     def _recover_run(self, db, run):
+        from .conversation_links import WAIT_PHASE, wait_pending
+
         if run["cancel_requested"]:
             self._finish(db, run, "cancelled")
         elif run["recovery_enabled"] and run["recovery_count"] < 3:
             pending = db.execute("SELECT 1 FROM approvals WHERE run_id=? AND state='pending'", (run["id"],)).fetchone()
-            db.execute("UPDATE runs SET status='queued',phase=?,recovery_count=recovery_count+1,finished_at=NULL WHERE id=?", ("approval" if pending else "input" if db.execute("SELECT 1 FROM input_requests WHERE run_id=? AND state='pending'", (run["id"],)).fetchone() else "recovering", run["id"]))
+            phase = "approval" if pending else "input" if db.execute("SELECT 1 FROM input_requests WHERE run_id=? AND state='pending'", (run["id"],)).fetchone() else WAIT_PHASE if wait_pending(db, run["id"]) else "recovering"
+            db.execute("UPDATE runs SET status='queued',phase=?,recovery_count=recovery_count+1,finished_at=NULL WHERE id=?", (phase, run["id"]))
             self._event(db, run["id"], "recovering", {"attempt": run["recovery_count"] + 1})
         else:
             self._finish(db, run, "interrupted", error="运行未能安全自动恢复，已保留步骤回执。请检查后继续原任务。")
@@ -1319,7 +1355,10 @@ class Store:
             return _record(self._require(db, "conversations", conversation_id))
 
     def recover_interrupted(self):
+        from .agent_collaboration import interrupt_orphans
+
         with self._connection(write=True) as db:
+            interrupt_orphans(db)
             for row in db.execute("SELECT * FROM runs WHERE status='running'").fetchall():
                 self._recover_run(db, row)
 

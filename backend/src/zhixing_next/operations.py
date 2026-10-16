@@ -49,6 +49,11 @@ READ_TOOLS.update({"get_finance_summary", "list_finance_transactions", "query_he
 READ_TOOLS.update({"calculate", "date_info", "browse_personal_memories", "reconcile_finance_assets"})
 IDEMPOTENT_SERVICE_TOOLS.update({"publish_report", "publish_finance_report"})
 EFFECT_TOOLS.update({"publish_report", "publish_finance_report"})
+IDEMPOTENT_SERVICE_TOOLS.add("send_conversation_message")
+EFFECT_TOOLS.add("send_conversation_message")
+READ_TOOLS.update({"read_conversation_reply", "wait_conversation_replies", "wait_agents"})
+IDEMPOTENT_SERVICE_TOOLS.update({"start_agent", "send_agent", "close_agent"})
+EFFECT_TOOLS.update({"start_agent", "send_agent", "close_agent"})
 LIMIT = 20 * 1024 * 1024
 
 

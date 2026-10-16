@@ -41,6 +41,7 @@ test("queue selection includes only ordinary unstarted chat inputs and keeps sor
   const image = { id: "image", mime_type: "image/png", name: "screen.png" };
   const accepted = [queued("later", { seq: 3 }), queued("first", { seq: 1, attachments: [image] })];
   const excluded = [
+    queued("forwarded", { origin: "agent_message" }),
     queued("running", { status: "running" }), queued("task", { kind: "task" }),
     ...["approval", "input", "recovering"].map((phase) => queued(phase, { phase })),
     queued("started", { started_at: "2026-10-15T00:00:00Z" }), queued("unknown-start", { started_at: undefined }),

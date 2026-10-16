@@ -126,8 +126,11 @@ class Worker:
             await cleanup_orphans(self.settings)
         now = time.monotonic()
         if now - self._last_maintenance >= 1:
+            from .conversation_links import ConversationLinks
+
             self.store.heartbeat()
             self.store.tick_schedules()
+            ConversationLinks(self.store).refresh()
             self._last_maintenance = now
         for kind in ("chat", "task"):
             if kind not in self.active:

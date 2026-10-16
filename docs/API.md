@@ -1,6 +1,6 @@
 # HTTP 与运行接口
 
-状态：2026-10-14，当前源码包含数据库 v12 的财务与健康服务。安装、部署及验收状态以[0.2.0 说明](RELEASE-0.2.0.md)为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
+状态：2026-10-16，当前源码包含数据库 v14 的工具契约与 Agent 协作。历史安装、部署及验收状态以各版发布说明为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
 
 ## 交付范围
 
@@ -17,6 +17,11 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 用户和模型供应商密钥分离；App 只持有服务访问令牌。
 
 ## HTTP 接口
+
+- `POST /v1/runs/{run_id}/conversation-messages {id,target_conversation_id,message}`：当前活动用户运行向已有其他对话发起只读咨询。`id` 是本次投递的稳定请求 ID；目标消息、目标运行与投递回执同事务创建，相同 ID 换内容／目标返回 409。返回 `delivery_id,target_run_id,target_conversation_id,status,terminal,needs_attention,read_only:true`；queued/running 不代表咨询完成。内部咨询不能继续投递，拒绝本对话、阻塞目标、依赖环与单运行超过八次投递。
+- `GET /v1/runs/{run_id}/conversation-messages`、`GET /v1/runs/{run_id}/conversation-messages/{delivery_id}`：查询该源运行的实际投递状态与结果，跨源读取返回 403。终态保留 completed/failed/cancelled/interrupted；结果窗口最多 16000 字，附 `result_truncated,reply_message_id`，可通过既有历史消息读取能力继续获取。取消源运行不撤回已接收的独立咨询。
+- 跨对话等待由运行时 `wait_conversation_replies` 使用 LangGraph interrupt；运行状态为 `queued,phase=agent_wait` 时释放聊天槽，完成／需要处理后恢复。原目标的模型上下文只由正常 worker 领取流程写入。等待阶段允许用户对该 run 发送 Steer 或取消。内部消息返回 `origin=agent_message,source_conversation_id,delivery_id`，运行也带 `origin=agent_message`；不能作为普通用户排队消息撤回或提升为引导，不进入个人记忆及财务用户证据。
+- 运行内研究工具为 `start_agent/send_agent/wait_agents/close_agent`；具体生命周期、只读白名单、预算和重启边界见 [Agent 协作](AGENT-COLLABORATION.md)。跟进／等待工具在已有对应句柄后才向模型提供。
 
 - `GET /v1/status`: `{model_ready: bool, worker_online: bool, execution_available: bool, execution_reason: string|null, file_tools_available: bool}`；`model_ready` 按当前聊天/执行默认模型及服务端密钥判断，不代表供应商已通过调用。`execution_available` 检查启用配置及 Docker 镜像可见性，实际启动仍可能失败，以执行回执为准。
 - `GET /v1/models`：返回 `{items,roles}`。每个模型只公开 `id,name,model,provider,protocol,ready,image_input,reasoning_levels,default_reasoning_effort,reasoning_kind,reasoning_labels`；`image_input` 是服务端对端点能力的声明，不是实时探测。不返回密钥、环境变量名或 Base URL。`roles` 为聊天、执行、记忆整理的当前默认模型 ID。

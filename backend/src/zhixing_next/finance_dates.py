@@ -306,7 +306,7 @@ def verify_date_evidence(
     message_id = evidence_source_id or source_id
     with store._connection() as db:
         row = db.execute(
-            "SELECT id,role,status,content,created_at,conversation_id FROM messages WHERE id=?",
+            "SELECT id,role,status,content,created_at,conversation_id FROM messages WHERE id=? AND COALESCE(json_extract(request_json,'$.origin'),'')!='agent_message'",
             (message_id,),
         ).fetchone()
     if row is None or row["role"] != "user" or row["status"] not in {"accepted", "applied"}:
@@ -493,7 +493,7 @@ def verify_budget_due_days(
     message_id = evidence_source_id or source_id
     with service.store._connection() as db:
         row = db.execute(
-            "SELECT id,role,status,content FROM messages WHERE id=?", (message_id,)
+            "SELECT id,role,status,content FROM messages WHERE id=? AND COALESCE(json_extract(request_json,'$.origin'),'')!='agent_message'", (message_id,)
         ).fetchone()
     if (
         row is None

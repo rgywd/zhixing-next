@@ -6,7 +6,7 @@ export type QueuedMessageItem = { run: Run; text: string; attachments: Resource[
 export function getQueuedMessages(runs: Run[], conversationId: string): QueuedMessageItem[] {
   return runs.filter((run) => run.conversation_id === conversationId && run.kind === "chat"
     && run.status === "queued" && (run.phase ?? "normal") === "normal" && run.started_at === null
-    && !run.cancel_requested && typeof run.message_id === "string")
+    && !run.cancel_requested && !run.origin && typeof run.message_id === "string")
     .sort((a, b) => (a.seq != null && b.seq != null ? a.seq - b.seq : a.created_at.localeCompare(b.created_at)))
     .map((run) => ({ run, text: run.prompt, attachments: run.attachments ?? [] }));
 }

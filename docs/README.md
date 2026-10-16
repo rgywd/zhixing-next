@@ -1,6 +1,7 @@
 # 文档入口
 
 - [工具调用体验与 harness 取舍](TOOL-HARNESS.md)：对照 Codex、OpenCode、Pi，简化参数、自动合并、可修复失败与验证边界。
+- [Agent 协作与工具可用性](AGENT-COLLABORATION.md)：结构化业务工具、自然输入评测、运行内只读研究子 Agent、跨独立对话持久只读咨询与恢复边界。
 
 - [对话布局与流式显示](CHAT-STREAMING.md)：横向工具栏、对话设置、正文／思考／工具事件、草稿目标绑定和验证边界。
 

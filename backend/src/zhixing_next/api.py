@@ -28,6 +28,7 @@ from .schemas import (
     AnswerInput,
     ApprovalDecision,
     AssistantInput,
+    ConversationDeliveryInput,
     ConversationInput,
     ConversationModelInput,
     ManagedModelUpdate,
@@ -516,6 +517,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.get("/runs/{run_id}")
     def run(run_id: str):
         return store.get_run(run_id)
+
+    @router.post("/runs/{run_id}/conversation-messages")
+    def send_conversation_message(run_id: str, body: ConversationDeliveryInput):
+        from .conversation_links import ConversationLinks
+
+        return ConversationLinks(store).send(run_id, body.id, body.target_conversation_id, body.message)
+
+    @router.get("/runs/{run_id}/conversation-messages")
+    def conversation_messages(run_id: str):
+        from .conversation_links import ConversationLinks
+
+        return ConversationLinks(store).list(run_id)
+
+    @router.get("/runs/{run_id}/conversation-messages/{delivery_id}")
+    def conversation_reply(run_id: str, delivery_id: str):
+        from .conversation_links import ConversationLinks
+
+        return ConversationLinks(store).read(run_id, delivery_id)
 
     @router.post("/runs/{run_id}/cancel")
     def cancel(run_id: str):
