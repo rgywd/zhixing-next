@@ -19,6 +19,7 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.graph import DeepAgentState
 from langchain.agents.middleware import AgentMiddleware, hook_config
+from langchain.agents.middleware.types import ModelResponse
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -41,6 +42,11 @@ RuntimeConfigurationError = ModelConfigurationError
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 Controls = Callable[[], Awaitable[dict[str, Any]]]
 Acknowledge = Callable[[list[str]], Awaitable[None]]
+FINANCE_REPORT_WRITES = {
+    "record_finance_transaction", "correct_finance_transaction", "delete_finance_transaction",
+    "update_finance_budget", "apply_finance_transaction_batch", "record_finance_observation",
+    "remove_finance_observation", "record_life_meal", "correct_life_meal",
+}
 
 
 class RuntimeState(DeepAgentState):
@@ -170,12 +176,91 @@ def _portable_history(messages: list[Any]) -> list[Any]:
     return result
 
 
+def _seen_finance_input(store, run_id, messages):
+    with store._connection() as db:
+        for message in reversed(messages):
+            if isinstance(message, HumanMessage) and message.id and db.execute("SELECT 1 FROM messages WHERE id=? AND run_id=? AND role='user' AND status IN ('accepted','applied')", (message.id, run_id)).fetchone():
+                return message.id
+    return None
+
+
+def _original_tool_reply(result, tool_call_id):
+    return result.model_copy(update={"tool_call_id": tool_call_id}) if isinstance(result, ToolMessage) and result.tool_call_id != tool_call_id else result
+
+
+def _verified_finance_completion(settings, run_id, messages):
+    """End only the finance graph's settled publication, using its durable receipt."""
+    if not settings or not run_id:
+        return None
+    batch = None
+    replies = []
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return None
+        if isinstance(message, AIMessage):
+            if not message.tool_calls:
+                return None
+            batch = message.tool_calls
+            break
+        if isinstance(message, ToolMessage):
+            replies.append(message)
+    if not batch or len({call["id"] for call in batch}) != len(batch):
+        return None
+    by_id = {reply.tool_call_id: reply for reply in reversed(replies)}
+    if any(call["id"] not in by_id or by_id[call["id"]].status != "success" for call in batch):
+        return None
+    publication = next((call for call in reversed(batch) if call["name"] == "publish_finance_report"), None)
+    if not publication:
+        return None
+    try:
+        returned = json.loads(by_id[publication["id"]].content)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(returned, dict):
+        return None
+    if any(not isinstance(returned.get(key), dict) for key in ("resource", "verification", "finance")):
+        return None
+    resource_id = returned["resource"].get("id")
+    report_key = returned["verification"].get("finance_report_key")
+    if not resource_id or not report_key:
+        return None
+    store = Store(settings)
+    with store._connection() as db:
+        run = db.execute("SELECT conversation_id,message_id,status FROM runs WHERE id=?", (run_id,)).fetchone()
+        rows = db.execute("SELECT data FROM events WHERE run_id=? AND type='artifact' ORDER BY seq DESC", (run_id,)).fetchall()
+    if not run or run["status"] != "running":
+        return None
+    current_input = _seen_finance_input(store, run_id, messages) or run["message_id"]
+    for row in rows:
+        receipt = json.loads(row["data"])
+        resource, verification, finance = (receipt.get(key, {}) for key in ("resource", "verification", "finance"))
+        if resource.get("id") != resource_id or verification.get("finance_report_key") != report_key:
+            continue
+        if verification.get("finance_input_id", run["message_id"]) != current_input:
+            return None
+        if not (finance.get("program_generated") is True and finance.get("model_supplied_content") is False and finance.get("single_ledger_snapshot") is True):
+            return None
+        from .finance_report import format_finance_completion
+        from .resources import resource_bytes
+
+        completion = finance.get("completion") or format_finance_completion(finance["facts"])
+        if not isinstance(completion, str) or not completion or returned.get("finance", {}).get("completion") != completion:
+            return None
+        saved = store.get_resource(resource_id, run["conversation_id"])
+        actual = hashlib.sha256(resource_bytes(settings, saved)).hexdigest()
+        if actual != verification.get("sha256") or actual != returned.get("verification", {}).get("sha256"):
+            raise StoreError("resource_changed", "Published finance report failed its integrity check", 409)
+        identifier = hashlib.sha256(f"{run_id}:{publication['id']}:{resource_id}".encode()).hexdigest()[:32]
+        return AIMessage(content=completion, id="finance-report-completion-" + identifier)
+    return None
+
+
 class RunControls(AgentMiddleware):
     """The runner is the only checkpoint writer for a conversation."""
 
     def __init__(self, controls: Controls, emit: Emit, allowed_subagents: set[str] | None = None,
                  settings: Settings | None = None, image_input: bool = False,
-                 execution_enabled: bool = False, restricted_files: bool = False, operations=None, budget=None, task_flow=None, run_id=None):
+                 execution_enabled: bool = False, restricted_files: bool = False, operations=None, budget=None, task_flow=None, run_id=None, finance_completion=False):
         self.controls = controls
         self.emit = emit
         self.allowed_subagents = allowed_subagents or set()
@@ -186,6 +271,7 @@ class RunControls(AgentMiddleware):
         self.operations = operations
         self.budget = budget
         self.task_flow, self.run_id = task_flow, run_id
+        self.finance_completion = finance_completion
         self.blocked_tools = (set() if execution_enabled else {"execute"}) | (set() if self.allowed_subagents else {"task"})
         if restricted_files:
             self.blocked_tools |= {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"}
@@ -226,6 +312,10 @@ class RunControls(AgentMiddleware):
         return {"messages": [RemoveMessage(id=latest.id), *pending], "jump_to": "model"}
 
     async def awrap_model_call(self, request, handler):
+        if self.finance_completion and not await self.pending(request.state):
+            completion = await asyncio.to_thread(_verified_finance_completion, self.settings, self.run_id, request.messages)
+            if completion is not None and not await self.pending(request.state):
+                return ModelResponse(result=[completion])
         # Only the task sandbox and explicitly configured agents may execute.
         tools = [
             item
@@ -242,11 +332,17 @@ class RunControls(AgentMiddleware):
 
     async def awrap_tool_call(self, request, handler):
         call = request.tool_call
+        journal_call = call
+        source_id = None
+        if call["name"] == "publish_finance_report" and self.operations:
+            source_id = _seen_finance_input(self.operations.journal.store, self.run_id, request.state.get("messages", []))
+            if source_id and source_id != self.operations.run.get("message_id"):
+                journal_call = {**call, "id": call["id"] + ":" + source_id}
         if await self.pending(request.state):
             if self.operations:
-                receipt = self.operations.defer_for_steer(call)
+                receipt = self.operations.defer_for_steer(journal_call)
                 if receipt is not None:
-                    return receipt
+                    return _original_tool_reply(receipt, call["id"])
             return ToolMessage(
                 content="This tool did not start because a new user instruction arrived. Reconsider it using the new instruction.",
                 tool_call_id=call["id"],
@@ -258,11 +354,29 @@ class RunControls(AgentMiddleware):
                 tool_call_id=call["id"],
                 status="error",
             )
+        if call["name"] == "publish_finance_report":
+            batch = next((message.tool_calls for message in reversed(request.state.get("messages", [])) if isinstance(message, AIMessage) and any(item["id"] == call["id"] for item in message.tool_calls)), [])
+            if any(item["name"] in FINANCE_REPORT_WRITES for item in batch):
+                await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed"})
+                return ToolMessage(
+                    content=json.dumps({"error": {"code": "report_after_finance_writes", "message": "Complete finance writes first, then invoke publish_finance_report in a separate tool batch. No report was published."}}),
+                    tool_call_id=call["id"], name=call["name"], status="error",
+                )
         if self.budget:
             self.budget.reserve("tool_calls")
             self.budget.check_loop(call, request.state)
         if self.operations:
-            result = await self.operations.invoke(call, lambda: self._invoke_tool(request, handler))
+            from .finance_context import active_finance_input
+
+            context_token = None
+            if call["name"] == "publish_finance_report":
+                context_token = active_finance_input.set(source_id)
+            try:
+                result = await self.operations.invoke(journal_call, lambda: self._invoke_tool(request, handler))
+            finally:
+                if context_token is not None:
+                    active_finance_input.reset(context_token)
+            result = _original_tool_reply(result, call["id"])
             if call["name"] in {"write_text_file", "copy_file"}:
                 await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed" if result.status == "error" else "completed"})
             if self.execution_enabled:
@@ -528,7 +642,7 @@ async def _run_agent(
     from .operations import OperationRunner, RunPaused
 
     operations = OperationRunner(settings, {**run, "workspace_path": str(workspace)}, sandbox)
-    middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, restricted_files=direct_agent is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"])
+    middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, restricted_files=direct_agent is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"], finance_completion=bool(direct_agent and direct_agent["id"] == "finance"))
     assigned_tools = assign_common_tools(common_tools, direct_agent["tools"], by_name) if direct_agent else physical_tools
     business_time_prompt = _business_time_prompt(store, run["message_id"])
     system_prompt = (
@@ -595,7 +709,7 @@ async def _run_agent(
                 item["tools"], by_name,
             ),
             **({"model": create_model(settings, run["kind"], item["model_id"])} if item.get("model_id") else {}),
-            "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=True, operations=operations, budget=budget)],
+            "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=True, operations=operations, budget=budget, run_id=run["id"], finance_completion=item["id"] == "finance")],
         }
         for item in agents
     ]
@@ -618,7 +732,7 @@ async def _run_agent(
         from .skills import skill_bundle
 
         _, skill_digest = skill_bundle(settings) if sandbox else (None, None)
-        fingerprint = hashlib.sha256(json.dumps({"recovery_protocol": 3, "gitlab": settings.gitlab.model_dump(), "limits": settings.limits.model_dump(), "sdk": {package: version(package) for package in ("deepagents", "langgraph", "langchain")}, "model": identity, "images": images_enabled, "execution": settings.execution.model_dump(mode="json"), "skills": skill_digest, "child_models": {item.get("model_id"): settings.models[item["model_id"]].model_dump(mode="json") for item in agents if item.get("model_id")}, "grants": [grant.model_dump(mode="json") for grant in settings.grants], "agent": direct_agent, "agents": agents}, sort_keys=True).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps({"recovery_protocol": 4, "gitlab": settings.gitlab.model_dump(), "limits": settings.limits.model_dump(), "sdk": {package: version(package) for package in ("deepagents", "langgraph", "langchain")}, "model": identity, "images": images_enabled, "execution": settings.execution.model_dump(mode="json"), "skills": skill_digest, "child_models": {item.get("model_id"): settings.models[item["model_id"]].model_dump(mode="json") for item in agents if item.get("model_id")}, "grants": [grant.model_dump(mode="json") for grant in settings.grants], "agent": direct_agent, "agents": agents}, sort_keys=True).encode()).hexdigest()
         resuming = old.values.get("active_run_id") == run["id"]
         if resuming and (old.values.get("recovery_fingerprint") != fingerprint or old.values.get("memory_reset_revision", 0) != reset_revision):
             raise RuntimeConfigurationError("恢复期间模型、权限、助手、记忆或运行时版本配置发生变化。请发送新要求核对已有结果，不能直接重放旧步骤。")

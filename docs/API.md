@@ -137,7 +137,7 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
 
 `reconcile_finance_assets(start_date,end_date,opening_assets,closing_assets,approximate=true)` 只读已落账的已知流水，按相同资产范围计算期初加收入减净支出、预计期末及未解释差额。转账单列排除；部分相交的日期区间不猜分摊，累计和明细避免重复，近似余额与记录缺口随回执返回。报告引用程序公式，差额不自动变成消费或收入。
 
-财务助手使用 `publish_finance_report(start_date,end_date,opening_assets?,closing_assets?,approximate=true,filename="财务回顾.md")` 交付账本、预算及资产回顾。同一数据库快照生成事实正文和公式，再复用通用报告的文件、不可变资源、artifact 与手机预览链路；不接受模型自行拼写的数值正文。期初、期末资产可成对省略，不要求用户补表。报告分别列月成本、到期现金与剩余预留，不推断未知消费或历史付款日；重复调用校验并复用原交付回执，不修改财务记录。
+财务助手使用 `publish_finance_report(start_date,end_date,opening_assets?,closing_assets?,approximate=true,filename="财务回顾.md")` 交付账本、预算及资产回顾。同一数据库快照生成事实正文和公式，再复用通用报告的文件、不可变资源、artifact 与手机预览链路；不接受模型自行拼写的数值正文。期初、期末资产可成对省略，不要求用户补表。报告分别列月成本、到期现金与剩余预留，不推断未知消费或历史付款日；重复调用校验并复用原交付回执，不修改财务记录。财务报告发布后的交付回复由核验事实生成，避免模型再追加差额来源或补录清单；新指令、取消和未完成的操作仍按原流程处理。
 
 `apply_finance_transaction_batch` 可将创建／纠正／删除作为同一事务执行；任一 revision 冲突或校验失败全部回滚。拆分需声明总额守恒，结果包含最终记录与校验信息，重试复用原回执。
 

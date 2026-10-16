@@ -282,3 +282,71 @@ def build_finance_report(
             "gap_codes": sorted(gaps),
         },
     }
+
+
+def format_finance_completion(facts):
+    """Describe only the delivered report; do not infer missing transactions/actions."""
+    period, flows = facts["period"], facts["flows"]
+    start, end = _date(period["start_date"]), _date(period["end_date"])
+    count = facts["record_count"]
+    if type(count) is not int or count < 0:
+        raise _error(
+            "Finance report has an invalid record count", "finance_report_inconsistent", 409
+        )
+    lines = [
+        "财务回顾已交付，可直接打开附件。",
+        f"本报告涵盖 {start} 至 {end} 的 {count} 条记录：已知收入 {_cash(flows['income'])}，净支出 {_cash(flows['net_expense'])}。内部转账 {_cash(flows['transfer'])} 单列，不计入新增收入。",
+    ]
+    closing = next((item for item in facts.get("budgets", []) if item["month"] == end[:7]), None)
+    arrangements = []
+    if closing is not None:
+        if closing.get("savings_target") is not None:
+            arrangements.append(f"本月结余目标 {_cash(closing['savings_target'])}，可以调整")
+        rentals = [
+            item
+            for item in closing.get("commitments", [])
+            if re.search(r"房租|租金|租房|租住|\brent\b|\brental\b", item["label"], re.I)
+        ]
+        # Several independent properties need the report's full list; a short
+        # completion must not choose or combine their cash obligations.
+        if len(rentals) == 1:
+            rent = rentals[0]
+            month = rent.get("next_due_month")
+            if rent.get("next_due_precision") == "day" and rent.get("next_due_on"):
+                timing = _date(rent["next_due_on"])
+            elif month:
+                timing = f"{_month_label(month)}（具体日未确定）"
+            else:
+                timing = None
+            if timing:
+                payment = f"下一房租付款安排为 {timing}"
+                scheduled = next(
+                    (item for item in facts.get("budgets", []) if item["month"] == month), None
+                )
+                if scheduled:
+                    matches = [
+                        item
+                        for item in scheduled.get("commitments", [])
+                        if item["label"] == rent["label"] and item.get("next_due_month") == month
+                    ]
+                    if (
+                        len(matches) == 1
+                        and matches[0].get("cash_due") is not None
+                        and Decimal(matches[0]["cash_due"]) > 0
+                    ):
+                        payment += f"，到期现金 {_cash(matches[0]['cash_due'])}"
+                arrangements.append(payment)
+    if arrangements:
+        lines.append("；".join(arrangements) + "。")
+    calculation = facts.get("calculation")
+    if calculation is not None:
+        difference = calculation["unexplained_difference"]
+        approximate = bool((facts.get("assets") or {}).get("approximate"))
+        qualifier = "约 " if approximate else ""
+        if Decimal(difference) == 0:
+            lines.append(f"已知流水口径核对差额 {qualifier}{_cash(difference)}。")
+        else:
+            lines.append(
+                f"已知流水口径核对差额 {qualifier}{_cash(difference)}，仅为未解释的资产变化，未认定为消费。"
+            )
+    return "\n\n".join(lines)

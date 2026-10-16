@@ -305,7 +305,8 @@ def create_finance_service_tools(
     ]
     if run is not None and emit is not None:
         from .common_reports import create_report_tool
-        from .finance_report import build_finance_report
+        from .finance_context import active_finance_input
+        from .finance_report import build_finance_report, format_finance_completion
         from .resources import resource_bytes
 
         if run.get("conversation_id") != conversation_id:
@@ -361,9 +362,13 @@ def create_finance_service_tools(
                 "approximate": approximate,
                 "filename": filename,
             }
+            actual_input = active_finance_input.get() or source_id
+            report_scope = [source_id, arguments]
+            if actual_input != source_id:
+                report_scope.append(actual_input)
             report_key = hashlib.sha256(
                 json.dumps(
-                    [source_id, arguments],
+                    report_scope,
                     ensure_ascii=False,
                     sort_keys=True,
                     separators=(",", ":"),
@@ -393,9 +398,11 @@ def create_finance_service_tools(
                             "verification": {
                                 **receipt["verification"],
                                 "finance_report_key": report_key,
+                                "finance_input_id": actual_input,
                             },
                             "finance": {
                                 "facts": generated["facts"],
+                                "completion": format_finance_completion(generated["facts"]),
                                 "program_generated": True,
                                 "model_supplied_content": False,
                                 "single_ledger_snapshot": True,
