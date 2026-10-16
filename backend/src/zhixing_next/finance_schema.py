@@ -19,6 +19,15 @@ class Commitment(FinanceInput):
     due_day: int | None = Field(default=None, ge=1, le=31)
     monthly_cost: str | None = None
     paid_through: str | None = None
+    purpose: str | None = Field(
+        default=None,
+        description="Stable expense purpose; reuse the existing same-purpose key when changing amount or cycle",
+    )
+    separate_from_keys: list[str] = Field(
+        default_factory=list,
+        max_length=100,
+        description="Only when the user clearly describes independent costs of the same purpose; list existing keys that must coexist",
+    )
 
 
 class IncomeSchedule(FinanceInput):
@@ -82,7 +91,10 @@ class RecordArguments(FinanceInput):
     related_transaction_id: str | None = None
     entry_type: Literal["detail", "aggregate"] = "detail"
     period_start: str | None = None
-    date_precision: Literal["day", "month", "range"] = "day"
+    date_precision: Literal["day", "month", "range"] = Field(
+        default="day",
+        description="Use month only for an actual payment month explicitly known from the user. A count of past paychecks or a payday rule does not establish past payment months. Preserve the user's whole period as range when individual dates/months are unknown.",
+    )
     date_start: str | None = None
     date_end: str | None = None
     coverage_start: str | None = None

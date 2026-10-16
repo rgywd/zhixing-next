@@ -122,18 +122,20 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
 | --- | --- |
 | `GET /v1/finance/budget?month=YYYY-MM` | 有效预算；含 `month,source_month,recurring,revision,expected_income,savings_target,daily_budget,commitments,coverage_start,coverage_through` |
 | `PUT /v1/finance/budget` | 完整设置：`month,idempotency_key,recurring`，可空的收入／结余／日常上限、承诺列表与覆盖期；可传 `expected_revision,expected_source_month` 防止覆盖刚发生的修改 |
+| `PATCH /v1/finance/budget` | `month,idempotency_key,recurring,changes,expected_revision?,expected_source_month?`；按字段与承诺 key 更新，清空显式声明 |
 | `DELETE /v1/finance/budget?month=&idempotency_key=&recurring=false` | 删除指定月份及沿用类型的配置，保留实际流水；返回 `{deleted:true}` |
 | `GET /v1/finance/transactions?month=&limit=50&offset=0` | `{items:Transaction[],total}`，最大 100；按业务日期分页 |
 | `POST /v1/finance/transactions` | `idempotency_key,kind,amount,occurred_on`，以及可选分类、关联、来源与覆盖字段；返回 Transaction |
+| `POST /v1/finance/transactions/batch` | `idempotency_key,operations,conserve_total,reason`；同事务创建／纠正／删除并返回守恒校验，失败全部回滚 |
 | `PATCH /v1/finance/transactions/{id}` | `idempotency_key,expected_revision?` 加待修改字段；原地纠正并推进 revision |
 | `DELETE /v1/finance/transactions/{id}?idempotency_key=` | 软删除；存在关联退款时先处理退款，返回 `{deleted:true,id}` |
 | `GET /v1/finance/summary?month=&as_of=YYYY-MM-DD` | `{month,budget,totals,reservations,remaining,projection,coverage,daily_average,record_count}` |
 
-模型工具采用严格参数 schema，未知字段报错。纠正使用 `changes` 对象（兼容旧 `changes_json`，两者不能同时传）；放在顶层的 `amount` 不再被静默忽略。预算更新是字段 patch，省略保持现状，清空需 `clear_fields`；`commitments_upsert` 按 key 更新项目，`commitment_keys_remove` 显式移除。单月 patch 按字段继承后续沿用预算的修改。
+模型工具采用严格参数 schema，未知字段报错。已确认的既有资产提取不能记成新增收入；同用途预留的新 key 会返回已有项目供复用或显式替换，明确独立的项目可声明 `separate_from_keys`。这些有限语义检查不能取代核验原文与写后回读。纠正使用 `changes` 对象（兼容旧 `changes_json`，两者不能同时传）；放在顶层的 `amount` 不再被静默忽略。预算更新是字段 patch，省略保持现状，清空需 `clear_fields`；`commitments_upsert` 按 key 更新项目，`commitment_keys_remove` 显式移除。单月 patch 按字段继承后续沿用预算的修改。
 
 `apply_finance_transaction_batch` 可将创建／纠正／删除作为同一事务执行；任一 revision 冲突或校验失败全部回滚。拆分需声明总额守恒，结果包含最终记录与校验信息，重试复用原回执。
 
-`commitments` 每项为 `{key,label,amount,kind:fixed|one_time,every_months?,anchor_month?,due_day?,monthly_cost?,paid_through?}`。`amount` 是每次付款金额，周期按 `anchor_month` 和 `every_months` 推进；`monthly_cost` 是月度成本，默认用付款金额除以周期，`paid_through` 是已覆盖的最后月份。`recurring=true` 自该月沿用最近设置；单月配置优先。沿用时只保留固定承诺，不把某月大件继续预留到以后。`coverage_start/coverage_through` 必须同时提供且位于当月，只在用户确知记录覆盖时填写。PUT 是手动编辑的完整配置；模型使用上述 patch 工具，不把省略字段误清空。`income_schedule` 保存 `last_business_day` 或 `day_of_month` 规则，支持工作日和日期例外；仅周一到周五日历不代表法定调休或真实工资到账。
+`commitments` 每项为 `{key,label,amount,kind:fixed|one_time,every_months?,anchor_month?,due_day?,monthly_cost?,paid_through?,purpose?,separate_from_keys?}`。`amount` 是每次付款金额，周期按 `anchor_month` 和 `every_months` 推进；`monthly_cost` 是月度成本，默认用付款金额除以周期，`paid_through` 是已覆盖的最后月份。`recurring=true` 自该月沿用最近设置；单月配置优先。沿用时只保留固定承诺，不把某月大件继续预留到以后。`coverage_start/coverage_through` 必须同时提供且位于当月，只在用户确知记录覆盖时填写。PUT 是手动编辑的完整配置；模型使用上述 patch 工具，不把省略字段误清空。`income_schedule` 保存 `last_business_day` 或 `day_of_month` 规则，支持工作日和日期例外；仅周一到周五日历不代表法定调休或真实工资到账。
 
 Transaction 另含 `date_precision:day|month|range,date_start,date_end,coverage_start,coverage_end`。未知具体日可给月份或日期范围，不默认写成今天；跨月区间在 `summary.unallocated.items` 中返回，不分配到某个单月。`coverage_start/coverage_end` 为此笔付款覆盖的 YYYY-MM 范围，与实际支付日期独立。
 

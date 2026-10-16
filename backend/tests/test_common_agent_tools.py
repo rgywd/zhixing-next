@@ -102,6 +102,8 @@ async def test_every_direct_identity_has_the_same_general_tools_and_real_report(
     assert receipts[1]["date"] == "2026-12-31"
     resource = receipts[2]["resource"]
     assert resource["conversation_id"] == conversation["id"]
+    assert resource["name"] == "财务报告.md"
+    assert resource["path"].startswith("report-")
     assert "4320" in resource_bytes(settings, resource).decode()
     store.finish_run(run["id"], "completed", result=result)
     assert store.list_messages(conversation["id"])["items"][-1]["attachments"][0]["id"] == resource["id"]
@@ -285,10 +287,10 @@ async def test_cancellation_waits_for_actual_report_publication_receipt(tmp_path
     entered, release = threading.Event(), threading.Event()
     original = reports.capture_file
 
-    def delayed_capture(*args):
+    def delayed_capture(*args, **kwargs):
         entered.set()
         assert release.wait(5)
-        return original(*args)
+        return original(*args, **kwargs)
 
     monkeypatch.setattr(reports, "capture_file", delayed_capture)
     events = []

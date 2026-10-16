@@ -5,7 +5,7 @@ export type FinanceTransaction = {
   amount: string; occurred_on: string; date_precision?: "day" | "month" | "range"; date_start?: string | null; date_end?: string | null; coverage_start?: string | null; coverage_end?: string | null; bucket: "daily" | "fixed" | "one_time";
   category: string; note: string; commitment_key?: string | null; related_transaction_id?: string | null;
 };
-export type FinanceCommitment = { key: string; label: string; amount: string; kind: "fixed" | "one_time"; every_months?: number; anchor_month?: string | null; due_day?: number | null; monthly_cost?: string | null; paid_through?: string | null };
+export type FinanceCommitment = { key: string; label: string; amount: string; kind: "fixed" | "one_time"; every_months?: number; anchor_month?: string | null; due_day?: number | null; monthly_cost?: string | null; paid_through?: string | null; purpose?: string | null; separate_from_keys?: string[] };
 export type IncomeSchedule = { rule: "last_business_day" | "day_of_month"; day?: number | null; weekdays?: number[]; working_dates?: string[]; non_working_dates?: string[]; calendar_basis?: "weekdays_only" | "user_overrides" };
 export function financeDateLabel(record: FinanceTransaction) {
   if (record.date_precision === "month") return `${(record.date_start ?? record.occurred_on).slice(0, 7)}（日期待定）`;

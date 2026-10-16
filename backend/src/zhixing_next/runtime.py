@@ -25,6 +25,7 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.errors import GraphInterrupt, NodeCancelledError
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
+from pydantic import ValidationError
 
 from .common_tools import COMMON_INSTRUCTIONS, assign_common_tools, create_common_tools
 from .config import Settings
@@ -75,6 +76,30 @@ def _text(message: Any) -> str:
         block.get("text", "")
         for block in content
         if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _business_time_prompt(store: Store, message_id: str, *, now: datetime | None = None) -> str:
+    from datetime import datetime as MessageDatetime
+
+    zone = ZoneInfo("Asia/Shanghai")
+    current = (now or datetime.now(zone)).astimezone(zone)
+    with store._connection() as db:
+        row = db.execute("SELECT created_at FROM messages WHERE id=? AND role='user'", (message_id,)).fetchone()
+    source = None
+    if row:
+        try:
+            source = MessageDatetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+            source = source.replace(tzinfo=zone) if source.tzinfo is None else source.astimezone(zone)
+        except ValueError:
+            pass
+    return (
+        f"Current service time: {current.isoformat()}. "
+        "Resolve relative dates from the user's stated context; ask only for an ambiguity that changes a record. "
+        + (f"This user's source message was sent at: {source.isoformat()} (Asia/Shanghai). " if source else "The source message time is unavailable. ")
+        + "For relative dates such as today, now, this month and yesterday, use the user's source message time, "
+        "not a later queue execution time. The user's explicitly stated date/context takes precedence. "
+        "Do not invent an unavailable date; ask only for an ambiguity that changes a record. "
     )
 
 
@@ -261,7 +286,18 @@ class RunControls(AgentMiddleware):
             "copy_file",
             "publish_report",
         }
-        tool_task = asyncio.create_task(handler(request))
+        async def checked_handler():
+            from .finance_tools import FINANCE_TOOL_NAMES
+
+            schema = getattr(getattr(request, "tool", None), "args_schema", None)
+            if call["name"] in FINANCE_TOOL_NAMES and hasattr(schema, "model_validate"):
+                # ToolNode otherwise formats validation failures with all supplied
+                # kwargs before returning them to middleware. Validate here so only
+                # bounded field errors reach the model, never raw input values.
+                schema.model_validate(call["args"])
+            return await handler(request)
+
+        tool_task = asyncio.create_task(checked_handler())
         try:
             result = await asyncio.shield(tool_task) if thread_tool else await tool_task
         except asyncio.CancelledError:
@@ -301,19 +337,38 @@ class RunControls(AgentMiddleware):
                     "error": type(exc).__name__,
                 },
             )
+            from .finance_tools import FINANCE_TOOL_NAMES
             from .operations import IDEMPOTENT_SERVICE_TOOLS
 
             service_tools = IDEMPOTENT_SERVICE_TOOLS | {
                 "get_finance_summary", "list_finance_transactions",
                 "query_health_context", "query_life_events",
             }
+            service_tools |= set(FINANCE_TOOL_NAMES)
             if isinstance(exc, StoreError) and call["name"] in service_tools:
                 # Service errors are curated business feedback, not arbitrary tool
                 # output. Preserve conflicts so the agent can read and retry safely.
+                message = exc.message[:1800]
+                content = json.dumps({"error": {"code": exc.code, "message": message}}, ensure_ascii=False)
+                while len(content) > 2000:
+                    message = message[:len(message) // 2]
+                    content = json.dumps({"error": {"code": exc.code, "message": message}}, ensure_ascii=False)
                 return ToolMessage(
-                    content=json.dumps({"error": {"code": exc.code, "message": exc.message}}, ensure_ascii=False),
+                    content=content,
                     tool_call_id=call["id"],
                     status="error",
+                )
+            if isinstance(exc, ValidationError) and call["name"] in FINANCE_TOOL_NAMES:
+                fields = [{"field": ".".join(str(part) for part in item["loc"])[:100],
+                           "type": item["type"][:60], "message": item["msg"][:160]}
+                          for item in exc.errors(include_url=False, include_context=False, include_input=False)[:4]]
+                content = json.dumps({"error": {"code": "invalid_finance_parameters", "message": "Correct the listed fields and retry; no write was applied.", "fields": fields}}, ensure_ascii=False)
+                while len(content) > 2000:
+                    fields.pop()
+                    content = json.dumps({"error": {"code": "invalid_finance_parameters", "message": "Correct the listed fields and retry; no write was applied.", "fields": fields}}, ensure_ascii=False)
+                return ToolMessage(
+                    content=content,
+                    tool_call_id=call["id"], status="error",
                 )
             # Sandbox diagnostics contain task-local outputs, like execute itself. Give
             # the model enough information to repair selectors and invalid artifacts.
@@ -472,10 +527,7 @@ async def _run_agent(
     operations = OperationRunner(settings, {**run, "workspace_path": str(workspace)}, sandbox)
     middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, restricted_files=direct_agent is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"])
     assigned_tools = assign_common_tools(common_tools, direct_agent["tools"], by_name) if direct_agent else physical_tools
-    business_time_prompt = (
-        f"Current service time: {datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}. "
-        "Resolve relative dates from the user's stated context; ask only for an ambiguity that changes a record. "
-    )
+    business_time_prompt = _business_time_prompt(store, run["message_id"])
     system_prompt = (
         "You are the user's personal assistant. Be truthful about tool results and capability limits. "
         + business_time_prompt

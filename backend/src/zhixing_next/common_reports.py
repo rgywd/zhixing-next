@@ -46,7 +46,7 @@ def create_report_tool(settings, run, workspace, emit):
                 access.write_bytes(relative, data, limit=MAX_FILE_BYTES)
             if hashlib.sha256(access.read_bytes(relative, limit=MAX_FILE_BYTES)[1]).hexdigest() != digest:
                 raise ValueError("Report changed after writing")
-            resource = capture_file(settings, run["conversation_id"], relative)
+            resource = capture_file(settings, run["conversation_id"], relative, display_name=filename)
             if resource["sha256"] != digest or resource_bytes(settings, resource) != data:
                 raise ValueError("Published resource failed its integrity check")
         return {"resource": resource, "verification": {"sha256": digest, "size": len(data), "format": suffix[1:], "checks": checks}}

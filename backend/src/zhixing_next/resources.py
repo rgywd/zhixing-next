@@ -127,7 +127,7 @@ def resource_text(settings: Settings, resource: dict) -> dict:
             "truncated": len(text) > limit, "sha256": resource["sha256"]}
 
 
-def capture_file(settings: Settings, conversation_id: str, path: str) -> dict:
+def capture_file(settings: Settings, conversation_id: str, path: str, *, display_name: str | None = None) -> dict:
     from .files import read_file
 
     store = Store(settings)
@@ -142,7 +142,7 @@ def capture_file(settings: Settings, conversation_id: str, path: str) -> dict:
             settings,
             conversation_id,
             identifier,
-            {"path": path, "name": location.name, "size": len(data)},
+            {"path": path, "name": display_name or location.name, "size": len(data)},
             Path(source.name),
             digest,
         )

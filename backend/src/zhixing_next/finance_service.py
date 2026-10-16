@@ -4,6 +4,7 @@ import calendar
 import hashlib
 import json
 import re
+from contextlib import nullcontext
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from uuid import uuid4
@@ -75,6 +76,40 @@ def _text(value, name, maximum=1000, allow_empty=True):
     ):
         raise _error(f"Invalid {name}")
     return value.strip()
+
+
+def _commitment_purposes(item):
+    """Conservative duplicate candidates, not a general semantic identity claim."""
+    label = item.get("label", "").lower()
+    normalized = re.sub(r"[^\w]", "", label)
+    purposes = {"label:" + normalized}
+    if item.get("purpose"):
+        purposes.add("purpose:" + re.sub(r"[^\w]", "", item["purpose"].lower()))
+    for purpose, pattern in {
+        "housing": r"房租|租金|租住|租房|\brent\b|\brental\b",
+        "commute": r"通勤|地铁|\bcommut(?:e|ing)\b|\bsubway\b",
+        "telecom": r"话费|手机套餐|移动通信|通讯费|通信费|\bmobile plan\b|\bphone bill\b",
+    }.items():
+        if re.search(pattern, label):
+            purposes.add("purpose:" + purpose)
+    # Different insurers/subscription products can coexist. Only normalize their
+    # harmless recurrence suffixes, never collapse all insurance/subscriptions.
+    clean = re.sub(r"[（(][^）)]*(?:月度|年度|预留|分摊|每月|每年|季度)[^）)]*[）)]", "", label)
+    purposes.add("label:" + re.sub(r"[^\w]", "", clean))
+    return purposes
+
+
+def _explicit_existing_asset_move(category, note):
+    value = category + " " + note
+    patterns = (
+        r"(?:公积金|存款|账户余额|已有余额|原有资产|储蓄|自己账户|自有账户).{0,24}(?:提取|提现|提款|取出|转出|转入)",
+        r"(?:提取|提现|提款|取出).{0,12}(?:公积金|存款|账户余额|储蓄)",
+        r"(?:赎回|取回|收回).{0,8}本金",
+        r"(?:provident fund|savings|deposit|existing balance|own account).{0,24}(?:withdrawal|withdraw|transfer)",
+        r"(?:withdraw|withdrawal).{0,12}(?:provident fund|savings|deposit|existing balance)",
+        r"(?:redeem|redemption).{0,12}principal",
+    )
+    return any(re.search(pattern, value, re.IGNORECASE) for pattern in patterns)
 
 
 def migrate(db):
@@ -245,6 +280,19 @@ class FinanceService:
                 raise _error("A multi-month payment needs anchor_month, its first known due month")
             if item.get("monthly_cost") is not None:
                 item["monthly_cost"] = _money(item["monthly_cost"])
+                derived = (Decimal(item["amount"]) / item.get("every_months", 1)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                if Decimal(item["monthly_cost"]) != derived:
+                    raise _error(
+                        "monthly_cost must equal the actual payment amount divided by every_months, rounded to cents. Do not substitute monthly cost for the actual quarterly payment."
+                    )
+            if item.get("purpose") is not None:
+                item["purpose"] = _text(item["purpose"], "commitment purpose", 100, False)
+            item["separate_from_keys"] = [
+                _text(key, "separate commitment key", 100, False)
+                for key in item.get("separate_from_keys", [])
+            ]
             normalized.append(item)
         if len({item["key"] for item in normalized}) != len(normalized):
             raise _error("Commitment keys must be unique")
@@ -334,6 +382,39 @@ class FinanceService:
         }
 
         def operation(db):
+            current = self._budget(db, month)
+            candidates = {
+                item["key"]: item for item in current["commitments"] if item["key"] not in removed
+            }
+            candidates.update({item["key"]: item for item in upserts})
+            changed_keys = {item["key"] for item in upserts}
+            items = list(candidates.values())
+            for index, item in enumerate(items):
+                for other in items[index + 1 :]:
+                    if not changed_keys & {item["key"], other["key"]}:
+                        continue
+                    if (
+                        item["kind"] != other["kind"]
+                        or other["key"] in item.get("separate_from_keys", [])
+                        or item["key"] in other.get("separate_from_keys", [])
+                    ):
+                        continue
+                    if _commitment_purposes(item) & _commitment_purposes(other):
+                        conflict = [
+                            {
+                                "key": value["key"],
+                                "label": value["label"],
+                                "amount": value["amount"],
+                            }
+                            for value in (item, other)
+                        ]
+                        raise _error(
+                            "A same-purpose commitment already exists: "
+                            + _json(conflict)
+                            + ". Reuse its key or explicitly remove the replaced key in this same patch. For clearly independent costs only, name separate_from_keys. Nothing was saved.",
+                            "duplicate_commitment",
+                            409,
+                        )
             if expected_revision is not None:
                 current = self._budget(db, month)
                 if (
@@ -418,6 +499,16 @@ class FinanceService:
                         "write_verification_failed",
                         409,
                     )
+            verified = self.summary(month=month, _db=db)
+            result["verification"] = {
+                "saved_fields": sorted(changes),
+                "effective_commitments": result["commitments"],
+                "monthly_cost": verified["commitments"]["monthly_cost"],
+                "cash_due": verified["commitments"]["cash_due"],
+                "remaining_due": verified["reservations"]["total"],
+                "items": verified["commitments"]["items"],
+                "checked_against_saved_records": True,
+            }
             return result
 
         return self._mutate(idempotency_key, request, operation)
@@ -546,7 +637,9 @@ class FinanceService:
                 _date(value)
             month = _month(value[:7])
             if any(other and other[:7] != month for other in (begin, end)):
-                raise _error("A month-precision record cannot cross months")
+                raise _error(
+                    "Month precision means one explicitly known actual month. Keep the user's original period with date_precision=range and full YYYY-MM-DD endpoints; never invent individual payment months from a payment count or schedule."
+                )
             begin = month + "-01"
             year, number = map(int, month.split("-"))
             end = f"{month}-{calendar.monthrange(year, number)[1]:02d}"
@@ -573,6 +666,12 @@ class FinanceService:
         data["bucket"] = data.get("bucket", "daily")
         data["category"] = _text(data.get("category", "其他"), "category", 100, False)
         data["note"] = _text(data.get("note", ""), "note")
+        if kind == "income" and _explicit_existing_asset_move(data["category"], data["note"]):
+            raise _error(
+                "This description explicitly withdraws or transfers existing assets. Use kind=transfer, not income. Only external new earnings/new contributions are income; split any new yield from returned principal. No record was saved.",
+                "existing_asset_is_transfer",
+                422,
+            )
         for field in ("commitment_key", "conversation_id", "source_id"):
             data[field] = (
                 _text(data[field], field, 200, False) if data.get(field) is not None else None
@@ -935,7 +1034,7 @@ class FinanceService:
             ).fetchall()
             return {"items": [self._record(row) for row in rows], "total": total}
 
-    def summary(self, *, month=None, as_of=None):
+    def summary(self, *, month=None, as_of=None, _db=None):
         month = _month(month)
         today = (
             date.fromisoformat(_date(as_of))
@@ -945,8 +1044,9 @@ class FinanceService:
         start = date.fromisoformat(month + "-01")
         last = date(start.year, start.month, calendar.monthrange(start.year, start.month)[1])
         through = min(today, last)
-        with self.store._connection() as db:
-            db.execute("BEGIN")
+        with nullcontext(_db) if _db is not None else self.store._connection() as db:
+            if not db.in_transaction:
+                db.execute("BEGIN")
             budget = self._budget(db, month)
             rows = [
                 self._record(row)

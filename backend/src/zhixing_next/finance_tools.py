@@ -29,6 +29,8 @@ FINANCE_TOOL_NAMES = [
 FINANCE_INSTRUCTIONS = """你是知行的财务助手。新消费和收入必须使用record_finance_transaction；旧record_finance_observation仅用于balance余额观察，不能承接新收支。用户清楚表达的消费、收入、退款与预算修改直接通过财务服务工具保存，只有真实成功回执才能说已记录。收支以业务日期而非录入时间归月；今天使用Asia/Shanghai业务日期。不能编造金额、收入、消费或预算。日常、固定、一次性分别记录，大件仍计入真实结余。转账/信用卡还款使用transfer，不能当作新增消费。退款引用原消费ID。先查询真实记录和有效预算再纠正；不要把同日同额不同笔消费合并。固定费用付款仅在明确匹配时填写预算commitment_key。预计收入本身包含实收，不能相加两次。预算可默认沿用或单月覆盖，不把个人数字或规则写死。update_finance_budget仅修改用户提及字段；AI提出的预算不是用户已接受安排。同句多笔用不同且稳定的entry_key（如expense_1、expense_2），同一笔跨重试保持原entry_key；纠正用新操作entry_key及原记录ID。每个工具自动使用原消息source_id确保重试不重复。累计总额用aggregate及period_start，覆盖范围内明细不重复计；禁止把旧余额观察自动变为收入或确定业务日期的账目。覆盖不完整的日均未知，不把漏记当零消费；预测需说明依据和缺口。只有用户确认记录覆盖完整时才修改coverage_start/coverage_through。用户只发饮食照片时不猜餐费，跨服务部分成功时说明已经保存的部分并只补失败项。"""
 FINANCE_INSTRUCTIONS += " 收支日期不完整时使用date_precision=month或range及date_start/date_end，不可猜成今天；跨月未知单列未分配，不当作当月现金流。付款日期与费用覆盖月份coverage_start/end分开。季付租金只保留一份承诺，amount为实际付款额、every_months为周期、monthly_cost为月成本，不能另建月摊承诺重复预留。发薪规则存income_schedule；最后工作日通过共用date_info计算，未接法定调休时明确按周一至周五和用户例外。预算只传changes中修改字段，承诺用commitments_upsert或commitment_keys_remove，绝不能为省略未改字段传null；明确清空用clear_fields。更正用结构化changes；未知字段会报错，不能把未成功写入说成不支持。拆分已有收入/消费使用apply_finance_transaction_batch单事务且默认总额守恒；金额本身确需纠正才conserve_total=false并注明原因。工具成功后核对回执中的实际值，报告使用共用publish_report交付可打开文件，不能仅声称工作区文件已交付。"
 
+FINANCE_INSTRUCTIONS += " 重要记账语义：公积金提取、存款提现、取回赎回本金等是已有资产内部转移，使用transfer，不能因为到账银行卡就当income；只有新工资、新收益、新缴存才是income，混合时分别记录。首尾资产都包含的同一资产尤其不可再加作收入。用户只说某段期间收到N笔工资/提取时，N笔不证明实际月份，先把整个明确期间保存range；不要拆猜8月/9月或按发薪规则倒推已到账月份。后续发薪日规则只说明预计日程，不证明过去每笔发生日期。修改付款周期/金额要先查看现有commitments并复用同用途key，或在同一patch显式remove旧key后新增；不能保留旧月摊承诺再加季度款。amount永远是一次实际付款额，monthly_cost是amount/every_months，仅分币舍入。commitment工具回执verification同时给月成本、现金到期款、剩余预留与所有生效项，必须核对并再get_finance_summary；若仍有同用途项应纠正而非直接交付重复预留报告。"
+
 
 class SummaryArguments(FinanceInput):
     month: str = ""
@@ -100,7 +102,7 @@ def create_finance_service_tools(settings, conversation_id: str, source_id: str)
         coverage_start: str | None = None,
         coverage_end: str | None = None,
     ) -> dict:
-        """Record explicit CNY cash flow with stable distinct entry_key. Exact day: occurred_on YYYY-MM-DD. Month-only: date_precision=month,date_start=YYYY-MM. Uncertain range: date_precision=range,date_start/date_end YYYY-MM-DD. Never invent today. coverage_start/end are YYYY-MM costs covered by a payment. Transfer is internal movement, not new income. Refund references an expense. aggregate is an explicit cumulative total with period_start."""
+        """Record explicit CNY cash flow with stable distinct entry_key. Exact day: occurred_on YYYY-MM-DD. Month-only: date_precision=month,date_start=YYYY-MM. Uncertain range: date_precision=range,date_start/date_end YYYY-MM-DD. Never invent today. coverage_start/end are YYYY-MM costs covered by a payment. Withdrawals of provident funds, deposits or returned principal are existing-asset transfer, never income; new external earnings/contributions are income. A count of past payments does not prove months: preserve the user's stated whole period as range. Refund references an expense. aggregate is an explicit cumulative total with period_start."""
         row = service.create_transaction(
             idempotency_key=key("record", entry_key),
             kind=kind,
@@ -158,7 +160,7 @@ def create_finance_service_tools(settings, conversation_id: str, source_id: str)
         changes_json: str | None = None,
         recurring: bool = True,
     ) -> dict:
-        """Patch only user-mentioned budget fields for YYYY-MM. Structured changes supports expected_income,savings_target,daily_budget,income_schedule,coverage_start/through,commitments_upsert,commitment_keys_remove,clear_fields. Missing fields inherit. Null is rejected: explicit clearing names clear_fields. Commitment amount is actual due cash; every_months/anchor_month/due_day define cycle, monthly_cost is separate, paid_through marks explicitly paid coverage. recurring=false overrides only changed fields for that month. Legacy changes_json is accepted instead of changes; legacy commitments list is safe keyed upsert, never implicit deletion."""
+        """Patch only user-mentioned budget fields for YYYY-MM. Structured changes supports expected_income,savings_target,daily_budget,income_schedule,coverage_start/through,commitments_upsert,commitment_keys_remove,clear_fields. Missing fields inherit. Null is rejected: explicit clearing names clear_fields. Commitment amount is actual due cash; every_months/anchor_month/due_day define cycle, monthly_cost is amount/every_months rounded to cents, paid_through marks explicitly paid coverage. Reuse existing same-purpose keys when changing cycle/amount, or explicitly remove old keys in the same patch. Only clearly independent costs may list separate_from_keys; purpose is an optional stable expense identity. recurring=false overrides only changed fields for that month. Legacy changes_json is accepted instead of changes; legacy commitments list is safe keyed upsert, never implicit deletion."""
         fields = _changes(changes, changes_json, BudgetChanges)
         return service.patch_budget(
             month=month,

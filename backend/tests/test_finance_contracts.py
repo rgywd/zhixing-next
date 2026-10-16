@@ -472,5 +472,241 @@ def test_ambiguous_partial_cumulative_overlap_is_explicitly_not_exact(service):
 def test_conflicting_date_fields_never_silently_choose_one(service):
     with pytest.raises(StoreError, match="conflicts"):
         record(service, date_end="2026-10-16")
-    with pytest.raises(StoreError, match="cannot cross months"):
+    with pytest.raises(StoreError, match="never invent individual payment months"):
         record(service, occurred_on="2026-10-15", date_precision="month", date_start="2026-09")
+
+
+@pytest.mark.parametrize(
+    "category,note",
+    [
+        ("公积金提取", "转入银行卡"),
+        ("提取公积金", ""),
+        ("存款取出", ""),
+        ("余额", "已有余额提现"),
+        ("理财", "赎回本金"),
+        ("provident fund withdrawal", ""),
+        ("savings withdrawal", ""),
+    ],
+)
+def test_explicit_existing_asset_withdrawal_is_rejected_as_income_then_saved_as_transfer(
+    service, category, note
+):
+    with pytest.raises(StoreError) as error:
+        record(service, "incorrect-income", category=category, note=note)
+    assert error.value.code == "existing_asset_is_transfer"
+    assert "kind=transfer" in str(error.value)
+    assert service.list_transactions(month="2026-10")["total"] == 0
+    row = record(service, "correct-transfer", kind="transfer", category=category, note=note)
+    assert row["kind"] == "transfer"
+
+
+@pytest.mark.parametrize("category", ["工资", "公积金新缴存", "存款利息收入", "理财新收益"])
+def test_new_external_earnings_and_contributions_are_still_income(service, category):
+    assert record(service, category=category)["kind"] == "income"
+
+
+@pytest.mark.parametrize(
+    "old_label,new_label",
+    [
+        ("房租（月度预留）+水电", "租金（季度）"),
+        ("地铁通勤（月度预留）", "通勤"),
+        ("手机套餐", "话费"),
+        ("医疗保险（月度预留）", "医疗保险"),
+        ("音乐订阅（月度预留）", "音乐订阅"),
+    ],
+)
+def test_same_purpose_key_conflict_gives_actionable_keys_without_writing(
+    service, old_label, new_label
+):
+    patch(
+        service,
+        "old",
+        {
+            "commitments_upsert": [
+                {"key": "existing-cost", "label": old_label, "amount": "900", "kind": "fixed"}
+            ]
+        },
+    )
+    incoming = {
+        "key": "replacement-cost",
+        "label": new_label,
+        "amount": "2700",
+        "kind": "fixed",
+        "every_months": 3,
+        "anchor_month": "2026-09",
+        "monthly_cost": "900",
+    }
+    with pytest.raises(StoreError) as error:
+        patch(service, "would-duplicate", {"commitments_upsert": [incoming]})
+    assert error.value.code == "duplicate_commitment"
+    assert "existing-cost" in str(error.value) and "Reuse its key" in str(error.value)
+    assert len(service.get_budget("2026-10")["commitments"]) == 1
+    result = patch(
+        service,
+        "explicit-replacement",
+        {"commitments_upsert": [incoming], "commitment_keys_remove": ["existing-cost"]},
+    )
+    assert [item["key"] for item in result["commitments"]] == ["replacement-cost"]
+    assert result["verification"]["monthly_cost"] == "900.00"
+    assert result["verification"]["cash_due"] == "0.00"
+    assert result["verification"]["checked_against_saved_records"]
+
+
+def test_distinct_same_purpose_cost_requires_explicit_coexistence(service):
+    patch(
+        service,
+        "first-property",
+        {
+            "commitments_upsert": [
+                {"key": "home", "label": "房租", "amount": "900", "kind": "fixed"}
+            ]
+        },
+    )
+    result = patch(
+        service,
+        "explicit-second-property",
+        {
+            "commitments_upsert": [
+                {
+                    "key": "other-property",
+                    "label": "另一处租金",
+                    "amount": "100",
+                    "kind": "fixed",
+                    "separate_from_keys": ["home"],
+                }
+            ]
+        },
+    )
+    assert len(result["commitments"]) == 2
+    assert result["verification"]["remaining_due"] == "1000.00"
+
+
+def test_quarterly_payment_cannot_silently_become_monthly_amount(service):
+    with pytest.raises(StoreError, match="actual payment amount divided"):
+        patch(
+            service,
+            "wrong-amount",
+            {"commitments_upsert": [{**rent(), "amount": "1200", "monthly_cost": "1200"}]},
+        )
+    rounded = {**rent(), "amount": "1000", "monthly_cost": "333.33"}
+    result = patch(service, "cent-rounding", {"commitments_upsert": [rounded]})
+    assert result["verification"]["monthly_cost"] == "333.33"
+
+
+def test_same_patch_cannot_introduce_two_keys_for_one_cost(service):
+    values = [
+        {"key": key, "label": label, "amount": "900", "kind": "fixed"}
+        for key, label in [("rent-a", "房租"), ("rent-b", "租金")]
+    ]
+    with pytest.raises(StoreError) as error:
+        patch(service, "duplicate-new-pair", {"commitments_upsert": values})
+    assert error.value.code == "duplicate_commitment"
+    assert service.get_budget("2026-10")["commitments"] == []
+
+
+async def test_real_graph_sees_finance_errors_and_corrects_without_false_success(tmp_path):
+    from langchain_core.messages import AIMessage, ToolMessage
+    from test_runtime import ScriptedModel, ignore, make_run, make_settings, no_controls, run_agent
+
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    service = FinanceService(store)
+    patch(
+        service,
+        "initial",
+        {
+            "commitments_upsert": [
+                {
+                    "key": "existing-rent",
+                    "label": "房租（月度预留）",
+                    "amount": "900",
+                    "kind": "fixed",
+                }
+            ]
+        },
+    )
+    run = make_run("finance-errors")
+    run["agent"] = store.get_agent("finance")
+
+    def call(name, args, identifier):
+        return AIMessage(
+            content="",
+            tool_calls=[{"name": name, "args": args, "id": identifier, "type": "tool_call"}],
+        )
+
+    withdrawal = {
+        "entry_key": "withdrawal",
+        "kind": "income",
+        "amount": "100",
+        "occurred_on": "2026-10-15",
+        "category": "公积金提取",
+    }
+    quarterly = {
+        "key": "new-rent",
+        "label": "季度租金",
+        "kind": "fixed",
+        "amount": "2700",
+        "every_months": 3,
+        "anchor_month": "2026-09",
+        "monthly_cost": "900",
+    }
+    model = ScriptedModel(
+        replies=[
+            call("record_finance_transaction", withdrawal, "wrong-income"),
+            call(
+                "record_finance_transaction",
+                {**withdrawal, "kind": "transfer", "entry_key": "withdrawal-correct"},
+                "correct-transfer",
+            ),
+            call(
+                "update_finance_budget",
+                {
+                    "entry_key": "new-quarter",
+                    "month": "2026-10",
+                    "changes": {"commitments_upsert": [quarterly]},
+                },
+                "duplicate-rent",
+            ),
+            call(
+                "update_finance_budget",
+                {
+                    "entry_key": "reuse-existing",
+                    "month": "2026-10",
+                    "changes": {"commitments_upsert": [{**quarterly, "key": "existing-rent"}]},
+                },
+                "correct-cycle",
+            ),
+            call("get_finance_summary", {"month": "2026-10"}, "readback"),
+            AIMessage(content="已核对实际保存的分类及周期。"),
+        ]
+    )
+    result = await run_agent(
+        settings,
+        run,
+        persona="",
+        emit=ignore,
+        controls=no_controls,
+        acknowledge=ignore,
+        model_override=model,
+    )
+    assert result == "已核对实际保存的分类及周期。"
+    messages = {
+        message.tool_call_id: message
+        for context in model.seen
+        for message in context
+        if isinstance(message, ToolMessage)
+    }
+    assert messages["wrong-income"].status == "error"
+    assert (
+        "existing_asset_is_transfer" in messages["wrong-income"].content
+        and "kind=transfer" in messages["wrong-income"].content
+    )
+    assert messages["duplicate-rent"].status == "error"
+    assert (
+        "existing-rent" in messages["duplicate-rent"].content
+        and "Reuse its key" in messages["duplicate-rent"].content
+    )
+    saved = json.loads(messages["readback"].content)
+    assert saved["totals"]["income"] == "0.00" and saved["totals"]["transfer"] == "100.00"
+    assert len(saved["budget"]["commitments"]) == 1
+    assert saved["commitments"]["monthly_cost"] == "900.00"
