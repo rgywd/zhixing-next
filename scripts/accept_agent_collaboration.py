@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -335,6 +336,38 @@ class AcceptanceSuite:
             event.get("type") == "tool" and event.get("data", {}).get("tool") == name
             and event["data"].get("status") == "completed" for event in evidence["events"])
 
+    @staticmethod
+    def consultation_assertions(result, deliveries, target_events, *, target_id,
+                                checkpointed, conversations_unchanged, usability):
+        """Pure hard checks shared by live cases and evidence-only reanalysis.
+
+        Checkpoint and conversation-set proofs must come from the same bound
+        run's recorded evidence; replay must not invent new API/SQLite receipts.
+        Factual fidelity is independently reviewed, never classified here.
+        """
+        from zhixing_next.agent_collaboration import READ_ONLY_TOOLS
+
+        receipt = deliveries[0] if len(deliveries) == 1 else {}
+        target_tools = [event["data"]["tool"] for event in target_events if event.get("type") == "tool"]
+        return {
+            "first_orchestration_choice_correct": usability["first_orchestration_choice_correct"] is True,
+            "no_failed_tool_calls": usability["trace_coverage"] == "events" and usability["failed_tool_calls"] == 0
+            and usability["target_failed_tool_calls"] == 0,
+            "existing_conversation_found_by_history": AcceptanceSuite.succeeded(result, "search_history"),
+            "no_new_conversation_created": conversations_unchanged,
+            "target_real_initial_checkpoint": checkpointed,
+            "one_delivery_to_existing_target": len(deliveries) == 1 and receipt.get("target_conversation_id") == target_id,
+            "actual_readonly_reply": receipt.get("read_only") is True and receipt.get("terminal") is True
+            and receipt.get("status") == "completed" and bool(receipt.get("reply_message_id")) and bool(receipt.get("result")),
+            "wait_released_worker_slot": any(event.get("type") == "paused" and event.get("data", {}).get("reason") == "agent_wait"
+                                              for event in result["events"]),
+            "real_wait_tool_receipt": AcceptanceSuite.succeeded(result, "wait_conversation_replies"),
+            "readonly_authority_received": any(event.get("type") == "conversation.message_received"
+                                                and event.get("data", {}).get("read_only") is True for event in target_events),
+            "target_only_read_tools": all(tool in READ_ONLY_TOOLS for tool in target_tools),
+            "business_state_unchanged": result["before_snapshot"] == result["snapshot"],
+        }
+
     def checked(self, key, assertions, *, duplicate_write=None):
         evidence = self.evidence[key]
         passed = all(assertions.values())
@@ -359,7 +392,7 @@ class AcceptanceSuite:
         return same_instant
 
     @staticmethod
-    def semantic_review(evidence, *, meal=None, additional_reply=""):
+    def semantic_review(evidence, *, meal=None, additional_reply="", required_claims=()):
         """Hints for independent reading, never proof or automatic rejection.
 
         Natural-language negatives and paraphrases cannot be judged reliably by
@@ -369,6 +402,9 @@ class AcceptanceSuite:
         text = evidence["run"]["result"] + "\n" + additional_reply
         evidence["semantic_review"] = {
             "status": "required", "review_all_replies_even_without_flags": True,
+            "required_claims": list(required_claims),
+            "full_reply_sha256": hashlib.sha256(evidence["run"]["result"].encode("utf-8")).hexdigest(),
+            "full_additional_reply_sha256": hashlib.sha256(additional_reply.encode("utf-8")).hexdigest(),
             "liability_wording_flag": unprovided_liability_claim(text),
             "reply_contains_clock": bool(re.search(r"(?<!\d)\d{1,2}:\d{2}(?!\d)|\d{1,2}点\d{1,2}分", text)),
             "other_food_quantity_flag": guessed_other_food_portion(
@@ -514,19 +550,18 @@ class AcceptanceSuite:
         }, duplicate_write=False)
 
     async def consultation(self):
-        from zhixing_next.agent_collaboration import READ_ONLY_TOOLS
-
         target = await self.conversation("虚构接驳路线咨询")
         initial = await self.turn("consultation_target_setup", target,
             "这段对话专门讨论一个虚构接驳方案：码头代号是 HARBOR-42，每周三停航，其他日子的班次未知；不能保证转乘。请概括这些已提供的事实和未知项，暂不做其他操作。")
         with sqlite3.connect(f"file:{self.settings.data_dir / 'checkpoints.sqlite'}?mode=ro", uri=True) as db:
             checkpointed = db.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (target,)).fetchone()[0] > 0
         require(checkpointed and initial["run"]["status"] == "completed", "target_real_checkpoint_missing")
-        self.semantic_review(initial)
+        self.semantic_review(initial, required_claims=[{
+            "id": "provided_facts_in_reply", "reply": "reply",
+            "must_check": "The setup reply faithfully summarizes HARBOR-42's Wednesday suspension, keeps other-day schedules unknown and transfers not guaranteed, and does not invent liability, compensation or other facts. Read the full reply in any language; matching words do not establish factual fidelity.",
+        }])
         self.checked("consultation_target_setup", {
             "real_initial_checkpoint": checkpointed,
-            "provided_facts_in_reply": "HARBOR-42" in initial["run"]["result"]
-            and "停航" in initial["run"]["result"],
         })
         source = await self.conversation("虚构跨对话咨询")
         conversations_before = {row["id"] for row in (await self.request("GET", "/v1/conversations", params={"limit": 100}))["items"]}
@@ -542,36 +577,23 @@ class AcceptanceSuite:
         conversations_after = {row["id"] for row in (await self.request("GET", "/v1/conversations", params={"limit": 100}))["items"]}
         receipt = deliveries[0] if len(deliveries) == 1 else {}
         target_events = targets[0]["events"] if len(targets) == 1 else []
-        target_tools = [event["data"]["tool"] for event in target_events if event.get("type") == "tool"]
         usability = orchestration_usability(result, "send_conversation_message")
         usability["target_failed_tool_calls"] = sum(orchestration_usability({
             "events": item["events"], "events_complete": True,
         }, "send_conversation_message")["failed_tool_calls"] for item in targets)
         result["collaboration_tool_usability"] = usability
         result["evaluation"]["expected_first_orchestration_tool"] = "send_conversation_message"
-        self.semantic_review(result, additional_reply=receipt.get("result", ""))
-        self.checked("conversation_consultation", {
-            "first_orchestration_choice_correct": usability["first_orchestration_choice_correct"] is True,
-            "no_failed_tool_calls": usability["trace_coverage"] == "events" and usability["failed_tool_calls"] == 0
-            and usability["target_failed_tool_calls"] == 0,
-            "existing_conversation_found_by_history": self.succeeded(result, "search_history"),
-            "no_new_conversation_created": conversations_before == conversations_after,
-            "target_real_initial_checkpoint": checkpointed,
-            "one_delivery_to_existing_target": len(deliveries) == 1 and receipt.get("target_conversation_id") == target,
-            "actual_readonly_reply": receipt.get("read_only") is True and receipt.get("terminal") is True
-            and receipt.get("status") == "completed" and bool(receipt.get("reply_message_id")) and bool(receipt.get("result")),
-            "wait_released_worker_slot": any(event.get("type") == "paused" and event.get("data", {}).get("reason") == "agent_wait"
-                                              for event in result["events"]),
-            "real_wait_tool_receipt": self.succeeded(result, "wait_conversation_replies"),
-            "readonly_authority_received": any(event.get("type") == "conversation.message_received"
-                                                and event.get("data", {}).get("read_only") is True for event in target_events),
-            "target_only_read_tools": all(tool in READ_ONLY_TOOLS for tool in target_tools),
-            "prior_context_in_real_reply": "HARBOR-42" in receipt.get("result", "")
-            and "周三" in receipt.get("result", "") and "停航" in receipt.get("result", ""),
-            "actual_reply_in_source_summary": "HARBOR-42" in result["run"]["result"]
-            and "停航" in result["run"]["result"],
-            "business_state_unchanged": result["before_snapshot"] == result["snapshot"],
-        }, duplicate_write=False)
+        self.semantic_review(result, additional_reply=receipt.get("result", ""), required_claims=[{
+            "id": "prior_context_in_real_reply", "reply": "additional_reply",
+            "must_check": "The actual target reply uses its prior HARBOR-42 context faithfully: Wednesday departures are suspended, other-day schedules remain unknown and transfers are not guaranteed. Verify the retained prior facts beyond those repeated in the consultation question; do not infer liability, fees or guarantees from uncertainty. Read the full reply in any language.",
+        }, {
+            "id": "actual_reply_in_source_summary", "reply": "reply",
+            "must_check": "The source reply faithfully summarizes the actual target reply, preserving its Wednesday suspension, known limitations and unknowns without reversing, strengthening or inventing claims. Compare both complete replies; shared words alone are not evidence of agreement.",
+        }])
+        self.checked("conversation_consultation", self.consultation_assertions(
+            result, deliveries, target_events, target_id=target, checkpointed=checkpointed,
+            conversations_unchanged=conversations_before == conversations_after, usability=usability,
+        ), duplicate_write=False)
 
     async def run(self):
         for name, case in (("health", self.health), ("linked_meal", self.linked_meal),

@@ -1,8 +1,10 @@
 """The acceptance driver is tested locally; these tests are NOT model acceptance."""
 
+import hashlib
 import importlib.util
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timedelta
@@ -142,6 +144,131 @@ def test_all_natural_replies_require_independent_review_even_without_flags(reply
     assert evidence["semantic_review"]["status"] == "required"
     assert evidence["semantic_review"]["review_all_replies_even_without_flags"] is True
     assert "passed" not in evidence["semantic_review"]
+
+
+@pytest.mark.parametrize("reply,additional", [
+    ("Every Wednesday HARBOR-42 does not operate; other-day schedules are unknown.", "Transfers are not guaranteed."),
+    ("HARBOR-42 每周三不停航，其他日子都有班次，保证转乘。", "HARBOR-42 周三停航这句话是错的，保证转乘。"),
+])
+def test_required_claims_bind_full_replies_without_classifying_factual_fidelity(reply, additional):
+    evidence = {"run": {"result": reply}}
+    claims = [{"id": "prior_context_in_real_reply", "reply": "additional_reply", "must_check": "Compare the actual reply with its prior facts."}]
+    acceptance.AcceptanceSuite.semantic_review(evidence, additional_reply=additional, required_claims=claims)
+    review = evidence["semantic_review"]
+    assert review["status"] == "required" and review["required_claims"] == claims
+    assert review["full_reply_sha256"] == hashlib.sha256(reply.encode("utf-8")).hexdigest()
+    assert review["full_additional_reply_sha256"] == hashlib.sha256(additional.encode("utf-8")).hexdigest()
+    assert "passed" not in review
+
+
+async def supplied_consultation_case(isolated, monkeypatch, *, reply, defect=None):
+    """Exercise the checker with synthetic receipts, not a real model run."""
+    settings, directory = isolated
+    store = Store(settings)
+    target, source = "existing-target", "source"
+    with sqlite3.connect(settings.data_dir / "checkpoints.sqlite") as db:
+        db.execute("CREATE TABLE checkpoints(thread_id TEXT)")
+        db.execute("INSERT INTO checkpoints VALUES(?)", (target,))
+    suite = acceptance.AcceptanceSuite(settings, directory, None, store, None, 1, None)
+    identifiers = iter((target, source))
+
+    async def conversation(*args):
+        return next(identifiers)
+
+    events = [
+        {"type": "tool", "data": {"tool": "send_conversation_message", "tool_call_id": "send", "status": "started"}},
+        {"type": "tool", "data": {"tool": "send_conversation_message", "tool_call_id": "send", "status": "completed"}},
+        {"type": "paused", "data": {"reason": "agent_wait"}},
+    ]
+    if defect == "worker_wait_missing":
+        events = events[:-1]
+
+    async def turn(key, *args):
+        evidence = {"run": {"id": "setup-run" if key == "consultation_target_setup" else "source-run", "status": "completed", "result": reply},
+                    "events": events if key == "conversation_consultation" else [], "events_complete": True,
+                    "operations": [{"tool": "search_history", "state": "succeeded"}, {"tool": "wait_conversation_replies", "state": "succeeded"}],
+                    "snapshot": {}, "before_snapshot": {}, "evaluation": {}}
+        suite.evidence[key] = evidence
+        return evidence
+
+    receipt = {"target_run_id": "target-run", "target_conversation_id": target,
+               "read_only": True, "terminal": True, "status": "completed",
+               "reply_message_id": "actual-target-reply", "result": reply}
+    if defect == "target_reply_missing":
+        receipt["result"] = ""
+    elif defect == "wrong_target":
+        receipt["target_conversation_id"] = "unexpected-target"
+    elif defect == "not_readonly":
+        receipt["read_only"] = False
+
+    async def request(method, path, *args, **kwargs):
+        if path == "/v1/conversations":
+            return {"items": [{"id": target}, {"id": source}]}
+        if path == "/v1/runs/source-run/conversation-messages":
+            return {"items": [] if defect == "target_delivery_missing" else [receipt]}
+        if path == "/v1/runs/target-run":
+            return {"id": "target-run", "status": "completed", "result": receipt["result"]}
+        raise AssertionError("Unexpected checker request")
+
+    async def target_events(run_id):
+        assert run_id == "target-run"
+        return [{"type": "conversation.message_received", "data": {"read_only": True}}]
+
+    monkeypatch.setattr(suite, "conversation", conversation)
+    monkeypatch.setattr(suite, "turn", turn)
+    monkeypatch.setattr(suite, "request", request)
+    monkeypatch.setattr(suite, "events", target_events)
+    return suite
+
+
+@pytest.mark.parametrize("reply", [
+    "HARBOR-42: Every Wednesday it does not operate. Schedules on other days remain unknown. Transfers are not guaranteed.",
+    "HARBOR-42 每周三不停航，其他日子都有班次，保证转乘。周三停航是错误说法。",
+])
+async def test_consultation_factual_fidelity_always_requires_review_regardless_of_language_or_shared_words(isolated, monkeypatch, reply):
+    suite = await supplied_consultation_case(isolated, monkeypatch, reply=reply)
+    await suite.consultation()
+    for name, claim_ids in (
+        ("consultation_target_setup", {"provided_facts_in_reply"}),
+        ("conversation_consultation", {"prior_context_in_real_reply", "actual_reply_in_source_summary"}),
+    ):
+        case = suite.case_results[name]
+        assert case["passed"]  # Mechanical receipts only, never factual approval.
+        review = case["semantic_review"]
+        assert review["status"] == "required" and "passed" not in review
+        assert {claim["id"] for claim in review["required_claims"]} == claim_ids
+        assert claim_ids.isdisjoint(case["checks"])
+        assert review["full_reply_sha256"] == hashlib.sha256(reply.encode("utf-8")).hexdigest()
+    review = suite.case_results["conversation_consultation"]["semantic_review"]
+    assert review["full_additional_reply_sha256"] == hashlib.sha256(reply.encode("utf-8")).hexdigest()
+    # The same pure checker can replay bound saved receipts without API calls.
+    saved = json.loads((suite.directory / "consultation-private-deliveries.json").read_text())
+    evidence = suite.evidence["conversation_consultation"]
+    before = json.dumps(evidence, sort_keys=True)
+    recorded = suite.case_results["conversation_consultation"]["checks"]
+    replay = suite.consultation_assertions(
+        evidence, [item["receipt"] for item in saved], saved[0]["events"], target_id="existing-target",
+        checkpointed=recorded["target_real_initial_checkpoint"],
+        conversations_unchanged=recorded["no_new_conversation_created"],
+        usability=evidence["collaboration_tool_usability"],
+    )
+    assert replay == recorded and json.dumps(evidence, sort_keys=True) == before
+
+
+@pytest.mark.parametrize("defect,failed_check", [
+    ("target_reply_missing", "actual_readonly_reply"),
+    ("target_delivery_missing", "one_delivery_to_existing_target"),
+    ("wrong_target", "one_delivery_to_existing_target"),
+    ("not_readonly", "actual_readonly_reply"),
+    ("worker_wait_missing", "wait_released_worker_slot"),
+])
+async def test_consultation_missing_actual_target_or_hard_receipt_still_fails(isolated, monkeypatch, defect, failed_check):
+    suite = await supplied_consultation_case(isolated, monkeypatch, reply="Every Wednesday HARBOR-42 does not operate.", defect=defect)
+    with pytest.raises(acceptance.AcceptanceError, match="conversation_consultation_business_assertion_failed"):
+        await suite.consultation()
+    case = suite.case_results["conversation_consultation"]
+    assert case["passed"] is False and case["checks"][failed_check] is False
+    assert case["semantic_review"]["status"] == "required" and "passed" not in case["semantic_review"]
 
 
 async def test_programmatic_completion_never_self_approves_semantics(isolated, monkeypatch):
