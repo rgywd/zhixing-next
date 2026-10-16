@@ -114,14 +114,14 @@ async def test_report_batch_with_failed_read_does_not_skip_model_repair(tmp_path
 
 async def test_report_failure_does_not_create_completion_or_hide_failure(tmp_path):
     settings, store, _, run, arguments = fixture(tmp_path)
-    arguments["start_date"] = "2026-05-01"
-    model = ScriptedModel(replies=[AIMessage(content="", tool_calls=[call("publish_finance_report", arguments, "report")]), AIMessage(content="报告日期范围错误，未生成文件。")])
+    arguments["filename"] = "invalid.txt"
+    model = ScriptedModel(replies=[AIMessage(content="", tool_calls=[call("publish_finance_report", arguments, "report")]), AIMessage(content="报告文件名参数错误，未生成文件。")])
 
     async def emit(kind, data):
         store.add_event(run["id"], kind, data)
 
     result = await run_agent(settings, run, persona="", emit=emit, controls=no_controls, acknowledge=ignore, model_override=model)
-    assert result == "报告日期范围错误，未生成文件。" and len(model.seen) == 2
+    assert result == "报告文件名参数错误，未生成文件。" and len(model.seen) == 2
     assert not any(item["type"] == "artifact" for item in store.list_events(run["id"], limit=1000)["items"])
 
 

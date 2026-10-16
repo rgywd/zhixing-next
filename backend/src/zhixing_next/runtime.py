@@ -429,10 +429,17 @@ class RunControls(AgentMiddleware):
         await self.emit("progress", {"stage": "model"})
         messages = hydrate_messages(self.settings, request.messages, image_input=self.image_input) if self.settings else request.messages
         prepared = request.override(tools=tools, messages=messages)
+        if report_completion is not None:
+            # Publishing is the last business tool for this actual input. The
+            # requested explanation uses its real receipt, not new hypothetical
+            # calculations. A newly seen steer cannot match this old receipt.
+            prepared = prepared.override(tools=[], tool_choice=None)
         writes = await asyncio.to_thread(_successful_finance_writes, self.settings, self.run_id, request.messages) if self.finance_completion else []
         if analysis_requested and (writes or report_completion):
             policy = (
-                "The user also explicitly requested advice, explanation or comparison. Finish their requested analysis after all necessary tools. "
+                "The user also explicitly requested advice, explanation or comparison. "
+                + ("The verified report has already been delivered. Give the requested final analysis now using its actual receipt. No further tools are available or needed. Do not invent percentage coefficients or continue calculations. " if report_completion else "Finish their requested analysis after all necessary tools. ")
+                +
                 "A separate program paragraph will confirm actual saved results. Your prose should answer the requested analysis, "
                 "not repeat completed-write claims or invent ledger facts. Suggested amounts are recommendations, not actual expenses. "
                 "Do not ask for old transaction lists, deposits or missing purchase dates; preserve known uncertainty."
@@ -448,10 +455,15 @@ class RunControls(AgentMiddleware):
         envelope = response.model_response if isinstance(response, ExtendedModelResponse) else response
         results = envelope.result if isinstance(envelope, ModelResponse) else [envelope]
         final = next((message for message in reversed(results) if isinstance(message, AIMessage)), None)
-        if (writes or report_completion) and final is not None and not final.tool_calls and not await self.pending(request.state):
+        if (writes or report_completion) and final is not None and (not final.tool_calls or report_completion is not None) and not await self.pending(request.state):
+            if report_completion is not None:
+                for call in final.tool_calls:
+                    await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed", "error": "tools_closed_after_finance_report"})
             receipt = await asyncio.to_thread(_finance_write_completion, self.settings, self.run_id, request.messages, writes) if writes else {"input_message_id": source["id"], "operation_ids": [], "completion": report_completion.content}
             confirmation = report_completion.content if report_completion else receipt["completion"]
             analysis = requested_analysis(_text(final)) if analysis_requested else ""
+            if report_completion is not None and final.tool_calls and not analysis:
+                analysis = "报告已交付，这次未形成额外建议。"
             answer = analysis + "\n\n---\n\n" + confirmation if analysis else confirmation
             if analysis:
                 receipt.update({"analysis": analysis, "response": answer})
@@ -459,7 +471,7 @@ class RunControls(AgentMiddleware):
                 if writes:
                     await self.emit("finance.write_completion", receipt)
                 identity = hashlib.sha256(json.dumps([self.run_id, receipt["input_message_id"], receipt["operation_ids"], answer]).encode()).hexdigest()[:32]
-                replacement = final.model_copy(update={"content": answer, "id": "finance-write-completion-" + identity, "additional_kwargs": {**{key: value for key, value in final.additional_kwargs.items() if key != "reasoning_content"}, "zhixing_program_finance_write": True}})
+                replacement = final.model_copy(update={"content": answer, "id": "finance-write-completion-" + identity, "tool_calls": [], "invalid_tool_calls": [], "additional_kwargs": {**{key: value for key, value in final.additional_kwargs.items() if key not in {"reasoning_content", "tool_calls", "function_call"}}, "zhixing_program_finance_write": True}})
                 updated = replace(envelope, result=[replacement if message is final else message for message in results]) if isinstance(envelope, ModelResponse) else replacement
                 return replace(response, model_response=updated) if isinstance(response, ExtendedModelResponse) else updated
         return response

@@ -40,6 +40,7 @@ FINANCE_INSTRUCTIONS += " 重要记账语义：公积金提取、存款提现、
 FINANCE_INSTRUCTIONS += " 实际发生日期必须来自原用户话：AI记day/month（包括同日起止range）或更正到精确日期时，date_evidence引用真实用户短句，date_source_message_id默认当前输入；历史原话可用共用read_history_message读取。余额观察日、回顾截止日、租金覆盖月份或发薪日程不能证明购买日。历史大件只有金额没有购买日时直接保留原历史范围，不可按‘现在余额更新时点’塞今天/本月，也不要让用户补表。即时资产核对使用reconcile_finance_assets；正式财务报告使用publish_finance_report内部调用同一核对并生成程序事实；内部transfer单列，永远不加到新增收入，不得另用calculate把transfer加回。unexplained_difference仅是已知流水口径未解释的资产差额，不是已发生消费，不得自动记账或称为实际日常开销。近似资产、范围部分相交及覆盖缺口在报告简述。"
 
 FINANCE_INSTRUCTIONS += " 财务账本/预算/资产回顾报告必须使用publish_finance_report，不再自己编写数值正文交给通用publish_report。业务报告工具直接按同一账本快照和程序核对生成事实Markdown并交付本会话附件，不能传content或自由title。参数start_date/end_date；用户已有同范围期初期末资产观察时传opening_assets/closing_assets及approximate，否则两者省略即可，不要求用户补齐。报告不会猜购买日期、添加缴存等未确认情景、向用户展示内部ID/revision/coverage字段或补表清单。工具成功后直接给附件，必要时只概述回执事实，不再重算或追加模型假设。"
+FINANCE_INSTRUCTIONS += " 延续报告时默认沿用本会话上一份已核验报告范围和资产口径，参数可省略；当前用户明确新月份/范围才切换，不可自行缩成当月。今晚用餐等时间不改变报表范围。真实新余额使用当前原话更新。先完成数据读取和必要计算，最后publish_finance_report；成功后仅答用户分析与附件，不再反复calculate。"
 
 FINANCE_INSTRUCTIONS += " 面向用户只简述已完成的记录、预算调整和报告附件，用自然语言说明付款周期，不展示key、every_months、anchor_month等实现字段。已经保留为日期范围或近似资产差额的信息不妨碍本次记账与报告，不能列成‘需你确认’或‘待你补齐’清单，也不要要求用户重报过去几个月日常流水、大件月份或逐项对账。未解释差额只说明尚不能确定来源，不把某种消费列为‘最可能’，不将账本缺口推给用户。未来发薪规则不能证明历史到账日期，也不能提出据此拆分历史工资；未要求记录且金额未知的押金等不另行索要。只有缺失信息确实阻止当前必要动作且查不到原文时才追问一个必要问题；否则直接完成。"
 
@@ -64,13 +65,18 @@ class ReconcileArguments(FinanceInput):
 
 
 class FinanceReportArguments(FinanceInput):
-    start_date: str
-    end_date: str
+    start_date: str | None = None
+    end_date: str | None = None
     opening_assets: str | None = None
     closing_assets: str | None = None
     approximate: bool = True
     filename: str = Field(
         default="财务回顾.md", min_length=4, max_length=120, pattern=r"^[^/\\\x00-\x1f]+\.md$"
+    )
+    period_evidence: str | None = Field(
+        default=None,
+        max_length=240,
+        description="Optional verbatim current-user quote explicitly requesting a new report month/range. No quote is needed to continue the verified report context. Model parameters alone do not authorize shrinking the period.",
     )
 
 
@@ -376,6 +382,7 @@ def create_finance_service_tools(
     if run is not None and emit is not None:
         from .common_reports import create_report_tool
         from .finance_report import build_finance_report, format_finance_completion
+        from .finance_report_context import resolve_finance_report_context
         from .resources import resource_bytes
 
         if run.get("conversation_id") != conversation_id:
@@ -409,20 +416,15 @@ def create_finance_service_tools(
 
         @tool(args_schema=FinanceReportArguments)
         async def publish_finance_report(
-            start_date: str,
-            end_date: str,
+            start_date: str | None = None,
+            end_date: str | None = None,
             opening_assets: str | None = None,
             closing_assets: str | None = None,
             approximate: bool = True,
             filename: str = "财务回顾.md",
+            period_evidence: str | None = None,
         ) -> dict:
-            """Deliver a verified finance ledger/budget/assets report as a real Markdown attachment in this conversation. No content/title input: facts, formulas, date precision, monthly costs and due cash come directly from one ledger snapshot. Give the observation period and optional BOTH same-scope opening/closing asset values; omit both for an ordinary report without assets. Unknown dates/coverage stay neutral gaps, never a request to fill forms. Use this for finance factual reports instead of composing arithmetic in publish_report. Transfers are excluded from income; unexplained differences are not new consumption."""
-            if (opening_assets is None) != (closing_assets is None):
-                raise StoreError(
-                    "invalid_finance_report",
-                    "Asset observations must be provided together, or omit both and publish the known ledger/budget facts. Do not ask the user to fill missing fields.",
-                    422,
-                )
+            """Deliver a verified finance report as a real attachment from a fresh ledger snapshot. Optional dates/assets default to the latest verified report in THIS conversation; model arguments cannot shrink that scope unless the actual current user explicitly requests new report dates/month. Optional period_evidence quotes that current request. Current real balance updates replace stale observations. Without prior context use supplied dates or the known ledger range. No content/title input, no user form. Transfers are excluded from income and differences are not new consumption. Finish required reads/calculations BEFORE publishing; after success provide only requested user analysis and the attachment, not repeated calculate calls."""
             arguments = {
                 "start_date": start_date,
                 "end_date": end_date,
@@ -431,6 +433,8 @@ def create_finance_service_tools(
                 "approximate": approximate,
                 "filename": filename,
             }
+            if period_evidence is not None:
+                arguments["period_evidence"] = period_evidence
             actual_input = actual_source()
             report_scope = [source_id, arguments]
             if actual_input != source_id:
@@ -448,14 +452,23 @@ def create_finance_service_tools(
                 previous = await asyncio.to_thread(prior_publication, report_key)
                 if previous is not None:
                     return previous
+                selected, context = await asyncio.to_thread(
+                    resolve_finance_report_context,
+                    settings,
+                    service.store,
+                    conversation_id=conversation_id,
+                    source_id=actual_input,
+                    requested=arguments,
+                    period_evidence=period_evidence,
+                )
                 generated = await asyncio.to_thread(
                     build_finance_report,
                     service,
-                    start_date=start_date,
-                    end_date=end_date,
-                    opening_assets=opening_assets,
-                    closing_assets=closing_assets,
-                    approximate=approximate,
+                    start_date=selected["start_date"],
+                    end_date=selected["end_date"],
+                    opening_assets=selected["opening_assets"],
+                    closing_assets=selected["closing_assets"],
+                    approximate=selected["approximate"],
                 )
                 published = None
 
@@ -471,6 +484,7 @@ def create_finance_service_tools(
                             },
                             "finance": {
                                 "facts": generated["facts"],
+                                "context": context,
                                 "completion": format_finance_completion(generated["facts"]),
                                 "program_generated": True,
                                 "model_supplied_content": False,
