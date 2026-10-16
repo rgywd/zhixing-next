@@ -15,6 +15,8 @@ Android 正式安装包由 [Android release](../.github/workflows/release.yml) �
 
 正式发版先同步 `package.json`、`package-lock.json` 和 `app.json` 的版本，并将 Android `versionCode` 增加到高于此前所有正式标签的值。完成本地验证并通过 PR 合入 `main` 后，在用户明确要求发版时推送对应正式标签。工作流核对标签、来源提交、`main` 祖先关系和版本，再执行客户端、后端及 Docker 回归，最后生成签名 ARM64 APK。
 
+签名任务在 Java 17 环境中显式初始化 Android 命令行工具，并安装锁定的 API 36、build-tools 36.0.0、NDK 27.1.12297006 与 CMake 3.22.1；通过实际工具路径检查后再读取签名输入，不依赖 runner 镜像预装 SDK。
+
 签名沿用既有正式证书，仓库 Actions Secrets 使用 `ANDROID_KEYSTORE_BASE64`、`ANDROID_KEY_ALIAS`、`ANDROID_STORE_PASSWORD`、`ANDROID_KEY_PASSWORD`。凭据通过受控标准输入设置，不进入 Git、命令参数或发布附件。构建时仅在 runner 临时目录中以私有权限还原，结束后清理；缺少签名输入会失败。发布步骤使用当前仓库的 `GITHUB_TOKEN`，只授予所需的 `contents: write`。
 
 发布先建立草稿，上传并校验 `zhixing-next-<version>-arm64.apk`、对应 `.apk.build.json` 构建回执及 `SHA256SUMS`，准备完整后再公开 Release。回执包含源码提交、原生版本、ABI、正式签名证书摘要和 APK SHA-256；公开后再次核对下载内容。失败草稿可在同标签工作流中重试；已公开版本保持附件内容，后续修改使用新版本。
