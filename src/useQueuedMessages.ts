@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, request, type Connection, type Resource, type Run } from "./api";
 import { humanError } from "./ui";
+import { isSteerableUserRun } from "./steerableRun";
 
 export type QueuedMessageItem = { run: Run; text: string; attachments: Resource[] };
 export function getQueuedMessages(runs: Run[], conversationId: string): QueuedMessageItem[] {
@@ -38,7 +39,7 @@ export function useQueuedMessages({ connection, conversationId, runs, running, o
     // A transport failure may have committed. Retry the identical target, never
     // silently promote the same queued message into a later reply.
     const attempt = prior?.action === action ? prior : { sourceId: item.run.id, action,
-      targetId: action === "steer" && running?.status === "running" && running.conversation_id === conversationId && !running.cancel_requested ? running.id : null };
+      targetId: action === "steer" && isSteerableUserRun(running) && running.conversation_id === conversationId ? running.id : null };
     if (action === "steer" && !attempt.targetId) return;
     value.attempts.set(item.run.id, attempt);
     const controller = new AbortController(); value.controller = controller;

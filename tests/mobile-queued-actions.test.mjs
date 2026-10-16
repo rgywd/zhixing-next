@@ -4,6 +4,7 @@ import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import ts from "typescript";
 import { ApiError } from "../src/api.ts";
+import * as steerableRun from "../src/steerableRun.ts";
 
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -31,6 +32,7 @@ function harness(post = async () => ({})) {
   const { useQueuedMessages, getQueuedMessages } = load({ react: lifecycle.react,
     "./api": { ApiError, request: async (_connection, path, options) => { const call = { path, ...options }; calls.push(call); return post(call, calls.length); } },
     "./ui": { humanError: (error) => error.message },
+    "./steerableRun": steerableRun,
   });
   const args = { connection: { url: "https://queue-fixture.invalid", token: "fixture" }, conversationId: "c1", runs: [queued()], running: target(), onChanged: () => changed++, onError: (message) => errors.push(message) };
   return { args, calls, errors, changed: () => changed, getQueuedMessages, render: () => lifecycle.render(() => useQueuedMessages(args)), unmount: lifecycle.unmount };
@@ -86,6 +88,17 @@ test("a lost response retries the identical target even if another reply becomes
   assert.equal(app.render().items.length, 0); app.unmount();
 });
 
+test("a conversation-waiting user reply accepts guidance and lost responses keep its original target", async () => {
+  const app = harness(async (_call, count) => { if (count === 1) throw new Error("response lost"); return {}; });
+  app.args.running = target("waiting-target", { status: "queued", phase: "agent_wait" });
+  let value = app.render(); await assert.rejects(value.steer(value.items[0]), /response lost/);
+  app.args.running = target("later-target"); value = app.render(); await value.steer(value.items[0]);
+  assert.deepEqual(app.calls.map((call) => plain(call.body)), [
+    { target_run_id: "waiting-target" }, { target_run_id: "waiting-target" },
+  ]);
+  app.unmount();
+});
+
 test("synchronous busy lock prevents repeated taps and competing source actions", async () => {
   const response = deferred(), app = harness(() => response.promise);
   app.args.runs.push(queued("second"));
@@ -104,7 +117,10 @@ test("a 409 keeps the queue input, refreshes server state and reports the confli
 });
 
 test("guide does nothing without an eligible current target or for an item from another conversation", async () => {
-  for (const running of [null, target("foreign", { conversation_id: "c2" }), target("cancelled", { cancel_requested: true }), target("finished", { status: "completed" })]) {
+  for (const running of [null, target("foreign", { conversation_id: "c2" }), target("cancelled", { cancel_requested: true }), target("finished", { status: "completed" }),
+    ...["normal", "approval", "input", "recovering"].map((phase) => target(phase, { status: "queued", phase })),
+    target("internal", { origin: "agent_message" }), target("internal-wait", { status: "queued", phase: "agent_wait", origin: "agent_message" }),
+    target("waiting-cancel", { status: "queued", phase: "agent_wait", cancel_requested: true })]) {
     const app = harness(); app.args.running = running;
     const value = app.render(); await value.steer(value.items[0]); assert.equal(app.calls.length, 0); app.unmount();
   }

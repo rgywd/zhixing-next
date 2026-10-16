@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import * as jsxRuntime from "react/jsx-runtime";
 import ts from "typescript";
 import * as theme from "../src/theme.ts";
+import * as steerableRun from "../src/steerableRun.ts";
 
 const walk = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)];
 const text = (node) => typeof node === "string" || typeof node === "number" ? String(node) : Array.isArray(node) ? node.map(text).join("") : node?.props ? text(node.props.children) : "";
@@ -28,6 +29,7 @@ function harness({ colors = theme.darkColors, ...initial } = {}) {
     "./ThemeProvider": { useThemedStyles: (factory) => factory(colors) },
     "./ui": { useUi: () => ({ s: {}, colors }), ActionLink: "ActionLink", Button: "Button", timeLabel: String },
     "./Attachments": { Attachments: "Attachments" }, "./ResourcePreview": { ResourceImage: "ResourceImage" }, "./BottomSheet": { BottomSheet: "BottomSheet" },
+    "./steerableRun": steerableRun,
   };
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/QueuedMessages.tsx", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
     exports, require(name) { assert.ok(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name]; },
@@ -129,6 +131,23 @@ test("idle, cancelling and in-flight states disable mutations without hiding que
     assert.equal(control(nodes, "更多待发送消息").props.disabled, undefined);
   }
   assert.ok(app.render({ busyId: "one" }).nodes.some((node) => node.type === "ActivityIndicator"));
+});
+
+test("the real queue component permits a waiting user reply and excludes other paused or internal replies", async () => {
+  const app = harness({ running: { id: "waiting", status: "queued", phase: "agent_wait", cancel_requested: false } });
+  let nodes = app.render().nodes;
+  const guide = control(nodes, "将待发送消息引导");
+  assert.equal(guide.props.disabled, false); guide.props.onPress(); await settle();
+  assert.equal(app.actions[0][0], "steer");
+  for (const candidate of [
+    ...["approval", "input", "recovering", "normal"].map((phase) => ({ id: phase, status: "queued", phase })),
+    { id: "internal", status: "running", origin: "agent_message" },
+    { id: "internal-wait", status: "queued", phase: "agent_wait", origin: "agent_message" },
+    { id: "cancel", status: "queued", phase: "agent_wait", cancel_requested: true },
+  ]) {
+    nodes = app.render({ running: candidate }).nodes;
+    assert.equal(control(nodes, "将待发送消息引导").props.disabled, true);
+  }
 });
 
 test("failed actions keep the original preview and provide the error plus the same retry actions", async () => {

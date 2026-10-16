@@ -102,7 +102,7 @@ export function ReplyContent({ parts, active = false, finalText, finalPartId, st
   const terminalLabel = status === "failed" ? "回复未完成" : status === "cancelled" ? "回复已停止" : status === "interrupted" ? "回复已中断" : "";
   const latest = parts.at(-1);
   const label = cancelRequested ? "正在停止" : phase === "approval" ? "等待你的决定" : phase === "input" ? "等待补充信息"
-    : phase === "recovering" ? "正在恢复进度" : status === "queued" ? "等待回复"
+    : phase === "recovering" ? "正在恢复进度" : phase === "agent_wait" ? "等待其他对话回复，可补充要求" : status === "queued" ? "等待回复"
     : phase === "tool" || (phase !== "model" && latest?.type === "tool" && latest.status === "started") ? "正在使用工具" : "正在回复";
   const sections = replySections(replyParts(parts, finalText, finalPartId));
   return <View style={{ gap: 8, minWidth: 0 }}>

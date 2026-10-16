@@ -49,8 +49,13 @@ def _receipt(db, row):
         "SELECT blocked FROM conversations WHERE id=?", (row["target_conversation_id"],),
     ).fetchone()
     state = run["status"]
+    blocker = db.execute(
+        "SELECT id,phase FROM runs WHERE conversation_id=? AND seq<? "
+        "AND status='queued' AND phase IN ('approval','input') ORDER BY seq LIMIT 1",
+        (row["target_conversation_id"], run["seq"]),
+    ).fetchone() if state == "queued" else None
     attention = state not in TERMINAL and (
-        bool(conversation["blocked"]) or run["phase"] in {"approval", "input"}
+        bool(conversation["blocked"]) or run["phase"] in {"approval", "input"} or blocker is not None
     )
     result = {
         "delivery_id": row["id"], "source_run_id": row["source_run_id"],
@@ -66,7 +71,9 @@ def _receipt(db, row):
                       result_truncated=bool(text and len(text) > 16000),
                       reply_message_id=reply["id"] if reply else None)
     elif attention:
-        result["attention_reason"] = "conversation_blocked" if conversation["blocked"] else run["phase"]
+        result["attention_reason"] = "conversation_blocked" if conversation["blocked"] else run["phase"] if run["phase"] in {"approval", "input"} else blocker["phase"]
+        if blocker:
+            result["blocking_run_id"] = blocker["id"]
     return result
 
 
@@ -126,8 +133,9 @@ class ConversationLinks:
             cycle = db.execute("""WITH RECURSIVE reachable(id) AS (
                 SELECT ? UNION SELECT d.target_conversation_id
                 FROM conversation_deliveries d JOIN reachable r ON d.source_conversation_id=r.id
+                JOIN runs source ON source.id=d.source_run_id
                 JOIN runs target ON target.id=d.target_run_id
-                WHERE target.status IN ('queued','running'))
+                WHERE source.status IN ('queued','running') AND target.status IN ('queued','running'))
                 SELECT 1 FROM reachable WHERE id=?""",
                 (target_conversation_id, source["conversation_id"]),
             ).fetchone()

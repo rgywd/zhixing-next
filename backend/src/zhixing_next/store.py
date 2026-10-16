@@ -943,6 +943,8 @@ class Store:
                     run["conversation_id"] != conversation_id
                     or not (run["status"] == "running" or (run["status"] == "queued" and run["phase"] == "agent_wait"))
                     or run["cancel_requested"]
+                    or run["origin"]
+                    or db.execute("SELECT 1 FROM conversation_deliveries WHERE target_run_id=?", (run["id"],)).fetchone()
                 ):
                     raise StoreError(
                         "stale_steer", "The target run is no longer accepting guidance"
@@ -1312,7 +1314,7 @@ class Store:
                     "run": _record(self._require(db, "runs", run_id))}
 
     def steer_queued(self, run_id, target_run_id):
-        """Atomically move the same queued message into an existing running reply."""
+        """Move the same queued input into a user's active or conversation-waiting reply."""
         with self._connection(write=True) as db:
             run, message = self._queued_user_input(db, run_id)
             if message["intent"] == "steer" and message["run_id"] != run_id:
@@ -1326,8 +1328,10 @@ class Store:
                     or message["intent"] != "queue" or message["status"] != "accepted"):
                 raise StoreError("stale_queue", "This input is no longer waiting in the queue")
             target = self._require(db, "runs", target_run_id)
-            if (target["conversation_id"] != run["conversation_id"] or target["status"] != "running"
-                    or target["cancel_requested"]):
+            if (target["conversation_id"] != run["conversation_id"]
+                    or not (target["status"] == "running" or (target["status"] == "queued" and target["phase"] == "agent_wait"))
+                    or target["cancel_requested"] or target["origin"]
+                    or db.execute("SELECT 1 FROM conversation_deliveries WHERE target_run_id=?", (target_run_id,)).fetchone()):
                 raise StoreError("stale_steer", "The target run is no longer accepting guidance")
             attachments = json.loads(message["attachments_json"])
             if any(item["mime_type"].startswith("image/") for item in attachments):
@@ -1340,6 +1344,9 @@ class Store:
             db.execute("UPDATE runs SET cancel_requested=1 WHERE id=?", (run_id,))
             self._finish(db, run, "cancelled")
             db.execute("UPDATE messages SET intent='steer',run_id=?,status='accepted' WHERE id=?", (target_run_id, message["id"]))
+            if target["phase"] == "agent_wait":
+                db.execute("DELETE FROM conversation_waits WHERE source_run_id=?", (target_run_id,))
+                db.execute("UPDATE runs SET phase='recovering' WHERE id=?", (target_run_id,))
             self._event(db, target_run_id, "queue_promoted", {"message_id": message["id"], "source_run_id": run_id})
             return {"message": _record(self._require(db, "messages", message["id"])),
                     "run": _record(self._require(db, "runs", target_run_id)),

@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import importlib.util
 import json
 import os
 import re
@@ -27,6 +28,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+import traceback
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4, uuid5
@@ -143,13 +145,44 @@ def parallel_peak(timeline):
 
 
 def successful_read_paths(child):
-    history = json.loads(child["history_json"])
-    successful = {message["data"].get("tool_call_id") for message in history
-                  if message.get("type") == "tool" and message["data"].get("status") != "error"}
-    return {call["args"]["path"] for message in history if message.get("type") == "ai"
-            for call in message["data"].get("tool_calls", [])
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    from zhixing_next.agent_collaboration import _decode_history
+
+    # The product owns native/provider-aware history serialization. Reusing its
+    # decoder supports both older list receipts and typed msgpack state.
+    history = _decode_history(child["history_json"])
+    successful = {message.tool_call_id for message in history
+                  if isinstance(message, ToolMessage) and message.status != "error"}
+    return {call["args"]["path"] for message in history if isinstance(message, AIMessage)
+            for call in message.tool_calls
             if call.get("id") in successful and call.get("name") in {"read_text_file", "read_document"}
             and isinstance(call.get("args", {}).get("path"), str)}
+
+
+def child_results_collected(children, observed):
+    # Closing a child after collecting its completed result is normal cleanup.
+    # A closed status alone is insufficient: require the exact observed version.
+    return len(children) >= 2 and all(
+        row["status"] in {"completed", "closed"} and row["result"]
+        and (row["id"], row["result_version"]) in observed for row in children)
+
+
+def orchestration_usability(evidence, expected_first):
+    path = Path(__file__).with_name("tool_usability_eval.py")
+    spec = importlib.util.spec_from_file_location("_collaboration_tool_usability", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    attempts, coverage = module.tool_attempts(evidence)
+    orchestration = {"task", "start_agent", "send_agent", "wait_agents", "close_agent",
+                     "send_conversation_message", "read_conversation_reply", "wait_conversation_replies"}
+    choices = [item["tool"] for item in attempts if not item.get("child_id") and item["tool"] in orchestration]
+    return {"trace_coverage": coverage, "total_tool_calls": len(attempts),
+            "failed_tool_calls": sum(item["status"] == "failed" for item in attempts),
+            "root_failed_calls": sum(item["status"] == "failed" and not item.get("child_id") for item in attempts),
+            "child_failed_calls": sum(item["status"] == "failed" and bool(item.get("child_id")) for item in attempts),
+            "first_orchestration_tool": choices[0] if choices else None,
+            "first_orchestration_choice_correct": bool(choices) and choices[0] == expected_first if coverage == "events" else None}
 
 
 class AcceptanceSuite:
@@ -266,6 +299,8 @@ class AcceptanceSuite:
                                               "success_claim": None, "assertions": assertions}
         self.write(f"turn-{key}.json", evidence)
         self.case_results[key] = {"passed": passed, "checks": assertions}
+        if "collaboration_tool_usability" in evidence:
+            self.case_results[key]["tool_usability"] = evidence["collaboration_tool_usability"]
         require(passed, f"{key}_business_assertion_failed")
 
     async def health(self):
@@ -349,7 +384,7 @@ class AcceptanceSuite:
                 require(run["status"] == "running", "research_finished_before_followup")
                 initial_ids.update(row["id"] for row in rows)
                 message_id, _ = await self.submit("research_supplement", conversation,
-                    "补充一条刚确认的限制：偏远地区不承诺配送。请把它补给刚才负责配送的那位研究助手，继续用原来的助手，不另外换人；收齐两份最终结果后再汇总。",
+                    "补充两条刚确认的限制：偏远地区不承诺配送，城区订单需要周二确认。请把它们补给刚才负责配送的那位研究助手，继续用原来的助手，不另外换人；收齐两份最终结果后再汇总。",
                     target_run_id=run["id"])
                 followup["message_id"] = message_id
 
@@ -370,22 +405,26 @@ class AcceptanceSuite:
         self.write("research-private-ledger.json", {"children": rows, "inputs": inputs,
                                                    "timeline": timeline, "wait_receipts": wait_receipts})
         text = result["run"]["result"]
+        usability = orchestration_usability(result, "start_agent")
+        result["collaboration_tool_usability"] = usability
+        result["evaluation"]["expected_first_orchestration_tool"] = "start_agent"
         self.checked("parallel_research", {
+            "first_orchestration_choice_correct": usability["first_orchestration_choice_correct"] is True,
+            "no_failed_tool_calls": usability["trace_coverage"] == "events" and usability["failed_tool_calls"] == 0,
             "at_least_two_children": len(rows) >= 2,
             "actual_parallel_overlap": parallel_peak(timeline) >= 2,
             "independent_fixture_reads": any(
                 first != second and any(path.endswith(supply) for path in first_paths)
                 and any(path.endswith(delivery) for path in second_paths)
                 for first, first_paths in read_paths.items() for second, second_paths in read_paths.items()),
-            "all_independent_results_collected": len(rows) >= 2 and all(
-                row["status"] == "completed" and row["result"] and (row["id"], row["result_version"]) in observed for row in rows),
+            "all_independent_results_collected": child_results_collected(rows, observed),
             "both_fixture_codes_in_results": all(any(code in (row["result"] or "") for row in rows)
                                                   for code in ("PINE-17", "MAPLE-29")),
             "both_fixture_codes_in_final": all(code in text for code in ("PINE-17", "MAPLE-29")),
             "followup_reused_original_children": bool(followup) and set(row["id"] for row in rows) == initial_ids,
             "followup_actually_applied": any(row["status"] == "applied" and row["child_id"] in initial_ids for row in inputs),
-            "supplement_in_child_and_final": "偏远" in text and any(
-                "偏远" in (row["result"] or "") and "配送" in row["result"] for row in rows),
+            "supplement_in_child_and_final": all(word in text for word in ("偏远", "周二")) and any(
+                all(word in (row["result"] or "") for word in ("偏远", "周二", "配送")) for row in rows),
             "children_only_used_read_tools": bool(child_tool_events) and all(event["tool"] in READ_ONLY_TOOLS for event in child_tool_events),
             "business_state_unchanged": result["before_snapshot"] == result["snapshot"],
         }, duplicate_write=False)
@@ -405,6 +444,7 @@ class AcceptanceSuite:
             and "停航" in initial["run"]["result"],
         })
         source = await self.conversation("虚构跨对话咨询")
+        conversations_before = {row["id"] for row in (await self.request("GET", "/v1/conversations", params={"limit": 100}))["items"]}
         result = await self.turn("conversation_consultation", source,
             "请找到我之前那段‘虚构接驳路线咨询’对话，向那个已有对话询问：周三能否从 HARBOR-42 出发，还有哪些已知限制？请等收到那边针对这次问题的实际回复，再向我汇总。只咨询，不修改业务资料，也不要创建一个新对话来代替它。")
         deliveries = (await self.request("GET", f"/v1/runs/{result['run']['id']}/conversation-messages"))["items"]
@@ -414,10 +454,22 @@ class AcceptanceSuite:
             target_events = await self.events(receipt["target_run_id"])
             targets.append({"receipt": receipt, "run": target_run, "events": target_events})
         self.write("consultation-private-deliveries.json", targets)
+        conversations_after = {row["id"] for row in (await self.request("GET", "/v1/conversations", params={"limit": 100}))["items"]}
         receipt = deliveries[0] if len(deliveries) == 1 else {}
         target_events = targets[0]["events"] if len(targets) == 1 else []
         target_tools = [event["data"]["tool"] for event in target_events if event.get("type") == "tool"]
+        usability = orchestration_usability(result, "send_conversation_message")
+        usability["target_failed_tool_calls"] = sum(orchestration_usability({
+            "events": item["events"], "events_complete": True,
+        }, "send_conversation_message")["failed_tool_calls"] for item in targets)
+        result["collaboration_tool_usability"] = usability
+        result["evaluation"]["expected_first_orchestration_tool"] = "send_conversation_message"
         self.checked("conversation_consultation", {
+            "first_orchestration_choice_correct": usability["first_orchestration_choice_correct"] is True,
+            "no_failed_tool_calls": usability["trace_coverage"] == "events" and usability["failed_tool_calls"] == 0
+            and usability["target_failed_tool_calls"] == 0,
+            "existing_conversation_found_by_history": self.succeeded(result, "search_history"),
+            "no_new_conversation_created": conversations_before == conversations_after,
             "target_real_initial_checkpoint": checkpointed,
             "one_delivery_to_existing_target": len(deliveries) == 1 and receipt.get("target_conversation_id") == target,
             "actual_readonly_reply": receipt.get("read_only") is True and receipt.get("terminal") is True
@@ -493,6 +545,10 @@ async def run_acceptance(settings, evidence_dir, *, case_timeout=240):
             try:
                 summary = await suite.run()
             except Exception as exc:
+                suite.write("error.json", {"exception_type": type(exc).__name__, "frames": [
+                    {"file": Path(frame.filename).name, "function": frame.name, "line": frame.lineno}
+                    for frame in traceback.extract_tb(exc.__traceback__)
+                ]})
                 summary = {"status": "failed", "real_model_run": True,
                            "code": exc.args[0] if isinstance(exc, AcceptanceError) else type(exc).__name__,
                            "checks": suite.case_results, "turns": len(suite.evidence),

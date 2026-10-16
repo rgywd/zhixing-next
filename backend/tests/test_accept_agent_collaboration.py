@@ -8,8 +8,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from langchain_core.messages import AIMessage, ToolMessage, messages_to_dict
 from pydantic import SecretStr
 
+from zhixing_next.agent_collaboration import _encode_history
 from zhixing_next.config import ModelConfig, Settings
 from zhixing_next.worker import Worker
 
@@ -118,14 +120,53 @@ def test_collected_results_require_successful_final_versions_and_actual_text():
 
 def test_fixture_read_assertion_requires_a_successful_tool_result():
     history = [
-        {"type": "ai", "data": {"tool_calls": [
+        AIMessage(content="", tool_calls=[
             {"id": "ok", "name": "read_text_file", "args": {"path": "uploads/supply.txt"}},
             {"id": "bad", "name": "read_text_file", "args": {"path": "uploads/delivery.txt"}},
-        ]}},
-        {"type": "tool", "data": {"tool_call_id": "ok", "status": "success"}},
-        {"type": "tool", "data": {"tool_call_id": "bad", "status": "error"}},
+        ]),
+        ToolMessage(content="synthetic data", tool_call_id="ok", status="success"),
+        ToolMessage(content="failed", tool_call_id="bad", status="error"),
     ]
-    assert acceptance.successful_read_paths({"history_json": json.dumps(history)}) == {"uploads/supply.txt"}
+    assert acceptance.successful_read_paths({"history_json": json.dumps(messages_to_dict(history))}) == {"uploads/supply.txt"}
+
+
+def test_fixture_reads_support_native_typed_history_and_provider_metadata():
+    history = [AIMessage(content="", additional_kwargs={"signature": b"\x00\xff"}, tool_calls=[
+        {"id": "read", "name": "read_text_file", "args": {"path": "uploads/supply.txt"}},
+    ]), ToolMessage(content="synthetic data", tool_call_id="read")]
+    assert acceptance.successful_read_paths({"history_json": _encode_history(history)}) == {"uploads/supply.txt"}
+
+
+def test_completed_results_may_be_closed_only_after_observing_same_final_version():
+    children = [
+        {"id": "a", "status": "closed", "result_version": 2, "result": "supply"},
+        {"id": "b", "status": "closed", "result_version": 1, "result": "delivery"},
+    ]
+    assert acceptance.child_results_collected(children, {("a", 2), ("b", 1)})
+    assert not acceptance.child_results_collected(children, {("a", 1), ("b", 1)})
+    children[0]["result"] = None
+    assert not acceptance.child_results_collected(children, {("a", 2), ("b", 1)})
+
+
+def test_orchestration_usability_counts_failed_generic_task_before_research_start():
+    def event(tool, identifier, status, **extra):
+        return {"type": "tool", "data": {"tool": tool, "tool_call_id": identifier,
+                                          "status": status, **extra}}
+
+    evidence = {"events_complete": True, "events": [
+        event("task", "bad1", "failed"), event("task", "bad2", "failed"),
+        event("start_agent", "start", "started"), event("start_agent", "start", "completed"),
+        event("read_text_file", "same", "completed", child_id="a"),
+        event("read_text_file", "same", "completed", child_id="b"),
+    ]}
+    metric = acceptance.orchestration_usability(evidence, "start_agent")
+    assert metric["first_orchestration_tool"] == "task"
+    assert metric["first_orchestration_choice_correct"] is False
+    assert metric["failed_tool_calls"] == metric["root_failed_calls"] == 2
+    assert metric["total_tool_calls"] == 5 and metric["child_failed_calls"] == 0
+    evidence["events"] = evidence["events"][2:]
+    fixed = acceptance.orchestration_usability(evidence, "start_agent")
+    assert fixed["first_orchestration_choice_correct"] is True and fixed["failed_tool_calls"] == 0
 
 
 def test_business_choice_specs_allow_real_context_reads_without_scoring_research_as_finance_health():
@@ -172,6 +213,11 @@ async def test_driver_uses_actual_asgi_queue_worker_and_saves_truthful_failure(
     evidence = json.loads((directory / "turn-driver_case.json").read_text())
     assert evidence["business_verification"]["passed"] is not fail_assertion
     assert evidence["run"]["status"] == "completed"
+    if fail_assertion:
+        error = json.loads((directory / "error.json").read_text())
+        assert set(error) == {"exception_type", "frames"}
+        assert error["frames"] and all(set(frame) == {"file", "function", "line"} for frame in error["frames"])
+        assert all("/" not in frame["file"] for frame in error["frames"])
     assert not workers[0].active and workers[0].memory_task is None
     for path in directory.glob("*.json"):
         assert path.stat().st_mode & 0o777 == 0o600

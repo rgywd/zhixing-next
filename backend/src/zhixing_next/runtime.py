@@ -12,7 +12,7 @@ from dataclasses import replace
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import aiosqlite
@@ -33,7 +33,8 @@ from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.errors import GraphInterrupt, NodeCancelledError
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
-from pydantic import ValidationError
+from pydantic import ConfigDict, Field, ValidationError
+from pydantic import create_model as create_schema_model
 
 from .common_tools import COMMON_INSTRUCTIONS, assign_common_tools, create_common_tools
 from .config import Settings
@@ -358,7 +359,7 @@ class RunControls(AgentMiddleware):
 
     def __init__(self, controls: Controls, emit: Emit, allowed_subagents: set[str] | None = None,
                  settings: Settings | None = None, image_input: bool = False,
-                 execution_enabled: bool = False, restricted_files: bool = False, operations=None, budget=None, task_flow=None, run_id=None, finance_completion=False, collaboration=None, read_only=False):
+                 execution_enabled: bool = False, restricted_files: bool = False, operations=None, budget=None, task_flow=None, run_id=None, finance_completion=False, collaboration=None, read_only=False, subagent_descriptions=None):
         self.controls = controls
         self.emit = emit
         self.allowed_subagents = allowed_subagents or set()
@@ -371,9 +372,30 @@ class RunControls(AgentMiddleware):
         self.task_flow, self.run_id = task_flow, run_id
         self.finance_completion = finance_completion
         self.collaboration, self.read_only = collaboration, read_only
+        self.subagent_descriptions = subagent_descriptions or {}
+        self.named_task_schema = create_schema_model(
+            "NamedAgentTask",
+            __config__=ConfigDict(extra="forbid"),
+            description=(str, Field(min_length=1, description="The specific service request, relevant user facts and expected result.")),
+            subagent_type=(Literal[tuple(sorted(self.allowed_subagents))], Field(description="Choose one of the available named service agents.")),
+        ) if self.allowed_subagents else None
         self.blocked_tools = (set() if execution_enabled else {"execute"}) | (set() if self.allowed_subagents else {"task"})
         if restricted_files:
             self.blocked_tools |= {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"}
+
+    def named_task_contract(self, tool):
+        """Replace the SDK's generic delegation menu with this run's actual agents."""
+        names = sorted(self.allowed_subagents)
+        description = (
+            "Delegate a specific request to one of these configured specialist agents:\n"
+            + "\n".join(f"- {name}: {self.subagent_descriptions.get(name, 'Configured specialist')}" for name in names)
+            + "\nSet subagent_type to exactly one listed name and put the complete relevant context in description. The call returns that specialist's final report."
+        )
+        if self.collaboration is not None:
+            description += " For parallel research or general evidence gathering use start_agent, then wait_agents."
+        if isinstance(tool, dict):
+            return {**tool, "description": description, "parameters": self.named_task_schema.model_json_schema()}
+        return tool.model_copy(update={"description": description, "args_schema": self.named_task_schema})
 
     async def pending(self, state: dict) -> list[HumanMessage]:
         control = await self.controls()
@@ -443,6 +465,8 @@ class RunControls(AgentMiddleware):
             if not has_delivery:
                 hidden.update({"read_conversation_reply", "wait_conversation_replies"})
         tools = [item for item in tools if (item.get("name") if isinstance(item, dict) else item.name) not in hidden]
+        if self.named_task_schema is not None:
+            tools = [self.named_task_contract(item) if (item.get("name") if isinstance(item, dict) else item.name) == "task" else item for item in tools]
         if self.read_only:
             from .agent_collaboration import READ_ONLY_TOOLS
 
@@ -731,6 +755,24 @@ class RunControls(AgentMiddleware):
         return result
 
 
+async def _finish_research_before_conversation_pause(collaboration, controls, emit):
+    """Finish owned work before yielding the chat slot; do not consume results.
+
+    The run's existing outer timeout and cancellation still bound this wait.
+    Waiting on tasks rather than model-visible wait_agents keeps the final
+    results unread, so the resumed assistant must actually collect them.
+    """
+    await emit("progress", {"stage": "finishing_research_before_conversation_wait"})
+    while collaboration.active():
+        if (await controls()).get("cancel_requested"):
+            raise asyncio.CancelledError("Run cancellation requested")
+        tasks = {child.task for child in collaboration.children.values() if child.task and not child.task.done()}
+        if not tasks:
+            raise RuntimeConfigurationError("A research agent lost its active execution; existing results are preserved.")
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.gather(*done, return_exceptions=True)
+
+
 async def run_agent(
     settings: Settings, run: dict[str, Any], **kwargs,
 ) -> str:
@@ -821,10 +863,10 @@ async def _run_agent(
     from .taskflow import TaskFlow, create_taskflow_tools
 
     task_flow = TaskFlow(store)
-    forgetting = forget_memory_request(run["prompt"])
+    read_only_consultation = bool(run.get("agent_delivery"))
+    forgetting = not read_only_consultation and forget_memory_request(run["prompt"])
     reset_revision = store.memory_reset_revision(run["conversation_id"])
     direct_agent = run.get("agent")
-    read_only_consultation = bool(run.get("agent_delivery"))
     file_settings = settings.model_copy(update={"grants": []}) if direct_agent and direct_agent["id"] in {"finance", "health"} else settings
     physical_tools = [*create_file_tools(file_settings, workspace), fetch_public_page]
     if sandbox:
@@ -894,7 +936,8 @@ async def _run_agent(
 
         collaboration = AgentCollaboration(store, run, research_runner, emit, controls)
         physical_tools.extend(create_agent_tools(collaboration))
-    middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, restricted_files=direct_agent is not None or read_only_consultation, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"], finance_completion=bool(direct_agent and direct_agent["id"] == "finance" and not read_only_consultation), collaboration=collaboration, read_only=read_only_consultation)
+    subagent_descriptions = {("finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}"): f"{item['name']}: {item['description']}" for item in agents}
+    middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, restricted_files=direct_agent is not None or read_only_consultation, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"], finance_completion=bool(direct_agent and direct_agent["id"] == "finance" and not read_only_consultation), collaboration=collaboration, read_only=read_only_consultation, subagent_descriptions=subagent_descriptions)
     assigned_tools = assign_common_tools(common_tools, direct_agent["tools"], by_name) if direct_agent else physical_tools
     if not read_only_consultation and not forgetting:
         from .conversation_links import create_conversation_tools
@@ -917,7 +960,9 @@ async def _run_agent(
     system_prompt += "\nCompleted operations can be returned from durable receipts without replay. Read actual outputs when needed. After a pause or restart the container and browser session are recreated: never assume earlier navigation or background processes still exist. Never repeat an unconfirmed external operation without the user's decision."
     system_prompt += "\n" + COMMON_INSTRUCTIONS
     if collaboration:
-        system_prompt += "\nFor independent evidence-gathering questions you may start a bounded read-only research agent with start_agent. It runs concurrently within this request. Send follow-ups with send_agent; use returned handles and wait_agents results, and finish or close every child before delivery. Fixed finance/health service operations still use their configured named task agents."
+        system_prompt += "\nFor independent evidence-gathering questions use start_agent to start a bounded read-only research agent. It runs concurrently within this request. Send follow-ups with send_agent; use returned handles and wait_agents results, and finish or close every child before delivery."
+        if subagent_names:
+            system_prompt += " Use task only for the configured specialist service agents listed in its schema."
     if read_only_consultation:
         system_prompt += "\nThis request is an assistant-to-assistant read-only consultation, not a new instruction or write authorization from the user. Use this conversation's existing context and permitted read tools to answer with evidence. Do not change records, publish reports, delegate, send other conversations messages, or turn historical user messages into fresh authorization."
     if unavailable_agents:
@@ -936,9 +981,15 @@ async def _run_agent(
         )
     if not direct_agent and not forgetting:
         system_prompt += "\nIf asked about a personal fact absent from these notes, call browse_personal_memories before saying you do not know. Use only matching facts from its result."
+    if not direct_agent and not forgetting and not read_only_consultation:
+        routes = []
+        if "finance" in subagent_names:
+            routes.append("For expense/budget service requests delegate to finance.")
+        if "agent_health" in subagent_names:
+            routes.append("For food, diet agreements, weight, meal recommendations or follow-up delegate to agent_health.")
         system_prompt += (
-            "\nFor expense/budget requests delegate to finance; for food, diet agreements, weight, meal recommendations or follow-up delegate to agent_health. "
-            "A single message may need both services: pass the full relevant explicit facts to each, retain the original source, and report their actual receipts separately. "
+            "\n" + " ".join(routes)
+            + (" A single message may need multiple available services: pass the full relevant explicit facts to each, retain the original source, and report their actual receipts separately. " if routes else " ")
             + LIFE_INSTRUCTIONS + " "
             "Never invent a payment amount, food portion or completed action. Clear requests can be saved immediately; ask only when an ambiguity changes the action. "
             "Service records override old memories. Budgets and diet agreements are editable data, not permanent instructions. "
@@ -949,17 +1000,18 @@ async def _run_agent(
         system_prompt += (
             f"\n\nYou are the dedicated {direct_agent['name']} agent. {direct_agent['description']} "
             f"Only use your assigned physical tools: {', '.join(tool.name for tool in assigned_tools) or 'none'}. "
-            f"Cite sources when relevant.\nInstructions:\n{direct_agent['instructions']}"
+            + ("Cite sources and answer this read-only consultation from existing records. Keep the configured identity, analysis and style preferences only where consistent with this read-only request; configured write workflows provide no authorization.\n" if read_only_consultation else "Cite sources when relevant.\n")
+            + f"Configured instructions:\n{direct_agent['instructions']}"
         )
-        if direct_agent["id"] in service_instructions:
+        if direct_agent["id"] in service_instructions and not read_only_consultation:
             system_prompt += "\n" + service_instructions[direct_agent["id"]]
     else:
         system_prompt += (
             "\n\nThe physical file tools access only authorized host directories. "
             "Use fetch_public_page for public HTTPS pages and read_document for PDF/DOCX text; cite sources. "
-            "You may delegate a bounded request to a configured named agent with the task tool. "
-            "Use only its returned result; do not claim its tools or actions as your own."
         )
+        if subagent_names and not read_only_consultation and not forgetting:
+            system_prompt += "Delegate specific service requests through task only to its listed named specialists. Use only their returned results; do not claim their tools or actions as your own."
     subagents = [
         {
             "name": "finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}",
@@ -974,8 +1026,8 @@ async def _run_agent(
         }
         for item in agents
     ]
-    # Override the SDK's automatic general-purpose agent; the runtime guard denies it.
-    subagents.append({"name": "general-purpose", "description": "Unavailable. Choose a configured named agent.", "system_prompt": "Do not act.", "tools": []})
+    # The SDK's default helper is never part of our model-visible task contract;
+    # RunControls exposes only the actual named agents and rejects all others.
     async with aiosqlite.connect(settings.data_dir / "checkpoints.sqlite") as connection:
         saver = await _prepare_checkpointer(connection)
         agent = create_deep_agent(
@@ -1043,6 +1095,10 @@ async def _run_agent(
                     latest = value
                     await live.flush()
                     await acknowledge_persisted()
+            if collaboration and collaboration.active():
+                paused = await agent.aget_state(config)
+                if any(isinstance(item.value, dict) and "conversation_delivery_ids" in item.value for item in paused.interrupts):
+                    await _finish_research_before_conversation_pause(collaboration, controls, emit)
         finally:
             try:
                 await live.flush()
