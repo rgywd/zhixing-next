@@ -15,7 +15,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Annotated, Any
 
-from langchain_core.messages import messages_from_dict
+from langchain_core.messages import AIMessage, BaseMessage, messages_from_dict
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from pydantic import Field
@@ -96,11 +96,13 @@ class ChildLedger:
     def can_send(row):
         if row["status"] in {"queued", "running", "completed"}:
             return True
-        if row["status"] != "failed" or row["error_code"] != "research_limit_with_summary" or not row["result"]:
+        if row["status"] != "failed" or row["error_code"] not in {"research_limit_with_summary", "ResearchLimitError"}:
+            return False
+        if row["error_code"] == "research_limit_with_summary" and not row["result"]:
             return False
         try:
             history = _decode_history(row["history_json"])
-            return isinstance(history, list) and bool(history)
+            return isinstance(history, list) and bool(history) and all(isinstance(message, BaseMessage) for message in history) and any(isinstance(message, AIMessage) for message in history)
         except Exception:
             return False
 
@@ -111,9 +113,11 @@ class ChildLedger:
         result = row["result"]
         length = len(result) if result is not None else 0
         end = result_offset + RESULT_WINDOW
+        can_send = ChildLedger.can_send(row)
         return {key: row[key] for key in ("id", "name", "status", "error_code", "result_version")} | {
             "agent_id": row["id"], "stopped": row["status"] not in ACTIVE,
-            "can_send": ChildLedger.can_send(row),
+            "can_send": can_send,
+            "continuation_reason": ("research_limit_without_summary" if row["error_code"] == "ResearchLimitError" else "research_limit_with_summary") if can_send and row["status"] == "failed" else None,
             "result": result[result_offset:end] if result is not None else None,
             "result_offset": result_offset, "result_length": length,
             "result_truncated": end < length,
@@ -257,6 +261,7 @@ class AgentCollaboration:
             async with self.semaphore:
                 if child.close_requested or self.shutting_down:
                     raise asyncio.CancelledError()
+                child.history = _decode_history(self.ledger.get(child.id)["history_json"])
                 row = self.ledger.update(child.id, "running")
                 await self._notify(row)
 
@@ -274,11 +279,13 @@ class AgentCollaboration:
                         return
                     await self.emit(kind, {**data, "child_id": child.id})
 
-                child.history = await self.runner(row, child.history, controls, emit, lambda history, *, applied_ids=None: self.ledger.save_snapshot(child.id, history, applied_ids=applied_ids))
+                def save_snapshot(history, *, applied_ids=None):
+                    self.ledger.save_snapshot(child.id, history, applied_ids=applied_ids)
+                    child.history = list(history)
+
+                child.history = await self.runner(row, child.history, controls, emit, save_snapshot)
                 if child.close_requested or self.shutting_down:
                     raise asyncio.CancelledError()
-                from langchain_core.messages import AIMessage
-
                 final = next((message for message in reversed(child.history) if isinstance(message, AIMessage) and not message.tool_calls), None)
                 if final is None:
                     raise RuntimeError("child_missing_result")
@@ -302,6 +309,11 @@ class AgentCollaboration:
             status = "closed" if child.close_requested else "interrupted" if self.shutting_down else "failed"
             row = self.ledger.update(child.id, status, error_code=None if child.close_requested else "owner_stopped" if self.shutting_down else type(exc).__name__, history=child.history or None)
             await self._notify(row)
+            # A local-limit follow-up can be accepted while this terminal
+            # notification is still in flight. Its graph already unwound; own
+            # the queued instruction rather than leaving it without a runner.
+            if not child.close_requested and not self.shutting_down and self.ledger.pending(child.id) and self.ledger.get(child.id)["status"] == "queued":
+                child.task = asyncio.create_task(self._execute(child))
 
     def active(self):
         return [row for row in self.ledger.all() if row["status"] in ACTIVE]
@@ -398,7 +410,7 @@ def create_agent_tools(collaboration):
         message: Annotated[str, Field(min_length=1, max_length=12000)],
         tool_call_id: Annotated[str, InjectedToolCallId],
     ) -> dict:
-        """Add an instruction to a research agent whose receipt has can_send=true. Running agents consume it at model/tool boundaries; completed agents continue with their own history. A failed research_limit_with_summary result is partial, not complete; it can continue with its saved evidence and a narrower follow-up, such as summarizing without more tools. Each continuation keeps the same root budget and local research limit. A queued delivery is not proof it has been applied. Closed/interrupted agents and other failures cannot continue."""
+        """Add an instruction to a research agent whose receipt has can_send=true; follow that boolean rather than memorizing error classes. Running agents consume it at model/tool boundaries; completed agents continue with their own history. A local boundary may stop a child with a partial result or no summary: status=failed and result=null are not completion. When can_send=true, valid saved context is available; continue the same child with a narrower follow-up, such as summarizing already-read evidence without more tools, rather than recreating it merely for a local limit. Each continuation keeps the same root budget and local research limit. A queued delivery is not proof it has been applied. When can_send=false, that child cannot continue."""
         return await collaboration.send(agent_id, message, tool_call_id)
 
     @tool
@@ -408,7 +420,7 @@ def create_agent_tools(collaboration):
         timeout_ms: Annotated[int, Field(ge=0, le=30000)] = 10000,
         result_offset: Annotated[int, Field(ge=0, description="Leave at zero for the first result read. Continue only when that agent's result_truncated=true and next_result_offset is not null: select that one agent and copy its exact next_result_offset here. If result_truncated=false or next_result_offset=null, all available result text has been returned; never guess an offset or reread the same version.")] = 0,
     ) -> dict:
-        """Read research-agent status/results; wait for new results (default up to 10 seconds). Omit agent_ids for all agents. Reuse the returned cursor as after while agents are queued/running; timeout is not completion. Results include result_version, stopped, can_send, result_length, result_truncated and next_result_offset. Continue a result only when result_truncated=true AND next_result_offset is not null: select that one agent_id and pass the exact returned next_result_offset as result_offset. If result_truncated=false or next_result_offset=null, all available result text is already in the receipt; never invent an offset or reread the same result_version. Check result_version across pages; restart at zero only if a follow-up produced a new version. An already-read terminal result needs no close_agent cleanup; use it and finish once all needed results are collected. A failed research_limit_with_summary result is partial; when can_send=true, send_agent can continue the same agent with its saved context."""
+        """Read research-agent status/results; wait for new results (default up to 10 seconds). Omit agent_ids for all agents. Reuse the returned cursor as after while agents are queued/running; timeout is not completion. Results include result_version, stopped, can_send, continuation_reason, result_length, result_truncated and next_result_offset. Continue a result only when result_truncated=true AND next_result_offset is not null: select that one agent_id and pass the exact returned next_result_offset as result_offset. If result_truncated=false or next_result_offset=null, all available result text is already in the receipt; never invent an offset or reread the same result_version. Check result_version across pages; restart at zero only if a follow-up produced a new version. An already-read terminal result needs no close_agent cleanup; use it and finish once all needed results are collected. A local-limit failure remains failed even with partial text; result=null means no summary, and any retained older result does not complete the latest instruction. Follow can_send: true means send_agent can continue the same saved context with a narrower instruction, without a new root budget; false means it cannot continue. Error codes are diagnostics, not the continuation contract."""
         return await collaboration.wait(agent_ids, after=after, timeout_ms=timeout_ms, result_offset=result_offset)
 
     @tool

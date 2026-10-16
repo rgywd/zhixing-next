@@ -51,6 +51,8 @@ class LimitCoordinator(ScriptedModel):
 
 class ResumeCoordinator(LimitCoordinator):
     resumed: bool = False
+    failure_release: Any = None
+    queued_before_release: bool = False
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         self.seen.append(messages)
@@ -58,10 +60,13 @@ class ResumeCoordinator(LimitCoordinator):
             call = {"name": "start_agent", "args": {"task": "Read the evidence and report its limits"}, "id": "start", "type": "tool_call"}
         else:
             latest = next((message for message in reversed(messages) if isinstance(message, ToolMessage)), None)
+            if latest and latest.name == "send_agent" and self.failure_release is not None:
+                self.queued_before_release = not self.failure_release.is_set()
+                self.failure_release.set()
             if latest and latest.name == "wait_agents":
                 receipt = json.loads(latest.content)["agents"][0]
                 self.receipts.append(receipt)
-                if receipt["status"] == "failed" and receipt["error_code"] == "research_limit_with_summary" and not self.resumed:
+                if receipt["status"] == "failed" and receipt["can_send"] and not self.resumed:
                     assert receipt["can_send"]
                     self.resumed = True
                     call = {"name": "send_agent", "args": {"agent_id": self.child_id, "message": "Do not use tools. Return the final findings based on the evidence already read, keeping unknowns unknown."}, "id": "continue-same-child", "type": "tool_call"}
@@ -72,26 +77,49 @@ class ResumeCoordinator(LimitCoordinator):
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[call]))])
 
 
-async def test_limited_research_can_continue_same_history_and_root_budget(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_summary", [False, True])
+@pytest.mark.parametrize("notification_inflight", [False, True])
+async def test_limited_research_can_continue_same_history_and_root_budget(tmp_path, monkeypatch, with_summary, notification_inflight):
     settings = make_settings(tmp_path)
     run = make_run("resume-limited-research")
     child_id = "a_" + hashlib.sha256(f"{run['id']}:start".encode()).hexdigest()[:16]
-    first = ScriptedModel(replies=[*[calculation(index) for index in range(5)], AIMessage(content="Verified calculations; the source question remains unchecked.")])
-    continued = ScriptedModel(replies=[AIMessage(content="Final findings: the five calculations are known; the source question remains unknown.")])
+    upload = settings.workspace_root / "conversations" / run["conversation_id"] / "uploads" / "supply.txt"
+    upload.parent.mkdir(parents=True)
+    upload.write_text("虚构供货方案 PINE-17：按订单备货，需要提前两天确认。资料没有说明价格和库存，不能推断。")
+    read_source = AIMessage(content="", tool_calls=[{"name": "read_text_file", "args": {"path": "uploads/supply.txt"}, "id": "read-source", "type": "tool_call"}])
+    first = ScriptedModel(replies=[read_source, *[calculation(index) for index in range(4)], AIMessage(content="The source is read; prices and inventory remain unknown.") if with_summary else calculation(99)])
+    continued = ScriptedModel(replies=[AIMessage(content="Final findings: PINE-17 prepares against orders; prices and inventory remain unknown.")])
     models = iter([first, continued])
     monkeypatch.setattr("zhixing_next.runtime.create_model", lambda *args, **kwargs: next(models))
-    parent = ResumeCoordinator(replies=[], child_id=child_id)
-    answer = await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=parent)
+    failed_notice, release = asyncio.Event(), asyncio.Event()
+
+    async def emit(kind, data):
+        if notification_inflight and kind == "agent.child" and data["status"] == "failed":
+            failed_notice.set()
+            await release.wait()
+
+    parent = ResumeCoordinator(replies=[], child_id=child_id, failure_release=release if notification_inflight else None)
+    answer = await asyncio.wait_for(fixture_run_agent(settings, run, persona="", emit=emit, controls=no_controls, acknowledge=ignore, model_override=parent), 3)
     assert "same assistant" in answer
     initial, final = parent.receipts
-    assert initial["status"] == "failed" and initial["result_version"] == 1
-    assert initial["error_code"] == "research_limit_with_summary" and "部分总结" in initial["result"]
-    assert final["agent_id"] == child_id and final["status"] == "completed" and final["result_version"] == 2
+    assert initial["status"] == "failed" and initial["result_version"] == int(with_summary)
+    assert initial["can_send"]
+    if with_summary:
+        assert initial["error_code"] == "research_limit_with_summary" and "部分总结" in initial["result"]
+        assert initial["continuation_reason"] == "research_limit_with_summary"
+    else:
+        assert initial["error_code"] == "ResearchLimitError" and initial["result"] is None
+        assert initial["continuation_reason"] == "research_limit_without_summary"
+    assert final["agent_id"] == child_id and final["status"] == "completed" and final["result_version"] == 1 + int(with_summary)
     assert final["error_code"] is None and final["can_send"]
     assert len(first.seen) == 6 and len(continued.seen) == 1
+    if notification_inflight:
+        assert failed_notice.is_set() and parent.queued_before_release
     context = continued.seen[0]
-    assert sum(isinstance(message, ToolMessage) and message.name == "calculate" for message in context) == 5
-    assert any(isinstance(message, AIMessage) and message.additional_kwargs.get("zhixing_research_limit") == "research_limit_with_summary" for message in context)
+    assert sum(isinstance(message, ToolMessage) and message.name == "calculate" for message in context) == 4
+    source = next(message for message in context if isinstance(message, ToolMessage) and message.tool_call_id == "read-source")
+    assert json.loads(source.content)["complete"] is True and "PINE-17" in source.content
+    assert any(isinstance(message, AIMessage) and message.additional_kwargs.get("zhixing_research_limit") == "research_limit_with_summary" for message in context) is with_summary
     assert any(isinstance(message, HumanMessage) and "Do not use tools" in str(message.content) for message in context)
     store = Store(settings)
     ledger = ChildLedger(store, run["id"])
@@ -103,7 +131,7 @@ async def test_limited_research_can_continue_same_history_and_root_budget(tmp_pa
 
 
 @pytest.mark.parametrize("status,error_code,result,valid_history", [
-    ("failed", "ResearchLimitError", "Saved result", True),
+    ("failed", "ResearchLimitError", "Saved result", False),
     ("failed", "GraphRecursionError", "Saved result", True),
     ("failed", "research_limit_with_summary", None, True),
     ("failed", "research_limit_with_summary", "Saved result", False),
@@ -141,7 +169,7 @@ def test_accepted_limited_summary_is_queued_without_falsely_completing_it(tmp_pa
     # The model-visible contract advertises the same boundary as the hard guard.
     tools = {item.name: item for item in create_agent_tools(None)}
     assert "can_send=true" in tools["send_agent"].description
-    assert "research_limit_with_summary" in tools["wait_agents"].description
+    assert "Follow can_send" in tools["wait_agents"].description
 
 
 @pytest.mark.parametrize("ignore_closed_tools", [False, True])
