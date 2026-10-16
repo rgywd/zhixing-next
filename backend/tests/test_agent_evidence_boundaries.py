@@ -53,3 +53,8 @@ async def test_actual_research_graph_receives_the_same_grounding_limits(tmp_path
     assert_shared_evidence_limits(prompt)
     assert "distinguish quoted facts from your own analysis" in prompt
     assert "uncertain outcome does not establish responsibility for costs or compensation" in prompt
+    assert "stay within the assigned question and source scope" in prompt
+    assert "do not search unrelated history, memories, libraries or URLs" in prompt
+    assert "Missing facts may remain unknown" in prompt
+    assert "return the findings with their limits and finish" in prompt
+    assert "complete=true, truncated=false file receipt contains the whole file" in prompt

@@ -268,8 +268,9 @@ class AgentCollaboration:
                 if final is None:
                     raise RuntimeError("child_missing_result")
                 result = final.content if isinstance(final.content, str) else final.text
+                limited = final.additional_kwargs.get("zhixing_research_limit") == "research_limit_with_summary"
                 pending = bool(self.ledger.pending(child.id))
-                row = self.ledger.update(child.id, "queued" if pending else "completed", result=result, history=child.history)
+                row = self.ledger.update(child.id, "failed" if limited else "queued" if pending else "completed", result=result, error_code="research_limit_with_summary" if limited else None, history=child.history)
                 await self._notify(row)
                 # A late instruction may arrive while a model is finishing. Keep
                 # owning that delivery rather than strand a queued follow-up.
