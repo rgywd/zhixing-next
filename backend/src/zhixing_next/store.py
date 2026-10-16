@@ -1066,6 +1066,48 @@ class Store:
                 item["data"] = json.loads(item["data"])
             return page
 
+    def reply_processes(self, conversation_id, run_ids):
+        from .reply_process import DISPLAY_TYPES, project
+
+        identifiers = list(dict.fromkeys(run_ids))
+        if not identifiers or len(identifiers) > 50:
+            raise StoreError("validation_error", "Request between one and 50 runs", 422)
+        placeholders = ",".join("?" for _ in identifiers)
+        with self._connection() as db:
+            # All parts, final-message references and the resume cursor share one read snapshot.
+            db.execute("BEGIN")
+            self._require(db, "conversations", conversation_id)
+            runs = db.execute(f"SELECT id,conversation_id,status,phase FROM runs WHERE id IN ({placeholders})", identifiers).fetchall()
+            if len(runs) != len(identifiers) or any(run["conversation_id"] != conversation_id for run in runs):
+                raise StoreError("not_found", "Run was not found in this conversation", 404)
+            types = sorted(DISPLAY_TYPES)
+            type_placeholders = ",".join("?" for _ in types)
+            rows = db.execute(
+                f"""SELECT * FROM (
+                    SELECT *,ROW_NUMBER() OVER(PARTITION BY run_id ORDER BY seq DESC) AS slot,
+                        COUNT(*) OVER(PARTITION BY run_id) AS event_count
+                    FROM events WHERE run_id IN ({placeholders}) AND type IN ({type_placeholders})
+                ) WHERE slot<=2048 ORDER BY seq""", [*identifiers, *types],
+            ).fetchall()
+            grouped = {identifier: [] for identifier in identifiers}
+            for row in rows:
+                grouped[row["run_id"]].append(row)
+            finals = {row["run_id"]: row for row in db.execute(
+                f"SELECT id,run_id,content FROM messages WHERE role='assistant' AND run_id IN ({placeholders}) ORDER BY seq", identifiers,
+            )}
+            cursors = {row["run_id"]: row["cursor"] for row in db.execute(
+                f"SELECT run_id,MAX(seq) AS cursor FROM events WHERE run_id IN ({placeholders}) GROUP BY run_id", identifiers,
+            )}
+            by_id = {run["id"]: run for run in runs}
+            items = []
+            for identifier in identifiers:
+                events = grouped[identifier]
+                item = project(by_id[identifier], events, finals.get(identifier))
+                item["cursor"] = cursors.get(identifier, 0)
+                item["truncated"] = item["truncated"] or bool(events and events[0]["event_count"] > 2048)
+                items.append(item)
+            return {"items": items}
+
     def _finish(self, db, run, status, result=None, error=None):
         if run["status"] in TERMINAL:
             return

@@ -12,7 +12,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, FastAPI, Query, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from filelock import Timeout
 from starlette.exceptions import HTTPException
@@ -527,6 +527,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @router.get("/runs/{run_id}/events")
     def events(run_id: str, after: Cursor = 0, limit: Limit = 100):
         return store.list_events(run_id, after, limit)
+
+    @router.get("/conversations/{conversation_id}/reply-processes")
+    def reply_processes(conversation_id: str, run_ids: Annotated[list[str], Query(min_length=1, max_length=50)]):
+        return store.reply_processes(conversation_id, run_ids)
+
+    @router.get("/runs/{run_id}/display-stream")
+    async def display_stream(request: Request, run_id: str, after: Cursor = 0):
+        from .display_stream import stream_display
+
+        # Resolve before sending headers, so missing runs/auth return ordinary errors.
+        store.get_run(run_id)
+        if after > 2**63 - 1:
+            raise StoreError("validation_error", "Cursor is outside the supported range", 422)
+        last_id = request.headers.get("last-event-id", "")
+        if last_id.isascii() and last_id.isdigit() and len(last_id) < 20 and int(last_id) <= 2**63 - 1:
+            after = max(after, int(last_id))
+        return StreamingResponse(
+            stream_display(store, run_id, after, request.is_disconnected),
+            media_type="text/event-stream", headers={"Cache-Control": "private, no-store",
+                                                       "X-Accel-Buffering": "no"},
+        )
 
     @router.get("/schedules")
     def schedules(cursor: Cursor = 0, limit: Limit = 50, ids: Annotated[list[str] | None, Query(max_length=100)] = None):

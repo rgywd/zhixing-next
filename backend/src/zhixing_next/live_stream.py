@@ -12,7 +12,9 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 MAX_TEXT = 64 * 1024
 MAX_MESSAGES = 64
-MAX_EVENT_BYTES = 1024 * 1024
+MAX_EVENT_BYTES = 2 * 1024 * 1024
+FINAL_RESERVE = 1024 * 1024
+MAX_CAPTURE_UNITS = 128 * 1024
 MAX_EVENTS = 512
 _IDENTITY = "zhixing_live_model_id"
 
@@ -21,6 +23,15 @@ class ModelStreamIdentity(BaseCallbackHandler):
     # Metadata is shared with LangGraph's messages callback. Use the actual LLM
     # invocation UUID: provider IDs can be absent or reused across a retry.
     run_inline = True
+
+    def __init__(self):
+        self.outcomes = {}
+
+    def on_llm_end(self, response, *, run_id, **kwargs):
+        self.outcomes[str(run_id)] = "completed"
+
+    def on_llm_error(self, error, *, run_id, **kwargs):
+        self.outcomes[str(run_id)] = "failed"
 
     def on_chat_model_start(self, serialized, messages, *, run_id, metadata=None, **kwargs):
         if metadata is not None:
@@ -58,7 +69,9 @@ class LiveModelStream:
         self.stream_id = str(uuid4())
         self.callback = ModelStreamIdentity()
         self.messages = {}
-        self.events = self.bytes = 0
+        self.events = self.bytes = self.capture_units = 0
+        self.truncated = False
+        self.outcomes_sent = {}
 
     async def start(self):
         # A resumed runtime must not append a newly generated answer to its old,
@@ -74,41 +87,68 @@ class LiveModelStream:
         identifier = hashlib.sha256(json.dumps(raw_id).encode()).hexdigest()[:32]
         if identifier not in self.messages:
             if len(self.messages) >= MAX_MESSAGES:
+                await self._mark_truncated()
                 return
-            self.messages[identifier] = {"text": "", "reasoning": "", "sent": {}, "at": {}, "truncated": {}}
+            # Flush a settled previous model turn before introducing the next one.
+            await self.flush()
+            self.messages[identifier] = {"text": "", "reasoning": "", "sent": {}, "at": {}, "truncated": {}, "sent_truncated": {}, "final_sent": set()}
         state = self.messages[identifier]
-        for field, value in zip(("text", "reasoning"), visible_parts(message)):
+        text, reasoning = visible_parts(message)
+        for field, value in (("reasoning", reasoning), ("text", text)):
             if not value:
                 continue
             combined = state[field] + value if isinstance(message, AIMessageChunk) else value
             # JavaScript measures UTF-16 units. Never split a surrogate pair or
             # send a snapshot the mobile size guard must reject.
-            state[field] = combined.encode("utf-16-le", errors="surrogatepass")[:MAX_TEXT * 2].decode("utf-16-le", errors="ignore")
+            old_units = len(state[field].encode("utf-16-le")) // 2
+            available = min(MAX_TEXT, MAX_CAPTURE_UNITS - self.capture_units + old_units)
+            state[field] = combined.encode("utf-16-le", errors="surrogatepass")[:available * 2].decode("utf-16-le", errors="ignore")
+            self.capture_units += len(state[field].encode("utf-16-le")) // 2 - old_units
             state["truncated"][field] = state["truncated"].get(field, False) or state[field] != combined
+            if state["truncated"][field]:
+                await self._mark_truncated()
             now = self.clock()
             previous = state["sent"].get(field)
             if (previous is None or now - state["at"].get(field, 0) >= 0.1
                     or len(state[field]) - len(previous) >= 1024):
                 await self._snapshot(identifier, field)
 
-    async def _snapshot(self, identifier, field):
+    async def _mark_truncated(self):
+        if not self.truncated:
+            self.truncated = True
+            await self.emit("assistant.truncated", {"stream_id": self.stream_id, "reason": "display_limit"})
+
+    async def _snapshot(self, identifier, field, *, final=False):
         state = self.messages[identifier]
         value = state[field]
-        if not value or state["sent"].get(field) == value:
+        if not value or (state["sent"].get(field) == value and state["sent_truncated"].get(field, False) == state["truncated"].get(field, False)):
             return
         data = {"stream_id": self.stream_id, "message_id": identifier, "text": value}
         if state["truncated"].get(field):
             data["truncated"] = True
         size = len(json.dumps(data, ensure_ascii=False).encode())
-        if self.events >= MAX_EVENTS or self.bytes + size > MAX_EVENT_BYTES:
+        ceiling = MAX_EVENT_BYTES if final else MAX_EVENT_BYTES - FINAL_RESERVE
+        count = MAX_EVENTS if final else MAX_EVENTS - MAX_MESSAGES * 2
+        if self.events >= count or self.bytes + size > ceiling:
+            await self._mark_truncated()
             return
         await self.emit("assistant.snapshot" if field == "text" else "reasoning.snapshot", data)
         self.events += 1
         self.bytes += size
         state["sent"][field] = value
+        state["sent_truncated"][field] = state["truncated"].get(field, False)
         state["at"][field] = self.clock()
 
     async def flush(self):
         for identifier in self.messages:
-            for field in ("text", "reasoning"):
-                await self._snapshot(identifier, field)
+            for field in ("reasoning", "text"):
+                # Reserve one final flush per field after the incremental budget.
+                final = field not in self.messages[identifier]["final_sent"]
+                await self._snapshot(identifier, field, final=final)
+                if self.messages[identifier][field]:
+                    self.messages[identifier]["final_sent"].add(field)
+        for raw_id, outcome in self.callback.outcomes.items():
+            identifier = hashlib.sha256(json.dumps(raw_id).encode()).hexdigest()[:32]
+            if identifier in self.messages and self.outcomes_sent.get(identifier) != outcome:
+                await self.emit("assistant.attempt", {"stream_id": self.stream_id, "message_id": identifier, "status": outcome})
+                self.outcomes_sent[identifier] = outcome

@@ -20,7 +20,11 @@ import { useSyncStatus } from "./ConnectionStatus";
 import { ConversationComposer } from "./ConversationComposer";
 import { BottomSheet } from "./BottomSheet";
 import { useChatPreferences } from "./chatPreferences";
-import { LiveRunView } from "./LiveRunView";
+import { ReplyContent } from "./ReplyContent";
+import { useReplyProcesses } from "./useReplyProcesses";
+import { conversationReplyRows, isPendingReply, replyRowKey } from "./replyProcess";
+import * as Clipboard from "expo-clipboard";
+import { useNotice } from "./Notice";
 import { ReasoningPicker } from "./ReasoningPicker";
 import { SafeAreaView } from "react-native-safe-area-context";
 import {
@@ -46,6 +50,7 @@ import { QueuedMessages } from "./QueuedMessages";
 import { useQueuedMessages } from "./useQueuedMessages";
 
 const searchViewabilityConfig = { itemVisiblePercentThreshold: 1 };
+const historyAnchor = { minIndexForVisible: 0 };
 
 export function ChatPanel({
   connection,
@@ -103,6 +108,11 @@ export function ChatPanel({
   const { s, colors } = useUi();
   const chatStyles = useThemedStyles(createChatStyles);
   const chatPreferences = useChatPreferences();
+  const notice = useNotice();
+  const [messageMenu, setMessageMenu] = useState<Message | null>(null);
+  const [awayFromLatest, setAwayFromLatest] = useState(false);
+  const [visibleRuns, setVisibleRuns] = useState<string[]>([]);
+  const draggingMessages = useRef(false);
   const [showModels, setShowModels] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
@@ -154,10 +164,35 @@ export function ChatPanel({
     speak,
     pendingRuns,
     updateDraft,
-    liveRun,
   } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles, focusMessageSeq: focusAnchor,
-    defaultIntent: chatPreferences.defaultIntent, defaultIntentReady: chatPreferences.ready });
+    defaultIntent: chatPreferences.defaultIntent, defaultIntentReady: chatPreferences.ready, streamEvents: false });
   const refreshQueuedMessages = useCallback(() => refresh.current(), [refresh]);
+  const replyIds = [...messages.filter((item) => item.role === "assistant" && !item.origin).slice(-20).map((item) => item.run_id),
+    ...visibleRuns.filter((id) => messages.some((item) => item.run_id === id)), ...runs.filter((item) => item.started_at || item.status === "running" || item.phase && item.phase !== "normal").slice(-20).map((item) => item.id)];
+  const replyRecords = useReplyProcesses(connection, conversation.id, replyIds, runs, refreshQueuedMessages);
+  const rows = conversationReplyRows(messages, runs, replyRecords);
+  const goToLatest = () => { nearBottomRef.current = true; setAwayFromLatest(false); list.current?.scrollToEnd({ animated: true }); };
+  const replyStatus = (id: string) => {
+    const run = runs.find((value) => value.id === id);
+    return run && !["running", "queued"].includes(run.status) ? run.status : replyRecords[id]?.status ?? run?.status;
+  };
+  const actionMessage = (message: Message): Message => message.content || !isPendingReply(message) ? message : { ...message,
+    content: (replyRecords[message.run_id]?.buffer.parts ?? []).filter((part) => part.type === "text" && part.attempt_status !== "failed").map((part) => part.type === "text" ? part.text : "").join("\n\n") };
+  async function copyMessage(message: Message) {
+    if (!message.content) { notice.show({ message: "这条回复尚无可复制正文" }); return; }
+    try { await Clipboard.setStringAsync(message.content); notice.show({ message: "已复制消息", tone: "success" }); }
+    catch (e) { setError(humanError(e)); }
+  }
+  async function messageToDraft(message: Message) {
+    if (!draftReady || draft.pending || busy) return;
+    const addition = message.role === "user" ? message.content : `关于这条回复：\n${message.content}\n\n`;
+    try {
+      const text = [draft.text.trim(), addition].filter(Boolean).join("\n\n");
+      if (text.length > 20000) { notice.show({ message: "内容超过草稿长度，可先复制并选取需要的部分", tone: "warning" }); return; }
+      await updateDraft({ ...draft, text, pending: null });
+      setMessageMenu(null); notice.show({ message: "已放入草稿，可修改后发送" });
+    } catch (e) { setError(humanError(e)); }
+  }
   const queuedMessages = useQueuedMessages({ connection, conversationId: conversation.id, runs, running,
     onChanged: refreshQueuedMessages, onError: setError });
   const runStates = useRef<{ conversationId: string; statuses: Map<string, Run["status"]> }>({ conversationId: conversation.id, statuses: new Map() });
@@ -177,6 +212,8 @@ export function ChatPanel({
   const focusHandled = useRef(onFocusHandled);
   useEffect(() => { focusHandled.current = onFocusHandled; }, [onFocusHandled]);
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken<Message>[] }) => {
+    const ids = [...new Set(viewableItems.filter((item) => item.isViewable && item.item.role === "assistant").map((item) => item.item.run_id))].sort();
+    setVisibleRuns((old) => old.join(",") === ids.join(",") ? old : ids);
     const target = focusState.current;
     if (target.seq === null || target.handled) return;
     if (viewableItems.some((item) => item.isViewable && item.item.seq === target.seq)) {
@@ -184,18 +221,19 @@ export function ChatPanel({
       focusHandled.current?.(target.seq);
     }
   }, []);
+  const focusRowIndex = rows.findIndex((message) => message.seq === focusAnchor);
   useEffect(() => {
     if (focusAnchor === null || focusState.current.requested || focusState.current.handled) return;
     nearBottomRef.current = false;
     if (loading) return;
-    const index = messages.findIndex((message) => message.seq === focusAnchor);
+    const index = focusRowIndex;
     if (index < 0) return;
     const timer = setTimeout(() => {
       focusState.current.requested = true;
       list.current?.scrollToIndex({ index, animated: true, viewPosition: 0.3 });
     }, 180);
     return () => clearTimeout(timer);
-  }, [focusAnchor, focusRequest.id, list, loading, messages, nearBottomRef]);
+  }, [focusAnchor, focusRequest.id, list, loading, focusRowIndex, nearBottomRef]);
   useEffect(() => { if (startWithFiles) onFilesOpened?.(); }, [startWithFiles, onFilesOpened]);
   const effectiveCatalog = catalog && agentModelId && catalog.items.some((item) => item.id === agentModelId)
     ? { ...catalog, roles: { ...catalog.roles, chat: agentModelId, task: agentModelId } } : catalog;
@@ -208,7 +246,6 @@ export function ChatPanel({
   const depth = (kind === "task" ? taskPreference.effort : chatPreference.effort) ?? model?.default_reasoning_effort ?? "auto";
   const currentRun = running ?? pendingRuns[0];
   const staleTarget = intent === "steer" && running?.id !== target;
-  const liveMessageId = liveRun ? messages.filter((message) => message.role === "assistant" && message.run_id === liveRun.run.id).at(-1)?.id : null;
   async function updateModel(model_id: string | null, reasoning_effort: ReasoningEffort | null) {
     if (kind === "task") {
       setTaskModelId(model_id);
@@ -231,16 +268,17 @@ export function ChatPanel({
       {loading ? (
         <ActivityIndicator color={colors.accent} style={{ padding: 16 }} />
       ) : null}
+      <View style={{ flex: 1, minHeight: 0 }}>
       <FlatList
         ListFooterComponent={<View style={s.stack}>
-          {!liveMessageId ? <LiveRunView value={liveRun} /> : null}
           <ApprovalCards connection={connection} conversationId={conversation.id} onChanged={() => refresh.current()} />
         </View>}
         ref={list}
-        data={messages}
+        data={rows}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={searchViewabilityConfig}
-        keyExtractor={(message) => message.id}
+        maintainVisibleContentPosition={historyAnchor}
+        keyExtractor={replyRowKey}
         onScrollToIndexFailed={({ index, averageItemLength }) => {
           if (focusState.current.attempts++ > 3) return;
           list.current?.scrollToOffset({ offset: averageItemLength * Math.max(0, index - 1), animated: false });
@@ -258,11 +296,18 @@ export function ChatPanel({
         onScroll={(event) => {
           const { contentOffset, contentSize, layoutMeasurement } =
             event.nativeEvent;
-          nearBottomRef.current =
-            contentSize.height - contentOffset.y - layoutMeasurement.height <
-            140;
+          const close = contentSize.height - contentOffset.y - layoutMeasurement.height < 8;
+          if (!draggingMessages.current && close) nearBottomRef.current = true;
+          setAwayFromLatest(!nearBottomRef.current);
         }}
-        scrollEventThrottle={100}
+        onScrollBeginDrag={() => { draggingMessages.current = true; nearBottomRef.current = false; }}
+        onScrollEndDrag={(event) => {
+          draggingMessages.current = false;
+          const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+          const atBottom = contentSize.height - contentOffset.y - layoutMeasurement.height < 8;
+          nearBottomRef.current = atBottom; setAwayFromLatest(!atBottom);
+        }}
+        scrollEventThrottle={80}
         onContentSizeChange={() => {
           if (nearBottomRef.current)
             list.current?.scrollToEnd({ animated: false });
@@ -301,41 +346,36 @@ export function ChatPanel({
                 : ""}
             </Text>
             </View>
-            {item.id === liveMessageId ? <LiveRunView value={liveRun} /> : null}
             <View style={item.role === "user" && !item.origin ? chatStyles.userBubble : chatStyles.assistantContent}>
-              <MessageBody>{item.content}</MessageBody>
+              {item.role === "assistant" && !item.origin ? (() => {
+                const record = replyRecords[item.run_id], run = runs.find((value) => value.id === item.run_id);
+                const status = replyStatus(item.run_id);
+                return <ReplyContent parts={record?.buffer.parts ?? []} active={status === "running" || status === "queued"}
+                  finalText={!isPendingReply(item) || item.content ? item.content : undefined} finalPartId={record?.finalProjection ? record.finalPartId : undefined}
+                  status={status} phase={record?.buffer.phase ?? run?.phase} cancelRequested={run?.cancel_requested}
+                  connectionIssue={record?.buffer.connectionIssue} truncated={record?.buffer.truncated}
+                  onOpenRun={() => setDetail(item.run_id)} />;
+              })() : <MessageBody>{item.content}</MessageBody>}
               <Attachments connection={connection} items={item.attachments} />
             </View>
-            {item.role === "assistant" || item.run_id ? (
-              <View style={[chatStyles.messageActions, item.role === "user" && !item.origin && { justifyContent: "flex-end" }]}>
-                {item.role === "assistant" ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={speaking === item.id ? "停止朗读" : "朗读消息"}
-                    style={chatStyles.messageAction}
-                    onPress={() => {
-                      void speak(item).catch((e) => setError(humanError(e)));
-                    }}
-                  >
-                    <Ionicons name={speaking === item.id ? "stop-circle-outline" : "volume-medium-outline"} size={18} color={colors.muted} />
-                  </Pressable>
-                ) : null}
-                {item.run_id ? (
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="查看处理记录"
-                    style={chatStyles.messageAction}
-                    onPress={() => setDetail(item.run_id)}
-                  >
-                    <Ionicons name="receipt-outline" size={18} color={colors.muted} />
-                  </Pressable>
-                ) : null}
-                <Text style={s.small}>{timeLabel(item.created_at)}</Text>
-              </View>
-            ) : null}
+            {!isPendingReply(item) || ["completed", "failed", "cancelled", "interrupted"].includes(replyStatus(item.run_id) ?? "") ? <View style={[chatStyles.messageActions, item.role === "user" && !item.origin && { justifyContent: "flex-end" }]}>
+              <Pressable accessibilityRole="button" accessibilityLabel="复制消息" style={chatStyles.messageAction} onPress={() => { void copyMessage(actionMessage(item)); }}>
+                <Ionicons name="copy-outline" size={17} color={colors.muted} />
+              </Pressable>
+              <Pressable accessibilityRole="button" accessibilityLabel="更多消息操作" style={chatStyles.messageAction} onPress={() => setMessageMenu(actionMessage(item))}>
+                <Ionicons name="ellipsis-horizontal" size={19} color={colors.muted} />
+              </Pressable>
+              <Text style={s.small}>{timeLabel(item.created_at)}</Text>
+            </View> : null}
           </View>
         )}
       />
+      {awayFromLatest ? <Pressable accessibilityRole="button" accessibilityLabel="回到最新消息" onPress={goToLatest}
+        style={{ position: "absolute", bottom: queuedMessages.items.length ? 62 : 12, alignSelf: "center", minHeight: 44,
+          paddingHorizontal: 16, gap: 7, flexDirection: "row", alignItems: "center", borderRadius: 22, backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.line }}>
+        <Ionicons name="arrow-down" size={17} color={colors.gold} /><Text style={s.description}>回到最新</Text>
+      </Pressable> : null}
+      </View>
       {conversation.blocked ? (
         <View style={[s.notice, { marginHorizontal: 18, marginBottom: 8 }]}>
           <Text style={s.noticeText}>
@@ -359,6 +399,9 @@ export function ChatPanel({
         placeholder={`和${assistantName}聊聊，或交代一件事…`}
         text={draft.text} editable={draftReady && !draft.pending && !busy}
         onText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}
+        stopping={!!running && !draft.text.trim() && !draft.attachments?.length && !draft.pending}
+        stopDisabled={!!running?.cancel_requested}
+        onStop={() => { if (running) void cancel(running).catch(() => undefined); }}
         canSend={draftReady && (chatPreferences.ready || !!draft.pending) && !busy && !modelBusy && !!(draft.text.trim() || draft.attachments?.length)} busy={busy} pending={!!draft.pending}
         attachmentLocked={!draftReady || !!draft.pending || busy} onFiles={() => setShowFiles(true)}
         kind={kind} onKind={setKind} kindLocked={intent === "steer"}
@@ -409,6 +452,14 @@ export function ChatPanel({
           {onPin ? <ActionLink icon={pinned ? "bookmark" : "bookmark-outline"} disabled={!pinReady} onPress={onPin}>{pinned ? "取消固定此对话" : "固定此对话"}</ActionLink> : null}
           {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
         </ScrollView>
+      </BottomSheet>
+      <BottomSheet visible={!!messageMenu} title="消息操作" onClose={() => setMessageMenu(null)}>
+        {messageMenu ? <View style={s.content}>
+          <ActionLink icon="copy-outline" onPress={() => { void copyMessage(messageMenu); setMessageMenu(null); }}>复制消息</ActionLink>
+          <ActionLink icon="create-outline" disabled={!draftReady || !!draft.pending || busy} onPress={() => { void messageToDraft(messageMenu); }}>{messageMenu.role === "user" ? "修改后重新发送" : "引用到草稿"}</ActionLink>
+          {messageMenu.role === "assistant" ? <ActionLink icon="volume-medium-outline" onPress={() => { void speak(messageMenu).catch((e) => setError(humanError(e))); setMessageMenu(null); }}>{speaking === messageMenu.id ? "停止朗读" : "朗读消息"}</ActionLink> : null}
+          {messageMenu.run_id ? <ActionLink icon="receipt-outline" onPress={() => { setDetail(messageMenu.run_id); setMessageMenu(null); }}>查看处理记录</ActionLink> : null}
+        </View> : null}
       </BottomSheet>
       <ModelPicker
         visible={showModels}

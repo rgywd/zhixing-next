@@ -598,20 +598,22 @@ async def _run_agent(
                 acknowledged.update(ready)
 
         latest: dict[str, Any] = dict(old.values) if resuming else {}
-        async for mode, value in agent.astream(
-            stream_input,
-            config=config,
-            stream_mode=["values", "messages"],
-            durability="sync",
-        ):
-            if mode == "messages":
-                message, metadata = value
-                await live.receive(message, metadata)
-            elif mode == "values":
-                latest = value
-                await live.flush()
-                await acknowledge_persisted()
-        await live.flush()
+        try:
+            async for mode, value in agent.astream(
+                stream_input,
+                config=config,
+                stream_mode=["values", "messages"],
+                durability="sync",
+            ):
+                if mode == "messages":
+                    message, metadata = value
+                    await live.receive(message, metadata)
+                elif mode == "values":
+                    latest = value
+                    await live.flush()
+                    await acknowledge_persisted()
+        finally:
+            await live.flush()
         await acknowledge_persisted()
         saved = await agent.aget_state(config)
         if saved.interrupts:

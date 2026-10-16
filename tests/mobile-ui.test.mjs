@@ -89,13 +89,18 @@ test("shared controls and surfaces change together without inverted button label
 });
 
 test("Markdown switches syntax highlighting as well as the surrounding reading surfaces", () => {
+  const node = { type: "fence", key: "fence", children: [] };
   const markdown = loadUiModule("MessageBody.tsx", {
+    react: { memo: (fn) => fn, useMemo: (fn) => fn(), useDeferredValue: (value) => value },
     "react/jsx-runtime": jsxRuntime,
-    "react-native": { Text: "Text" },
-    "@ronradtke/react-native-markdown-display": { __esModule: true, default: "Markdown" },
+    "react-native": { Text: "Text", View: "View" },
+    "@ronradtke/react-native-markdown-display": { __esModule: true, default: "Markdown", createMarkdownIt: () => ({}),
+      parser: (_source, render) => render([node]), sealIncompleteMarkdown: (source) => source },
+    "./messageMarkdown": { markdownBlockSignature: () => "fence-signature" },
     "./ThemeProvider": { useTheme: () => ({ mode: "dark" }), useThemedStyles: (factory) => factory(theme.darkColors) },
   });
-  const body = markdown.MessageBody({ children: "```js\nconst value = 1;\n```" });
+  const block = markdown.MessageBody({ children: "Code" }).props.children[0];
+  const body = block.type(block.props);
   assert.equal(body.props.colorScheme, "dark");
   assert.equal(body.props.style.fence_code.backgroundColor, theme.darkColors.surfaceRaised);
   assert.equal(body.props.style.fence_copy_text.color, theme.darkColors.muted);

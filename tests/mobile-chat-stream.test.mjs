@@ -247,37 +247,19 @@ test("promoted receipts with mismatched original identity, content, intent or at
   }
 });
 
-test("LiveRunView exposes actual reasoning by default during a run and supports folding tool progress", () => {
-  const lifecycle = hooks();
-  const { LiveRunView } = load("LiveRunView.tsx", { react: lifecycle.react, "react/jsx-runtime": jsx, "react-native": { Text: "Text", View: "View", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator" }, "@react-native-vector-icons/ionicons": { Ionicons: "Icon" }, "./MessageBody": { MessageBody: "MessageBody" }, "./theme": { layout: { touchTarget: 44 } }, "./ui": { useUi: () => ({ s: { row: {}, muted: {}, description: {} }, colors: { muted: "#aaa", gold: "#ba8", line: "#333" } }) } });
-  const value = live.liveRunView(run(), live.mergeLiveRunEvents(live.newLiveRun("r1"), [reset(), event(2, "reasoning.snapshot", { stream_id: "s1", message_id: "m1", text: "Actual thought" }), event(3, "tool", { tool: "web_search", tool_call_id: "call1", status: "started" })]), []);
-  const render = () => lifecycle.render(() => { const node = LiveRunView({ value }); return node.type(node.props); });
-  const walk = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)];
-  let nodes = walk(render()); assert.ok(nodes.some((n) => n.type === "Text" && n.props.children === "Actual thought"));
-  nodes.find((n) => n.props?.accessibilityLabel === "收起思考").props.onPress(); nodes = walk(render());
-  assert.ok(!nodes.some((n) => n.type === "Text" && n.props.children === "Actual thought"));
-  assert.ok(nodes.some((n) => n.props?.accessibilityLabel === "展开工具调用"));
-  const noThought = live.liveRunView(run(), live.newLiveRun("r1"), []); assert.equal(noThought.reasoning, ""); lifecycle.unmount();
+test("legacy live entry point delegates to the shared reply renderer without duplicating a committed answer", () => {
+  const { LiveRunView } = load("LiveRunView.tsx", { "react/jsx-runtime": jsx, "./ReplyContent": { ReplyContent: "ReplyContent" } });
+  const buffer = live.mergeLiveRunEvents(live.newLiveRun("r1"), [reset(), snapshot(2, "Partial answer"),
+    event(3, "reasoning.snapshot", { stream_id: "s1", message_id: "m1", text: "Actual thought" })]);
+  const running = LiveRunView({ value: live.liveRunView(run(), buffer, []) });
+  assert.equal(running.type, "ReplyContent"); assert.equal(running.props.active, true);
+  assert.equal(running.props.finalText, "Partial answer"); assert.equal(running.props.parts.length, 2);
+  const persisted = [{ role: "assistant", run_id: "r1", content: "Final answer" }];
+  const completed = LiveRunView({ value: live.liveRunView({ ...run("r1", "completed"), result: "Final answer" }, buffer, persisted) });
+  assert.equal(completed.props.finalText, undefined); assert.deepEqual(completed.props.parts.map((part) => part.type), ["reasoning"]);
+  for (const status of ["failed", "cancelled", "interrupted"]) {
+    const ended = LiveRunView({ value: live.liveRunView({ ...run("r1", status), phase: "recovering", cancel_requested: true }, buffer, []) });
+    assert.equal(ended.props.status, status); assert.equal(ended.props.active, false); assert.equal(ended.props.finalText, "Partial answer");
+  }
+  assert.equal(LiveRunView({ value: null }), null);
 });
-
-for (const [status, expected] of [["failed", "回复未完成"], ["cancelled", "回复已停止"], ["interrupted", "回复已中断"]]) {
-  test(`LiveRunView marks ${status} partial text and terminal status wins over stale recovery/cancel flags`, () => {
-    for (const flags of [{}, { cancel_requested: true, phase: "recovering" }, { cancel_requested: true, phase: "approval", connectionIssue: true }]) {
-      const lifecycle = hooks();
-      const { LiveRunView } = load("LiveRunView.tsx", { react: lifecycle.react, "react/jsx-runtime": jsx,
-        "react-native": { Text: "Text", View: "View", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator" },
-        "@react-native-vector-icons/ionicons": { Ionicons: "Icon" }, "./MessageBody": { MessageBody: "MessageBody" },
-        "./theme": { layout: { touchTarget: 44 } }, "./ui": { useUi: () => ({ s: { row: {}, muted: {}, description: {} }, colors: { muted: "#aaa", gold: "#ba8", line: "#333" } }) } });
-      const buffer = live.mergeLiveRunEvents(live.newLiveRun("r1"), [reset(), snapshot(2, "An unfinished partial reply")]);
-      const value = live.liveRunView({ ...run("r1", status), ...flags }, { ...buffer, connectionIssue: !!flags.connectionIssue }, []);
-      const tree = lifecycle.render(() => { const node = LiveRunView({ value }); return node.type(node.props); });
-      const walk = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)];
-      const nodes = walk(tree);
-      assert.ok(nodes.some((node) => node.type === "MessageBody" && node.props.children === "An unfinished partial reply"), "partial text stays readable");
-      assert.ok(nodes.some((node) => node.type === "Text" && node.props.children === expected), "terminal state stays visible beside partial text");
-      assert.ok(!nodes.some((node) => node.type === "ActivityIndicator"), "terminal replies have no active spinner");
-      assert.ok(!nodes.some((node) => node.type === "Text" && ["正在停止", "正在恢复进度", "等待你的决定", "连接恢复后继续显示进度"].includes(node.props.children)));
-      lifecycle.unmount();
-    }
-  });
-}
