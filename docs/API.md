@@ -137,6 +137,8 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
 
 `reconcile_finance_assets(start_date,end_date,opening_assets,closing_assets,approximate=true)` 只读已落账的已知流水，按相同资产范围计算期初加收入减净支出、预计期末及未解释差额。转账单列排除；部分相交的日期区间不猜分摊，累计和明细避免重复，近似余额与记录缺口随回执返回。报告引用程序公式，差额不自动变成消费或收入。
 
+财务助手使用 `publish_finance_report(start_date,end_date,opening_assets?,closing_assets?,approximate=true,filename="财务回顾.md")` 交付账本、预算及资产回顾。同一数据库快照生成事实正文和公式，再复用通用报告的文件、不可变资源、artifact 与手机预览链路；不接受模型自行拼写的数值正文。期初、期末资产可成对省略，不要求用户补表。报告分别列月成本、到期现金与剩余预留，不推断未知消费或历史付款日；重复调用校验并复用原交付回执，不修改财务记录。
+
 `apply_finance_transaction_batch` 可将创建／纠正／删除作为同一事务执行；任一 revision 冲突或校验失败全部回滚。拆分需声明总额守恒，结果包含最终记录与校验信息，重试复用原回执。
 
 `commitments` 每项为 `{key,label,amount,kind:fixed|one_time,every_months?,anchor_month?,due_day?,monthly_cost?,paid_through?,purpose?,separate_from_keys?}`。`amount` 是每次付款金额，周期按 `anchor_month` 和 `every_months` 推进；`monthly_cost` 是月度成本，默认用付款金额除以周期，`paid_through` 是已覆盖的最后月份。`recurring=true` 自该月沿用最近设置；单月配置优先。沿用时只保留固定承诺，不把某月大件继续预留到以后。`coverage_start/coverage_through` 必须同时提供且位于当月，只在用户确知记录覆盖时填写。PUT 是手动编辑的完整配置；模型使用上述 patch 工具，不把省略字段误清空。`income_schedule` 保存 `last_business_day` 或 `day_of_month` 规则，支持工作日和日期例外；仅周一到周五日历不代表法定调休或真实工资到账。

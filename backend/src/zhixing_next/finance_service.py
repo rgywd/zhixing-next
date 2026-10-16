@@ -1018,7 +1018,7 @@ class FinanceService:
         return self._mutate(idempotency_key, request, operation)
 
     def reconcile_assets(
-        self, *, start_date, end_date, opening_assets, closing_assets, approximate=True
+        self, *, start_date, end_date, opening_assets, closing_assets, approximate=True, _db=None
     ):
         from .finance_reconcile import reconcile_assets
 
@@ -1029,6 +1029,7 @@ class FinanceService:
             opening_assets=opening_assets,
             closing_assets=closing_assets,
             approximate=approximate,
+            _db=_db,
         )
 
     def list_transactions(self, *, month=None, limit=50, offset=0):

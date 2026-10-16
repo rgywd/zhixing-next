@@ -285,6 +285,7 @@ class RunControls(AgentMiddleware):
             "view_image",
             "copy_file",
             "publish_report",
+            "publish_finance_report",
         }
         async def checked_handler():
             from .finance_tools import FINANCE_TOOL_NAMES
@@ -518,7 +519,7 @@ async def _run_agent(
     if not direct_agent and not forgetting:
         physical_tools.extend(create_life_tools(settings, run["conversation_id"], source_id))
     if finance_tools:
-        finance_tools.extend(create_finance_service_tools(settings, run["conversation_id"], source_id))
+        finance_tools.extend(create_finance_service_tools(settings, run["conversation_id"], source_id, run=run, emit=emit))
     if not direct_agent and not forgetting:
         physical_tools.extend(tool for tool in finance_tools if tool.name == "reconcile_finance_assets")
     health_tools = create_health_tools(settings, run["conversation_id"], source_id) if (direct_agent and direct_agent["id"] == "health") or any(item["id"] == "health" for item in agents) else []

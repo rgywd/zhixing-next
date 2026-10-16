@@ -1,12 +1,13 @@
 """Read-only reconciliation of asset observations against known ledger flows."""
 
 import calendar
+from contextlib import nullcontext
 from datetime import date
 from decimal import Decimal
 
 
 def reconcile_assets(
-    service, *, start_date, end_date, opening_assets, closing_assets, approximate=True
+    service, *, start_date, end_date, opening_assets, closing_assets, approximate=True, _db=None
 ):
     """Compute a difference without inventing expenses or allocating uncertain dates.
 
@@ -22,7 +23,13 @@ def reconcile_assets(
         raise _error("Asset reconciliation start_date must not follow end_date")
     if not isinstance(approximate, bool):
         raise _error("approximate must be a boolean")
-    opening, closing = Decimal(_money(opening_assets)), Decimal(_money(closing_assets))
+    if (opening_assets is None) != (closing_assets is None):
+        raise _error(
+            "Asset observations must be provided together, or both omitted for a ledger-only report"
+        )
+    has_assets = opening_assets is not None
+    opening = Decimal(_money(opening_assets)) if has_assets else None
+    closing = Decimal(_money(closing_assets)) if has_assets else None
     gaps = []
 
     def gap(code, message, rows=()):
@@ -31,12 +38,18 @@ def reconcile_assets(
             item["transaction_ids"] = [row["id"] for row in rows]
         gaps.append(item)
 
-    if approximate:
+    if not has_assets:
+        gap(
+            "asset_observations_not_provided",
+            "未提供同范围的期初、期末资产观察，本次只回顾已知流水。",
+        )
+    elif approximate:
         gap("approximate_assets", "期初或期末资产为近似值，差额也只是近似核对结果。")
 
     coverage = []
-    with service.store._connection() as db:
-        db.execute("BEGIN")
+    with nullcontext(_db) if _db is not None else service.store._connection() as db:
+        if not db.in_transaction:
+            db.execute("BEGIN")
         # A cumulative entry's period starts at period_start, not its final record date.
         # Read all intersecting entries in one consistent snapshot, without pagination.
         rows = [
@@ -173,21 +186,33 @@ def reconcile_assets(
         else:
             net_expense += effective
 
-    expected = opening + income - net_expense
-    change, difference = closing - opening, expected - closing
-    direction = (
-        "unexplained_net_outflow"
-        if difference > ZERO
-        else "unexplained_net_inflow"
-        if difference < ZERO
-        else "balanced_known_flows"
-    )
+    calculation = None
+    if has_assets:
+        expected = opening + income - net_expense
+        change, difference = closing - opening, expected - closing
+        direction = (
+            "unexplained_net_outflow"
+            if difference > ZERO
+            else "unexplained_net_inflow"
+            if difference < ZERO
+            else "balanced_known_flows"
+        )
+        calculation = {
+            "expected_closing": _fmt(expected),
+            "actual_net_change": _fmt(change),
+            "unexplained_difference": _fmt(difference),
+            "difference_meaning": direction,
+            "formula": f"期初资产 {_fmt(opening)} + 已知收入 {_fmt(income)} - 已知净支出 {_fmt(net_expense)} = 预计期末资产 {_fmt(expected)}；实际资产变化 {_fmt(closing)} - {_fmt(opening)} = {_fmt(change)}；未解释差额 {_fmt(expected)} - {_fmt(closing)} = {_fmt(difference)}。",
+            "interpretation": "正差额表示未解释净流出，负差额表示未解释净流入；均不是自动认定的消费或收入，不会写入账本。",
+        }
     included = [*aggregates, *accepted]
     return {
         "scope": "known_flows_only",
         "read_only": True,
         "period": {"start_date": start_date, "end_date": end_date},
-        "assets": {"opening": _fmt(opening), "closing": _fmt(closing), "approximate": approximate},
+        "assets": {"opening": _fmt(opening), "closing": _fmt(closing), "approximate": approximate}
+        if has_assets
+        else None,
         "flows": {
             "income": _fmt(income),
             "expense": _fmt(net_expense + refunds),
@@ -197,19 +222,7 @@ def reconcile_assets(
             "transfer_excluded_from_asset_change": True,
             "expense_basis": "net_cumulative_expense_plus_known_refunds",
         },
-        "calculation": {
-            "expected_closing": _fmt(expected),
-            "actual_net_change": _fmt(change),
-            "unexplained_difference": _fmt(difference),
-            "difference_meaning": direction,
-            "formula": (
-                f"期初资产 {_fmt(opening)} + 已知收入 {_fmt(income)} "
-                f"- 已知净支出 {_fmt(net_expense)} = 预计期末资产 {_fmt(expected)}；"
-                f"实际资产变化 {_fmt(closing)} - {_fmt(opening)} = {_fmt(change)}；"
-                f"未解释差额 {_fmt(expected)} - {_fmt(closing)} = {_fmt(difference)}。"
-            ),
-            "interpretation": "正差额表示未解释净流出，负差额表示未解释净流入；均不是自动认定的消费或收入，不会写入账本。",
-        },
+        "calculation": calculation,
         "included": {
             "count": len(included),
             "transaction_ids": [row["id"] for row in included],

@@ -56,7 +56,7 @@ def create_report_tool(settings, run, workspace, emit):
         filename: Annotated[str, Field(min_length=1, max_length=120)],
         content: Annotated[str, Field(min_length=1, max_length=MAX_FILE_BYTES)],
     ) -> dict:
-        """Create and deliver a real downloadable .md/.txt/.csv report in this conversation. Supply the complete report content, not a virtual file path. UTF-8 up to 256 KiB. Writes are content-addressed, read back and hash checked; repeated identical publications reuse one immutable resource. This tool does not execute code or validate the accuracy of the report's claims."""
+        """Create and deliver a real downloadable .md/.txt/.csv report in this conversation. Supply the complete report content, not a virtual file path. UTF-8 up to 256 KiB. Writes are content-addressed, read back and hash checked; repeated identical publications reuse one immutable resource. For a ledger/asset financial report, use publish_finance_report when available so facts and formulas come from the service. This generic tool does not execute code or validate the accuracy of prose claims."""
         receipt = await asyncio.to_thread(publish, filename, content)
         await emit("artifact", receipt)
         return receipt

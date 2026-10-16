@@ -47,8 +47,8 @@ IDEMPOTENT_SERVICE_TOOLS = {
 EFFECT_TOOLS.update(IDEMPOTENT_SERVICE_TOOLS)
 READ_TOOLS.update({"get_finance_summary", "list_finance_transactions", "query_health_context", "query_life_events"})
 READ_TOOLS.update({"calculate", "date_info", "browse_personal_memories", "reconcile_finance_assets"})
-IDEMPOTENT_SERVICE_TOOLS.add("publish_report")
-EFFECT_TOOLS.add("publish_report")
+IDEMPOTENT_SERVICE_TOOLS.update({"publish_report", "publish_finance_report"})
+EFFECT_TOOLS.update({"publish_report", "publish_finance_report"})
 LIMIT = 20 * 1024 * 1024
 
 
