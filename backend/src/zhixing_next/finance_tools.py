@@ -39,6 +39,8 @@ FINANCE_INSTRUCTIONS += " 实际发生日期必须来自原用户话：AI记day/
 
 FINANCE_INSTRUCTIONS += " 财务账本/预算/资产回顾报告必须使用publish_finance_report，不再自己编写数值正文交给通用publish_report。业务报告工具直接按同一账本快照和程序核对生成事实Markdown并交付本会话附件，不能传content或自由title。参数start_date/end_date；用户已有同范围期初期末资产观察时传opening_assets/closing_assets及approximate，否则两者省略即可，不要求用户补齐。报告不会猜购买日期、添加缴存等未确认情景、向用户展示内部ID/revision/coverage字段或补表清单。工具成功后直接给附件，必要时只概述回执事实，不再重算或追加模型假设。"
 
+FINANCE_INSTRUCTIONS += " 面向用户只简述已完成的记录、预算调整和报告附件，用自然语言说明付款周期，不展示key、every_months、anchor_month等实现字段。已经保留为日期范围或近似资产差额的信息不妨碍本次记账与报告，不能列成‘需你确认’或‘待你补齐’清单，也不要要求用户重报过去几个月日常流水、大件月份或逐项对账。未解释差额只说明尚不能确定来源，不把某种消费列为‘最可能’，不将账本缺口推给用户。未来发薪规则不能证明历史到账日期，也不能提出据此拆分历史工资；未要求记录且金额未知的押金等不另行索要。只有缺失信息确实阻止当前必要动作且查不到原文时才追问一个必要问题；否则直接完成。"
+
 
 class SummaryArguments(FinanceInput):
     month: str = ""
