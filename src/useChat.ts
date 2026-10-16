@@ -35,6 +35,7 @@ export function useChat({
   focusMessageSeq = null,
   defaultIntent = "queue",
   defaultIntentReady = true,
+  streamEvents = true,
 }: {
   connection: Connection;
   conversation: Conversation;
@@ -44,6 +45,7 @@ export function useChat({
   focusMessageSeq?: number | null;
   defaultIntent?: "queue" | "steer";
   defaultIntentReady?: boolean;
+  streamEvents?: boolean;
 }) {
   const streamScope = `${connection.url}\n${connection.token}\n${conversation.id}`;
   const [runScope, setRunScope] = useState(streamScope);
@@ -276,7 +278,7 @@ export function useChat({
   }, [connection, conversation.id, focusMessageSeq, streamScope, reportSync]);
 
   useEffect(() => {
-    if (!trackedRunId) return;
+    if (!streamEvents || !trackedRunId) return;
     let active = true;
     let buffer = retainedLive.current?.scope === streamScope && retainedLive.current.buffer.runId === trackedRunId
       ? retainedLive.current.buffer : newLiveRun(trackedRunId);
@@ -314,7 +316,7 @@ export function useChat({
       else { controller?.abort(); controller = null; clearTimeout(timer); }
     });
     return () => { active = false; controller?.abort(); clearTimeout(timer); listener.remove(); refreshLive.current = () => undefined; };
-  }, [connection, streamScope, trackedRunId, trackedRunStatus, reportLiveSync]);
+  }, [connection, streamScope, trackedRunId, trackedRunStatus, reportLiveSync, streamEvents]);
 
   async function loadOlder() {
     if (!previous || busy) return;

@@ -7,6 +7,7 @@ import ts from "typescript";
 import { availablePreference } from "../src/providerEditing.ts";
 import * as theme from "../src/theme.ts";
 import { ApiError } from "../src/api.ts";
+import * as replyProcess from "../src/replyProcess.ts";
 
 function load(name, dependencies, globals = {}) {
   const exports = {};
@@ -96,11 +97,15 @@ function chatHarness(state = {}, options = {}) {
     "./ui": { useUi: () => ({ s: {}, colors: theme.darkColors }), ActionLink: "ActionLink", Button: "Button", Empty: "Empty", SheetHeader: "SheetHeader", humanError: (e) => e.message, timeLabel: String, runLabels: { running: "执行中", completed: "已完成", interrupted: "已中断" } },
     "./chatPreferences": { useChatPreferences: () => options.chatPreferences ?? { defaultIntent: "queue", ready: true, error: "", retry() {} } },
     "./ConnectionStatus": { useSyncStatus: () => sync },
+    "./Notice": { useNotice: () => ({ show() {} }) },
+    "expo-clipboard": { setStringAsync: options.copy ?? (async () => {}) },
+    "./replyProcess": replyProcess,
+    "./useReplyProcesses": { useReplyProcesses: () => options.replyRecords ?? {} },
     "./useChat": { useChat: (input) => { hookInputs.push(input); return chat; } },
     "./useQueuedMessages": { useQueuedMessages: (input) => { queueInputs.push(input); return options.queuedMessages ?? { items: [], busyId: null, error: "", async withdraw() {}, async steer() {} }; } },
     "./api": { request: options.request ?? (async (_connection, path, options) => { calls.push({ path, ...options }); return options.body; }) },
   };
-  for (const name of ["MessageBody", "ConversationComposer", "ReasoningPicker", "ModelPicker", "Attachments", "ApprovalCards", "RunReport", "FilesPanel", "SearchPicker", "BottomSheet", "LiveRunView", "QueuedMessages"]) dependencies[`./${name}`] = { [name]: name };
+  for (const name of ["MessageBody", "ConversationComposer", "ReasoningPicker", "ModelPicker", "Attachments", "ApprovalCards", "RunReport", "FilesPanel", "SearchPicker", "BottomSheet", "ReplyContent", "QueuedMessages"]) dependencies[`./${name}`] = { [name]: name };
   const { ChatPanel } = load("ChatPanel", dependencies, options.globals);
   const defaults = { connection: {}, conversation: { id: "finance-chat", agent_id: "finance", model_id: null, reasoning_effort: null }, catalog, assistantName: "财务助手", onRefresh() {}, onConversationChanged() {} };
   return { calls, hookInputs, queueInputs, lifecycle, chat, render: (props = {}) => walk(lifecycle.render(ChatPanel, { ...defaults, ...props })) };
@@ -400,7 +405,7 @@ test("active reply controls live in the settings sheet while live content and ap
   const liveRun = { run: running, content: "正在到达的真实片段", reasoning: "", tools: [] };
   const app = chatHarness({ running, pendingRuns: [running], liveRun, setDetail: (id) => actions.push(["detail", id]), cancel: async (run) => actions.push(["cancel", run.id]) });
   const nodes = app.render({ settingsOpen: true, onSettingsClose: () => actions.push(["close"]) });
-  const sheet = nodes.find((node) => node.type === "BottomSheet");
+  const sheet = nodes.find((node) => node.type === "BottomSheet" && node.props.title === "当前对话");
   assert.equal(sheet.props.visible, true);
   assert.equal(sheet.props.title, "当前对话");
   assert.match(text(sheet), /正在回复 · 0 条等待/);
@@ -408,7 +413,7 @@ test("active reply controls live in the settings sheet while live content and ap
   assert.doesNotMatch(text(main), /正在回复 · 0 条等待|查看运行进度|取消当前运行|接着处理|补充当前回复/);
   assert.equal(nodes.find((node) => node.type === "ConversationComposer").props.hint, undefined);
   const footer = walk(nodes.find((node) => node.type === "FlatList").props.ListFooterComponent);
-  assert.equal(footer.find((node) => node.type === "LiveRunView").props.value, liveRun);
+  assert.equal(footer.some((node) => node.type === "ReplyContent"), false);
   assert.ok(footer.some((node) => node.type === "ApprovalCards" && node.props.conversationId === "finance-chat"));
   walk(sheet).find((node) => node.type === "ActionLink" && node.props.children === "查看运行进度").props.onPress();
   walk(sheet).find((node) => node.type === "Button" && node.props.children === "取消当前运行").props.onPress();
@@ -463,26 +468,21 @@ test("withdrawn unstarted queue messages are labelled without mislabelling rejec
   }
 });
 
-test("committed reply metadata moves before its matching assistant body and never appears twice", () => {
-  const liveRun = { run: { id: "finished-run" }, content: "", reasoning: "保留的思考", tools: [{ id: "tool", name: "search", status: "completed" }], answerCommitted: true };
+test("each persisted reply owns its process and all agents use ReplyContent", () => {
+  const parts = [{ id: "thought", type: "reasoning", text: "保留的思考" }];
   const messages = [
-    { id: "user", role: "user", run_id: "finished-run", content: "测试提问" },
-    { id: "earlier", role: "assistant", run_id: "finished-run", content: "早期回复" },
     { id: "answer", role: "assistant", run_id: "finished-run", content: "已保存的最终正文" },
-    { id: "unrelated", role: "assistant", run_id: "other-run", content: "其他回复" },
+    { id: "other", role: "assistant", run_id: "other-run", content: "其他回复" },
   ];
-  const nodes = chatHarness({ liveRun, messages }).render();
-  const list = nodes.find((node) => node.type === "FlatList");
-  assert.equal(walk(list.props.ListFooterComponent).filter((node) => node.type === "LiveRunView").length, 0);
-  assert.ok(walk(list.props.ListFooterComponent).some((node) => node.type === "ApprovalCards"));
-  const rows = messages.map((item) => walk(list.props.renderItem({ item })));
-  assert.equal(rows.flat().filter((node) => node.type === "LiveRunView").length, 1);
-  const answer = rows[2];
-  const metadata = answer.findIndex((node) => node.type === "LiveRunView");
-  const body = answer.findIndex((node) => node.type === "MessageBody");
-  assert.ok(metadata >= 0 && metadata < body);
-  assert.equal(answer[metadata].props.value, liveRun);
-  assert.equal(text(answer.find((node) => node.type === "MessageBody")), "已保存的最终正文");
+  for (const agentId of [null, "finance", "health"]) {
+    const records = { "finished-run": { buffer: { parts, phase: "completed" }, status: "completed", finalPartId: null, finalProjection: true } };
+    const nodes = chatHarness({ messages }, { replyRecords: records }).render({ conversation: { id: "chat", agent_id: agentId } });
+    const list = nodes.find((node) => node.type === "FlatList");
+    assert.equal(walk(list.props.ListFooterComponent).some((node) => node.type === "ReplyContent"), false);
+    const content = walk(list.props.renderItem({ item: messages[0] })).find((node) => node.type === "ReplyContent");
+    assert.equal(content.props.parts, parts); assert.equal(content.props.finalText, "已保存的最终正文"); assert.equal(content.props.active, false);
+    assert.equal(walk(list.props.renderItem({ item: messages[1] })).find((node) => node.type === "ReplyContent").props.parts.length, 0);
+  }
 });
 
 test("all agents pass shared default intent and keep unread preferences from changing pending retries", () => {
@@ -556,4 +556,76 @@ test("current draft delivery changes explicitly bind the displayed run in the se
     const composer = nodes.find((node) => node.type === "ConversationComposer");
     assert.doesNotMatch(text(composer), /接着处理|补充当前回复/);
   }
+});
+
+test("terminal partial replies retain copying, draft quotation and their own processing record", async () => {
+  for (const status of ["failed", "cancelled", "interrupted"]) {
+    const copied = [], changed = [], opened = [];
+    const run = { id: "partial-run", conversation_id: "finance-chat", kind: "chat", status, phase: "normal", started_at: "2026-10-16", created_at: "2026-10-16" };
+    const parts = [{ id: "thought", type: "reasoning", text: "Private provider thought" }, { id: "before", type: "text", text: "First explanation" },
+      { id: "tool", type: "tool", name: "query_finance", status: "completed" }, { id: "attempt", type: "text", text: "Failed attempt", attempt_status: "failed" }, { id: "last", type: "text", text: "Partial answer" }];
+    const app = chatHarness({ messages: [{ id: "question", role: "user", run_id: run.id, seq: 1, content: "Question" }], runs: [run],
+      updateDraft: async (value) => changed.push(value), setDetail: (id) => opened.push(id) },
+    { replyRecords: { [run.id]: { buffer: { parts, phase: status }, status, finalPartId: null, finalProjection: true } }, copy: async (value) => copied.push(value) });
+    let nodes = app.render(), list = nodes.find((node) => node.type === "FlatList");
+    const row = list.props.data.find((message) => message.role === "assistant"), body = walk(list.props.renderItem({ item: row }));
+    assert.ok(body.some((node) => node.type === "ReplyContent" && node.props.active === false));
+    body.find((node) => node.props?.accessibilityLabel === "复制消息").props.onPress(); await settle();
+    assert.deepEqual(copied, ["First explanation\n\nPartial answer"]);
+    body.find((node) => node.props?.accessibilityLabel === "更多消息操作").props.onPress(); nodes = app.render();
+    let menu = nodes.find((node) => node.type === "BottomSheet" && node.props.title === "消息操作");
+    walk(menu).find((node) => node.type === "ActionLink" && node.props.children === "查看处理记录").props.onPress();
+    assert.deepEqual(opened, [run.id]);
+    body.find((node) => node.props?.accessibilityLabel === "更多消息操作").props.onPress(); menu = app.render().find((node) => node.type === "BottomSheet" && node.props.title === "消息操作");
+    walk(menu).find((node) => node.type === "ActionLink" && node.props.children === "引用到草稿").props.onPress(); await settle();
+    assert.equal(changed.length, 1); assert.match(changed[0].text, /First explanation\n\nPartial answer/);
+    assert.ok(!changed[0].text.includes("Failed attempt")); assert.ok(!changed[0].text.includes("Private provider thought"));
+    assert.equal(changed[0].pending, null);
+  }
+});
+
+test("slow dragging near the bottom keeps user control and latest action explicitly restores following", () => {
+  const scrolls = [], nearBottomRef = { current: true };
+  const app = chatHarness({ nearBottomRef, list: { current: { scrollToEnd: (options) => scrolls.push(options) } } });
+  let nodes = app.render(), list = nodes.find((node) => node.type === "FlatList");
+  const event = (distance) => ({ nativeEvent: { contentOffset: { y: 500 - distance }, contentSize: { height: 1000 }, layoutMeasurement: { height: 500 } } });
+  list.props.onContentSizeChange(); assert.deepEqual(JSON.parse(JSON.stringify(scrolls)), [{ animated: false }]);
+  list.props.onScrollBeginDrag(); list.props.onScroll(event(4)); list.props.onContentSizeChange();
+  assert.equal(nearBottomRef.current, false); assert.equal(scrolls.length, 1, "new content cannot steal a slow drag even within 8dp of the bottom");
+  list.props.onScrollEndDrag(event(25)); list.props.onScroll(event(150)); list.props.onContentSizeChange();
+  assert.equal(scrolls.length, 1); nodes = app.render();
+  nodes.find((node) => node.props?.accessibilityLabel === "回到最新消息").props.onPress();
+  assert.equal(nearBottomRef.current, true); assert.equal(scrolls.at(-1).animated, true);
+  list = app.render().find((node) => node.type === "FlatList"); list.props.onContentSizeChange();
+  assert.equal(scrolls.at(-1).animated, false); assert.equal(scrolls.length, 3);
+  list.props.onScrollBeginDrag(); list.props.onScrollEndDrag(event(2)); assert.equal(nearBottomRef.current, true, "reaching the real bottom also resumes following");
+});
+
+test("shared composer stops only an empty active draft and keeps queue sends and immutable retries", async () => {
+  for (const agentId of [null, "finance", "health"]) {
+    const cancelled = [], running = { id: "active", conversation_id: "chat", status: "running", kind: "chat", started_at: "2026-10-16", cancel_requested: false };
+    const app = chatHarness({ running, runs: [running], cancel: async (value) => cancelled.push(value.id) });
+    const props = { conversation: { id: "chat", agent_id: agentId } };
+    let composer = app.render(props).find((node) => node.type === "ConversationComposer");
+    assert.equal(composer.props.stopping, true); composer.props.onStop(); await settle(); assert.deepEqual(cancelled, ["active"]);
+    app.chat.draft = { text: "Process this next", attachments: [], pending: null }; composer = app.render(props).find((node) => node.type === "ConversationComposer");
+    assert.equal(composer.props.stopping, false); assert.equal(composer.props.canSend, true); composer.props.onSend();
+    assert.equal(app.calls.length, 1); assert.equal(app.chat.intent, "queue"); assert.deepEqual(cancelled, ["active"]);
+    app.chat.draft = { text: "", attachments: [], pending: { id: "immutable", content: "Original message", intent: "queue" } };
+    composer = app.render(props).find((node) => node.type === "ConversationComposer");
+    assert.equal(composer.props.stopping, false); assert.equal(composer.props.pending, true); assert.equal(composer.props.editable, false);
+  }
+});
+
+test("opening a reply process pauses following before its content grows", () => {
+  const scrolls = [], nearBottomRef = { current: true };
+  const message = { id: "answer", role: "assistant", run_id: "finished", content: "Answer", seq: 2 };
+  const app = chatHarness({ messages: [message], nearBottomRef, list: { current: { scrollToEnd: (options) => scrolls.push(options) } } });
+  let nodes = app.render(), list = nodes.find((node) => node.type === "FlatList");
+  const body = walk(list.props.renderItem({ item: message }));
+  body.find((node) => node.type === "View" && typeof node.props.onTouchStart === "function").props.onTouchStart();
+  list.props.onContentSizeChange();
+  assert.equal(nearBottomRef.current, false); assert.equal(scrolls.length, 0);
+  nodes = app.render(); nodes.find((node) => node.props?.accessibilityLabel === "回到最新消息").props.onPress();
+  assert.equal(nearBottomRef.current, true); assert.equal(scrolls.length, 1);
 });
