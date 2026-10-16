@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any, Iterator, Literal
 
 from langchain_core.tools import tool
 
+from .tool_errors import ToolFailure
+
 if TYPE_CHECKING:
     from .config import Settings
 
@@ -232,7 +234,8 @@ class FileAccess:
                         raise PermissionError("The file changed during authorization.")
                 data = file.read(limit + 1)
         if len(data) > limit:
-            raise ValueError(f"File exceeds the {limit}-byte limit.")
+            raise ToolFailure("file_too_large", f"File exceeds the {limit}-byte reading limit.",
+                              "Use read_document with a page/paragraph window for PDF/DOCX, read_saved_resource for an uploaded text resource, or a smaller file.")
         return path, data
 
     def read_text(self, supplied: str) -> dict[str, Any]:
@@ -254,7 +257,8 @@ class FileAccess:
         expected_sha256: str | None = None,
     ) -> dict[str, Any]:
         if len(data) > limit:
-            raise ValueError(f"Content exceeds the {limit}-byte limit.")
+            raise ToolFailure("file_too_large", f"Content exceeds the {limit}-byte writing limit.",
+                              "Write a smaller file or split the requested deliverable into separate files.")
         path, root = self.authorize(supplied, write=True)
         if path == root:
             raise IsADirectoryError("Choose a file within a permitted directory.")
@@ -303,15 +307,27 @@ class FileAccess:
 
     def read_document(self, supplied: str, *, start: int = 1, count: int = 10) -> dict[str, Any]:
         if start < 1 or not 1 <= count <= 20:
-            raise ValueError("start must be at least 1; count must be between 1 and 20.")
+            raise ToolFailure("invalid_document_window", "start must be at least 1; count must be between 1 and 20.",
+                              "Retry with start=1 and count between 1 and 20; continue from the returned next_start.")
         path, data = self.read_bytes(supplied)
         suffix = path.suffix.lower()
         return extract_document(data, suffix, str(path), start=start, count=count)
 
 
 def extract_document(data: bytes, suffix: str, name: str, *, start=1, count=10):
+    from pypdf.errors import PdfReadError
+
+    try:
+        return _extract_document(data, suffix, name, start=start, count=count)
+    except (zipfile.BadZipFile, KeyError, ET.ParseError, PdfReadError, UnicodeError) as exc:
+        raise ToolFailure("document_parse_failed", "This file could not be parsed as a valid PDF/DOCX document.",
+                          "Check the file type; use read_text_file for text, or obtain an intact, unencrypted PDF/DOCX copy. Scanned images require visual reading rather than text extraction.") from exc
+
+
+def _extract_document(data: bytes, suffix: str, name: str, *, start=1, count=10):
     if start < 1 or not 1 <= count <= 20:
-        raise ValueError("Invalid document window")
+        raise ToolFailure("invalid_document_window", "start must be at least 1; count must be between 1 and 20.",
+                          "Retry with start=1 and count between 1 and 20; continue from the returned next_start.")
     if suffix == ".docx":
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             entries = archive.infolist()
@@ -319,17 +335,21 @@ def extract_document(data: bytes, suffix: str, name: str, *, start=1, count=10):
                 len(entries) > 1000
                 or sum(entry.file_size for entry in entries) > 20 * 1024 * 1024
             ):
-                raise ValueError("DOCX exceeds archive entry or expanded-size limits.")
+                raise ToolFailure("document_limit_exceeded", "DOCX exceeds archive entry or expanded-size limits.",
+                                  "Use a smaller document or export the needed content to UTF-8 text.")
             document = archive.getinfo("word/document.xml")
             if document.file_size > 5 * 1024 * 1024 or document.flag_bits & 1:
-                raise ValueError("DOCX body is too large or encrypted.")
+                raise ToolFailure("document_unreadable", "DOCX body is too large or encrypted.",
+                                  "Use a smaller, unencrypted DOCX or UTF-8 text copy.")
             with archive.open(document) as member:
                 body = member.read(5 * 1024 * 1024 + 1)
             if len(body) > 5 * 1024 * 1024:
-                raise ValueError("DOCX body exceeds the expanded-size limit.")
+                raise ToolFailure("document_limit_exceeded", "DOCX body exceeds the expanded-size limit.",
+                                  "Use a smaller document or export the needed content to UTF-8 text.")
         xml = body.decode("utf-8-sig")
         if "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper():
-            raise ValueError("XML declarations containing entities are not supported.")
+            raise ToolFailure("document_xml_unsupported", "XML declarations containing entities are not supported.",
+                              "Use a plain DOCX export or a UTF-8 text copy without embedded entities.")
         root = ET.fromstring(xml)
         namespace = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
         # Preserve paragraph/table cell order without interpreting embedded objects.
@@ -357,21 +377,23 @@ def extract_document(data: bytes, suffix: str, name: str, *, start=1, count=10):
         ):
             reader = PdfReader(io.BytesIO(data), strict=True)
             if reader.is_encrypted:
-                raise ValueError("Encrypted PDFs are not supported.")
+                raise ToolFailure("document_encrypted", "Encrypted PDFs are not supported.",
+                                  "Use an unencrypted copy or an exported text version. Do not provide a document password to this reader.")
             total = len(reader.pages)
             if total > 2000:
-                raise ValueError("PDF exceeds the 2000-page limit.")
+                raise ToolFailure("document_limit_exceeded", "PDF exceeds the 2000-page limit.",
+                                  "Use a smaller PDF containing the needed pages.")
             unit = "page"
             selected = []
             for page in reader.pages[start - 1 : start - 1 + count]:
                 stream = page.get_contents()
                 if stream is not None and len(stream.get_data()) > 2 * 1024 * 1024:
-                    raise ValueError("PDF page content exceeds the extraction limit.")
+                    raise ToolFailure("document_limit_exceeded", "PDF page content exceeds the extraction limit.",
+                                      "Use a smaller PDF or an exported text version of the needed pages.")
                 selected.append(page.extract_text() or "")
     else:
-        raise ValueError(
-            "Only PDF and DOCX text extraction is supported; use read_text_file for UTF-8 files."
-        )
+        raise ToolFailure("document_format_unsupported", "Only PDF and DOCX text extraction is supported.",
+                          "Use read_text_file for UTF-8 text/Markdown/CSV/JSON, or view_image when available for images.")
     remaining = 20000
     items = []
     for index, text in enumerate(selected, start):

@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { runInNewContext } from "node:vm";
 import * as jsxRuntime from "react/jsx-runtime";
 import ts from "typescript";
-import { checkGitHubUpdate, compareVersions, GITHUB_LATEST_RELEASE_API, GITHUB_RELEASES_URL, isReleaseLink, readReleaseResponse } from "../src/appUpdates.ts";
+import { checkGitHubUpdate, compareVersions, createAppUpdateChecker, GITHUB_LATEST_RELEASE_API, GITHUB_RELEASES_URL, GITHUB_UPDATE_MANIFEST, isReleaseLink, readReleaseResponse, UPDATE_API_TIMEOUT_MS, UPDATE_CACHE_KEY, UPDATE_CACHE_TTL_MS, UPDATE_MANIFEST_TIMEOUT_MS } from "../src/appUpdates.ts";
 
 const release = (version = "0.3.0", extras = {}) => ({ tag_name: `v${version}`, draft: false, prerelease: false,
   name: `知行 Next ${version}`, body: "修复与改进", html_url: `${GITHUB_RELEASES_URL}/tag/v${version}`,
@@ -51,43 +51,182 @@ test("checking calls only the public latest release endpoint without service cre
   assert.equal(calls[0][1].credentials, "omit"); assert.ok(calls[0][1].signal instanceof AbortSignal);
 });
 
-test("404 means no formal release; rate limits, HTTP, JSON and network errors remain errors", async () => {
+test("API rate limits, network errors and malformed payloads automatically use the official manifest", async () => {
+  for (const failure of [403, 429, 500, 404, "network", "invalid-json", "invalid-release"]) {
+    const calls = [];
+    const result = await checkGitHubUpdate("0.2.2", undefined, async (url, options) => {
+      calls.push([url, options]);
+      if (url === GITHUB_UPDATE_MANIFEST) return new Response(JSON.stringify(release()));
+      if (typeof failure === "number") return new Response("", { status: failure });
+      if (failure === "network") throw new TypeError("offline");
+      return new Response(failure === "invalid-json" ? "nope" : JSON.stringify(release("0.3.0", { html_url: "https://evil.example" })));
+    });
+    assert.equal(result.kind, "available"); assert.equal(calls.length, 2);
+    assert.equal(calls[1][0], GITHUB_UPDATE_MANIFEST); assert.equal(calls[1][1].headers.Accept, "application/json");
+    assert.equal(calls[1][1].credentials, "omit"); assert.equal("Authorization" in calls[1][1].headers, false);
+  }
+});
+
+test("no release needs both official sources to agree; total failures do not claim current", async () => {
   assert.deepEqual(await checkGitHubUpdate("0.2.2", undefined, async () => new Response("", { status: 404 })), { kind: "unpublished" });
   for (const code of [403, 429]) await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => new Response("", { status: code })), /限制访问/);
   await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => new Response("", { status: 500 })), /500/);
   await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => new Response("invalid-json")), /未能获取/);
   await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => { throw new TypeError("network failed"); }), /网络/);
+  await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async (url) => new Response("", { status: url === GITHUB_LATEST_RELEASE_API ? 403 : 404 })), /限制访问/);
 });
 
-test("aborting checks cancels the public request and ignores a late response", async () => {
+test("the fallback applies the same official release and APK validation", async () => {
+  for (const extras of [{ html_url: "https://evil.example/releases" }, { assets: [] }, { assets: [{ ...release().assets[0], browser_download_url: "https://evil.example/app.apk" }] }]) {
+    const fetcher = async (url) => url === GITHUB_LATEST_RELEASE_API ? new Response("", { status: 429 }) : new Response(JSON.stringify(release("0.3.0", extras)));
+    if (extras.html_url) await assert.rejects(checkGitHubUpdate("0.2.2", undefined, fetcher));
+    else { const result = await checkGitHubUpdate("0.2.2", undefined, fetcher); assert.equal(result.kind, "pending"); assert.equal(result.release.apkUrl, null); }
+  }
+});
+
+test("aborting checks cancels requests, skips fallback and ignores late responses", async () => {
   const controller = new AbortController(); controller.abort(); let calls = 0;
   await assert.rejects(checkGitHubUpdate("0.2.2", controller.signal, async () => { calls++; }), { name: "AbortError" }); assert.equal(calls, 0);
   const active = new AbortController(), response = deferred(); let requestSignal;
-  const checking = checkGitHubUpdate("0.2.2", active.signal, async (_url, options) => { requestSignal = options.signal; return response.promise; });
-  active.abort(); assert.equal(requestSignal.aborted, true); response.resolve(new Response(JSON.stringify(release())));
-  await assert.rejects(checking, { name: "AbortError" });
+  const checking = checkGitHubUpdate("0.2.2", active.signal, async (_url, options) => { calls++; requestSignal = options.signal; return response.promise; });
+  active.abort(); assert.equal(requestSignal.aborted, true);
+  await assert.rejects(checking, { name: "AbortError" }); assert.equal(calls, 1);
+  response.resolve(new Response(JSON.stringify(release())));
 });
 
-test("a 15 second timeout aborts the request and never accepts a late response as current", async () => {
-  const exports = {}; let expire, cleared = false, signal;
+function timedUpdates() {
+  const exports = {}, timers = [];
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/appUpdates.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText,
-    { exports, URL, AbortController, Error, setTimeout(callback, duration) { assert.equal(duration, 15000); expire = callback; return 1; }, clearTimeout() { cleared = true; } });
-  const response = deferred();
-  const checking = exports.checkGitHubUpdate("0.2.2", undefined, async (_url, options) => { signal = options.signal; return response.promise; });
-  expire(); assert.equal(signal.aborted, true);
-  await assert.rejects(checking, /超时/); assert.equal(cleared, true);
-  response.resolve(new Response(JSON.stringify(release("0.2.2"))));
+    { exports, URL, AbortController, Error, setTimeout(callback, duration) { const timer = { callback, duration, cleared: false }; timers.push(timer); return timer; }, clearTimeout(timer) { timer.cleared = true; } });
+  return { exports, timers };
+}
+const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+
+test("API timeout leaves a separate full deadline for a successful manifest", async () => {
+  const { exports, timers } = timedUpdates(), old = deferred(), calls = [];
+  const checking = exports.checkGitHubUpdate("0.2.2", undefined, async (url, options) => {
+    calls.push({ url, signal: options.signal });
+    return url === GITHUB_LATEST_RELEASE_API ? old.promise : new Response(JSON.stringify(release()));
+  });
+  assert.equal(timers[0].duration, UPDATE_API_TIMEOUT_MS); timers[0].callback(); await settle();
+  assert.equal(calls[0].signal.aborted, true); assert.equal(timers[1].duration, UPDATE_MANIFEST_TIMEOUT_MS);
+  assert.equal((await checking).kind, "available"); assert.ok(timers.every((timer) => timer.cleared));
+  old.resolve(new Response(JSON.stringify(release("0.2.2"))));
 });
 
-test("a timeout while JSON is pending rejects immediately even when body parsing ignores abort", async () => {
-  const exports = {}; let expire, cleared = false, signal;
-  runInNewContext(ts.transpileModule(readFileSync(new URL("../src/appUpdates.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText,
-    { exports, URL, AbortController, Error, setTimeout(callback, duration) { assert.equal(duration, 15000); expire = callback; return 1; }, clearTimeout() { cleared = true; } });
-  const payload = deferred(), parsing = deferred();
-  const checking = exports.checkGitHubUpdate("0.2.2", undefined, async (_url, options) => { signal = options.signal; return { ok: true, status: 200, json() { parsing.resolve(); return payload.promise; } }; });
-  await parsing.promise; expire(); assert.equal(signal.aborted, true);
-  await assert.rejects(checking, /超时/); assert.equal(cleared, true);
-  payload.resolve(release("0.2.2"));
+test("body parsing timeouts advance to fallback and reject after both independent deadlines", async () => {
+  const { exports, timers } = timedUpdates(), bodies = [deferred(), deferred()], calls = [];
+  const checking = exports.checkGitHubUpdate("0.2.2", undefined, async (url, options) => {
+    const index = calls.length; calls.push({ url, signal: options.signal });
+    return { ok: true, status: 200, json: () => bodies[index].promise };
+  });
+  await settle(); timers[0].callback(); await settle(); assert.equal(calls.length, 2);
+  timers[1].callback(); await assert.rejects(checking, /超时/);
+  assert.ok(calls.every((call) => call.signal.aborted)); assert.ok(timers.every((timer) => timer.cleared));
+  bodies.forEach((body) => body.resolve(release("0.2.2")));
+});
+
+function updateStore(raw = null) {
+  const entries = new Map(raw === null ? [] : [[UPDATE_CACHE_KEY, raw]]);
+  return { entries, reads: 0, writes: 0, async getItem(key) { this.reads++; return entries.get(key) ?? null; }, async setItem(key, value) { this.writes++; entries.set(key, value); } };
+}
+const timeStart = 1_800_000_000_000;
+
+test("successful checks persist only verified bounded public metadata and survive a restart offline", async () => {
+  let now = timeStart, calls = 0; const store = updateStore();
+  const first = createAppUpdateChecker(store, async () => { calls++; return new Response(JSON.stringify(release("0.3.0", { ignored_secret: "never-cache-this" }))); }, () => now);
+  const live = await first.check("0.2.2"); assert.equal(live.source, "network"); assert.equal(live.cacheSaved, true);
+  assert.equal(store.writes, 1); assert.doesNotMatch(store.entries.get(UPDATE_CACHE_KEY), /never-cache-this/);
+  now += UPDATE_CACHE_TTL_MS + 1;
+  const restarted = createAppUpdateChecker(store, async () => { calls++; throw new TypeError("offline"); }, () => now);
+  const saved = await restarted.check("0.2.2"); assert.equal(saved.source, "cache"); assert.equal(saved.offline, true);
+  assert.equal(saved.verifiedAt, timeStart); assert.equal(saved.result.release.apkUrl, release().assets[0].browser_download_url); assert.equal(calls, 3);
+  const upgraded = await restarted.check("0.3.0"); assert.equal(upgraded.result.kind, "current"); assert.equal(upgraded.source, "cache");
+});
+
+test("recent cache avoids repeated REST quota use; forced checks and expired TTL revalidate", async () => {
+  let now = timeStart, calls = 0, version = "0.3.0"; const store = updateStore();
+  const fetcher = async () => { calls++; return new Response(JSON.stringify(release(version))); };
+  const checker = createAppUpdateChecker(store, fetcher, () => now);
+  await checker.check("0.2.2"); now += 5000;
+  const recent = await checker.check("0.2.2"); assert.equal(recent.source, "cache"); assert.equal(recent.offline, false); assert.equal(calls, 1);
+  const restarted = createAppUpdateChecker(store, fetcher, () => now); await restarted.check("0.2.2"); assert.equal(calls, 1);
+  version = "0.4.0"; const forced = await checker.check("0.2.2", undefined, true); assert.equal(forced.result.release.version, "0.4.0"); assert.equal(calls, 2);
+  now += UPDATE_CACHE_TTL_MS + 1; await checker.check("0.2.2"); assert.equal(calls, 3);
+});
+
+test("API cooldown survives restart and forced checks still fetch the official manifest", async () => {
+  let now = timeStart; const calls = [], store = updateStore();
+  const fetcher = async (url) => { calls.push(url); return url === GITHUB_LATEST_RELEASE_API ? new Response("", { status: 429, headers: { "x-ratelimit-reset": String((timeStart + 3_600_000) / 1000) } }) : new Response(JSON.stringify(release())); };
+  const first = createAppUpdateChecker(store, fetcher, () => now); assert.equal((await first.check("0.2.2")).source, "network");
+  const restarted = createAppUpdateChecker(store, fetcher, () => now); await restarted.check("0.2.2", undefined, true);
+  assert.deepEqual(calls, [GITHUB_LATEST_RELEASE_API, GITHUB_UPDATE_MANIFEST, GITHUB_UPDATE_MANIFEST]);
+  now += 3_600_001; await restarted.check("0.2.2", undefined, true); assert.equal(calls[3], GITHUB_LATEST_RELEASE_API);
+});
+
+test("first-install rate limits can recover after restart without a previously cached release", async () => {
+  const store = updateStore(); let online = false; const calls = [];
+  const fetcher = async (url) => { calls.push(url); if (url === GITHUB_LATEST_RELEASE_API) return new Response("", { status: 403 }); if (!online) throw new Error("offline"); return new Response(JSON.stringify(release())); };
+  await assert.rejects(createAppUpdateChecker(store, fetcher, () => timeStart).check("0.2.2"));
+  online = true; const checked = await createAppUpdateChecker(store, fetcher, () => timeStart + 1).check("0.2.2");
+  assert.equal(checked.result.kind, "available"); assert.deepEqual(calls, [GITHUB_LATEST_RELEASE_API, GITHUB_UPDATE_MANIFEST, GITHUB_UPDATE_MANIFEST]);
+});
+
+test("damaged, unsafe or future caches are ignored and valid network metadata replaces them", async () => {
+  const record = (extras = {}) => JSON.stringify({ schema: 1, apiRetryAt: 0, verifiedAt: timeStart - 100, release: release(), ...extras });
+  for (const raw of ["{", "[]", record({ schema: 2 }), record({ verifiedAt: timeStart + 100000 }), record({ verifiedAt: "yesterday" }), record({ release: release("0.3.0", { html_url: "https://evil.example" }) }), record({ release: release("0.3.0", { assets: [] }) })]) {
+    let calls = 0;
+    const checker = createAppUpdateChecker(updateStore(raw), async () => { calls++; return new Response(JSON.stringify(release("0.4.0"))); }, () => timeStart);
+    const checked = await checker.check("0.2.2"); assert.equal(checked.source, "network"); assert.equal(checked.result.release.version, "0.4.0"); assert.equal(calls, 1);
+  }
+});
+
+test("invalid network metadata never overwrites the last verified APK cache", async () => {
+  const store = updateStore(); let valid = true;
+  const checker = createAppUpdateChecker(store, async () => new Response(JSON.stringify(valid ? release() : release("0.4.0", { html_url: "https://evil.example" }))), () => timeStart);
+  await checker.check("0.2.2"); const original = JSON.parse(store.entries.get(UPDATE_CACHE_KEY)); valid = false;
+  const saved = await checker.check("0.2.2", undefined, true); assert.equal(saved.source, "cache"); assert.equal(saved.offline, true); assert.equal(saved.result.release.version, "0.3.0");
+  assert.deepEqual(JSON.parse(store.entries.get(UPDATE_CACHE_KEY)).release, original.release);
+});
+
+test("duplicate incomplete assets cannot pollute an otherwise valid cached download", async () => {
+  const store = updateStore(), payload = release(); payload.assets.unshift({ ...payload.assets[0], size: 0 });
+  const checker = createAppUpdateChecker(store, async () => new Response(JSON.stringify(payload)), () => timeStart);
+  await checker.check("0.2.2"); const cached = await checker.check("0.2.2");
+  assert.equal(cached.result.kind, "available"); assert.equal(cached.source, "cache");
+  assert.equal(JSON.parse(store.entries.get(UPDATE_CACHE_KEY)).release.assets[0].size, 42);
+});
+
+test("cache storage failures keep online updates usable", async () => {
+  const store = { async getItem() { throw new Error("read failed"); }, async setItem() { throw new Error("write failed"); } };
+  const checker = createAppUpdateChecker(store, async () => new Response(JSON.stringify(release())), () => timeStart);
+  const checked = await checker.check("0.2.2");
+  assert.equal(checked.result.kind, "available"); assert.equal(checked.cacheSaved, false);
+  assert.equal((await checker.check("0.2.2")).cacheSaved, false);
+});
+
+test("concurrent checks share requests and cancelling one reader does not cancel the other", async () => {
+  const response = deferred(), store = updateStore(); let calls = 0, requestSignal;
+  const checker = createAppUpdateChecker(store, async (_url, options) => { calls++; requestSignal = options.signal; return response.promise; }, () => timeStart);
+  const first = new AbortController(), second = new AbortController();
+  const one = checker.check("0.2.2", first.signal), two = checker.check("0.2.2", second.signal);
+  await settle(); first.abort(); await assert.rejects(one, { name: "AbortError" }); assert.equal(requestSignal.aborted, false); assert.equal(calls, 1);
+  response.resolve(new Response(JSON.stringify(release()))); assert.equal((await two).result.kind, "available"); assert.equal(store.writes, 1);
+});
+
+test("cancelling all readers discards late checks and a new check proceeds independently", async () => {
+  const old = deferred(), controller = new AbortController(), store = updateStore(); let count = 0;
+  const checker = createAppUpdateChecker(store, async () => ++count === 1 ? old.promise : new Response(JSON.stringify(release("0.4.0"))), () => timeStart);
+  const one = checker.check("0.2.2", controller.signal); await settle(); controller.abort(); await assert.rejects(one, { name: "AbortError" });
+  const next = await checker.check("0.2.2"); old.resolve(new Response(JSON.stringify(release("0.3.0")))); await settle();
+  assert.equal(next.result.release.version, "0.4.0"); assert.equal(JSON.parse(store.entries.get(UPDATE_CACHE_KEY)).release.tag_name, "v0.4.0"); assert.equal(store.writes, 1);
+});
+
+test("cancelling during cache loading makes no network request or stale UI update", async () => {
+  const loading = deferred(), controller = new AbortController(); let calls = 0;
+  const checker = createAppUpdateChecker({ getItem: () => loading.promise, async setItem() { assert.fail("cancelled check must not save"); } }, async () => { calls++; return new Response(JSON.stringify(release())); }, () => timeStart);
+  const checking = checker.check("0.2.2", controller.signal); controller.abort(); await assert.rejects(checking, { name: "AbortError" });
+  loading.resolve(null); await settle(); assert.equal(calls, 0);
 });
 
 function hookHarness({ read, open = async () => {} } = {}) {
@@ -99,8 +238,8 @@ function hookHarness({ read, open = async () => {} } = {}) {
     useEffect(effect, deps) { const i = cursor++; if (!slots[i]) { slots[i] = { deps }; effects.push(() => { slots[i].cleanup = effect(); }); } },
   };
   const exports = {};
-  const dependencies = { react, "react-native": { Linking: { openURL: async (url) => { opened.push(url); await open(url); } } },
-    "./appUpdates": { isReleaseLink, checkGitHubUpdate: async (version, signal) => { calls.push({ version, signal }); return read ? read(version, signal) : readReleaseResponse(release(), version); } } };
+  const dependencies = { react, "@react-native-async-storage/async-storage": { default: {} }, "react-native": { Linking: { openURL: async (url) => { opened.push(url); await open(url); } } },
+    "./appUpdates": { isReleaseLink, createAppUpdateChecker: () => ({ check: async (version, signal, force) => { calls.push({ version, signal, force }); const result = read ? await read(version, signal) : readReleaseResponse(release(), version); return { result, verifiedAt: timeStart, source: "network", offline: false, cacheSaved: true }; } }) } };
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/useAppUpdate.ts", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText,
     { exports, AbortController, Error, require: (name) => { assert.ok(name in dependencies, name); return dependencies[name]; } });
   return { calls, opened, writes: () => writes, render() { cursor = 0; effects = []; const value = exports.useAppUpdate("0.2.2"); effects.forEach((effect) => effect()); return value; }, unmount() { slots.forEach((slot) => slot?.cleanup?.()); } };
@@ -144,7 +283,8 @@ test("a browser failure after the sheet closes cannot leak into the next check",
 
 const walk = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)];
 function updateScreen(state, os = "android") {
-  const calls = [], exports = {}, updater = { visible: true, state, opening: false, linkError: "", check() { calls.push("check"); }, close() { calls.push("close"); }, openLink(url) { calls.push(url); } };
+  if (state.status === "done") state = { verifiedAt: timeStart, source: "network", offline: false, cacheSaved: true, ...state };
+  const calls = [], exports = {}, updater = { visible: true, state, opening: false, linkError: "", check(force) { calls.push(force ? "force-check" : "check"); }, close() { calls.push("close"); }, openLink(url) { calls.push(url); } };
   const dependencies = { "react/jsx-runtime": jsxRuntime, "react-native": { ActivityIndicator: "ActivityIndicator", Platform: { OS: os }, ScrollView: "ScrollView", Text: "Text", View: "View" },
     "../package.json": { version: "0.2.2" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, "./appUpdates": { GITHUB_RELEASES_URL }, "./useAppUpdate": { useAppUpdate: () => updater },
     "./ui": { useUi: () => ({ s: {}, colors: {} }), ...Object.fromEntries(["ActionRow", "Button", "SettingsGroup"].map((key) => [key, key])) } };
@@ -162,9 +302,23 @@ test("settings results provide only relevant update and retry actions", () => {
   assert.equal(available.calls[0], release().assets[0].browser_download_url);
   const ios = updateScreen({ status: "done", result: readReleaseResponse(release(), "0.2.2") }, "ios");
   assert.equal(ios.nodes.some((node) => node.type === "Button" && node.props.children === "下载 Android 安装包"), false);
+  const current = updateScreen({ status: "done", result: readReleaseResponse(release("0.2.2"), "0.2.2") });
+  assert.ok(current.nodes.find((node) => node.type === "Button" && node.props.children === "下载 Android 安装包"));
+  current.nodes.find((node) => node.type === "Button" && node.props.children === "重新检查").props.onPress(); assert.equal(current.calls[0], "force-check");
   for (const state of [{ status: "error", error: "断网" }, { status: "done", result: { kind: "unpublished" } }, { status: "done", result: readReleaseResponse(release("0.3.0", { assets: [] }), "0.2.2") }]) {
     const page = updateScreen(state); assert.ok(page.nodes.find((node) => node.type === "Button" && node.props.children === "重新检查"));
     assert.equal(page.nodes.some((node) => node.type === "Button" && node.props.children === "下载 Android 安装包"), false);
+  }
+});
+
+test("cached results expose the verified APK and timestamp without claiming to be live latest", () => {
+  for (const offline of [false, true]) {
+    const page = updateScreen({ status: "done", source: "cache", verifiedAt: timeStart, offline, result: readReleaseResponse(release("0.2.2"), "0.2.2") });
+    assert.equal(page.nodes.find((node) => node.type === "BottomSheet").props.title, "已保存版本 0.2.2");
+    const text = page.nodes.filter((node) => node.type === "Text").map((node) => JSON.stringify(node.props.children)).join(" ");
+    assert.match(text, /核验时间/); assert.match(text, /本机缓存/); assert.doesNotMatch(text, /当前版本无需更新/);
+    if (offline) assert.match(text, /可能已有新版本/);
+    assert.ok(page.nodes.find((node) => node.type === "Button" && node.props.children === "下载 Android 安装包"));
   }
 });
 

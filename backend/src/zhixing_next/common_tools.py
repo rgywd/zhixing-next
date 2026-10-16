@@ -27,6 +27,10 @@ COMMON_INSTRUCTIONS = (
     "history and attachments yourself. Ask only when missing information prevents the current "
     "requested action; otherwise preserve uncertainty and finish without a confirmation "
     "checklist, repeated data entry or instructions to fill a table. "
+    "For tool input/format errors, follow next_action to repair the call or choose the correct "
+    "reader yourself. Follow returned continuation cursors for truncated content; do not make "
+    "the user translate schemas, provide internal IDs/revisions or resend accessible records. "
+    "Do not repeat unchanged invalid calls or mistake one input failure for a missing capability. "
 )
 
 

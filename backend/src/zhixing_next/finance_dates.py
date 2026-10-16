@@ -5,8 +5,10 @@ actual event date before narrowing history to a day/month. Unsupported wording
 stays a range, without asking the user to fill a date field.
 """
 
+import json
 import re
 from datetime import date, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
 
 from .store import StoreError
@@ -28,11 +30,15 @@ _SUBJECTS = (
 )
 
 
-def _fail(message):
+def _fail(message, suggested_fields=None):
     raise StoreError(
         "unverified_finance_date",
         message
-        + " Keep the user's known historical period as date_precision=range; do not invent a day or ask them to fill a form.",
+        + " Keep the user's known historical period as date_precision=range; do not invent a day or ask them to fill a form."
+        + (
+            " Retry with suggested_fields=" + json.dumps(suggested_fields, ensure_ascii=False)
+            if suggested_fields else ""
+        ),
         422,
     )
 
@@ -123,6 +129,41 @@ def _business_date(created_at):
         _fail("The original user message has no usable business timestamp.")
 
 
+def _event_clause(clause, fields):
+    """A bounded date check also accepts ordinary purchases outside its verb list.
+
+    A declared amount in an actual dated statement can bind a taxi/subscription/
+    other expense without requiring users to choose a particular transaction verb.
+    Balance, coverage, schedule and negation checks still apply to the full clause.
+    """
+    if _EVENT.search(clause):
+        return True
+    try:
+        amount = Decimal(str(fields.get("amount", "")))
+    except InvalidOperation:
+        return False
+    return any(
+        Decimal(match[1]) == amount
+        and not re.match(r"\s*(?:年|月|日|号|笔|次|个|%)", clause[match.end():])
+        for match in re.finditer(r"(?<![\d.])(\d+(?:\.\d{1,2})?)(?![\d.])", clause)
+    )
+
+
+def _range_suggestion(current, text, reference):
+    if current and current.get("date_precision") == "range":
+        return {**{key: current[key] for key in ("date_precision", "date_start", "date_end")},
+                "occurred_on": None}
+    # Observation anchors can bound a retrospective period, but never establish
+    # an individual payment date. Only an explicitly stated span gets a fallback.
+    dates = _dates(text, reference)
+    if re.search(r"到现在|至今|到今天|截至今天|截止今天", text):
+        dates.add(reference)
+    if len(dates) > 1 and re.search(r"到|至|期间|以来", text):
+        return {"date_precision": "range", "date_start": min(dates).isoformat(),
+                "date_end": max(dates).isoformat(), "occurred_on": None}
+    return None
+
+
 def verify_date_evidence(
     store,
     *,
@@ -158,22 +199,28 @@ def verify_date_evidence(
     single_day = precision == "day" or (precision == "range" and begin == end)
     if not single_day and precision != "month":
         return None
-    if not isinstance(evidence, str) or not evidence.strip() or len(evidence) > 240:
-        _fail(
-            "Exact day/month attribution needs date_evidence: a short verbatim quote describing when this actual transaction happened."
-        )
-    quote = evidence.strip()
     message_id = evidence_source_id or source_id
     with store._connection() as db:
         row = db.execute(
-            "SELECT id,role,content,created_at,conversation_id FROM messages WHERE id=?",
+            "SELECT id,role,status,content,created_at,conversation_id FROM messages WHERE id=?",
             (message_id,),
         ).fetchone()
-    if row is None or row["role"] != "user" or quote not in row["content"]:
+    if row is None or row["role"] != "user" or row["status"] not in {"accepted", "applied"}:
         _fail(
-            "date_evidence must occur verbatim in the original user message; an assistant report, invented quote or schedule is not evidence."
+            "Date attribution needs the real accepted user message, not an assistant report or an invented source ID."
         )
     reference = _business_date(row["created_at"])
+    suggestion = _range_suggestion(current, row["content"], reference)
+
+    def fail(message):
+        _fail(message, suggestion)
+
+    # Source IDs are bound by the runtime. Quotes are optional hints, not a
+    # second form the model/user must fill. A paraphrased hint can safely fall
+    # back to the same complete original message and its timestamp.
+    quote = evidence.strip() if isinstance(evidence, str) else ""
+    if not quote or quote not in row["content"]:
+        quote = row["content"]
     # Known subjects are a conservative wrong-message guard. They do not claim
     # full semantic verification of arbitrary categories or languages.
     subject = re.sub(
@@ -184,7 +231,7 @@ def verify_date_evidence(
         if any(re.sub(r"\s", "", alias).casefold() in subject for alias in aliases) and not any(
             re.sub(r"\s", "", alias).casefold() in source_text for alias in aliases
         ):
-            _fail("This quoted user message concerns a different transaction subject.")
+            fail("This quoted user message concerns a different transaction subject.")
     # Validate both the quoted words and their original complete clause, so a
     # quote cannot crop away a preceding "not", "planned" or balance context.
     spans = []
@@ -197,52 +244,53 @@ def verify_date_evidence(
         for index, aliases in enumerate(_SUBJECTS)
         if any(re.sub(r"\s", "", alias).casefold() in subject for alias in aliases)
     }
-    source_subjects = {
-        index
-        for index, aliases in enumerate(_SUBJECTS)
-        if any(re.sub(r"\s", "", alias).casefold() in source_text for alias in aliases)
-    }
     clauses = []
+    previous_subjects = set()
     for match in re.finditer(r"[^，,。；;\n]+", row["content"]):
         context = match.group()
-        if _NON_EVENT.search(context):
-            continue
         context_subjects = {
             index
             for index, aliases in enumerate(_SUBJECTS)
             if any(alias.casefold() in context.casefold() for alias in aliases)
         }
+        prior_subjects = previous_subjects
+        previous_subjects = context_subjects
+        if _NON_EVENT.search(context):
+            continue
         if target_subjects and context_subjects and not target_subjects & context_subjects:
             continue
-        if target_subjects and not context_subjects and len(source_subjects) > 1:
-            continue
+        if target_subjects and not context_subjects:
+            # A date in an unrelated lunch clause must not date the phone
+            # mentioned later. Only an explicit same-cost reference may inherit
+            # the immediately preceding subject ("房租…，这次四月九交的").
+            if not (target_subjects & prior_subjects and re.search(r"这次|那次|当时|那天|当天|这笔|那笔", context)):
+                continue
         for start, stop in spans:
             if start < match.end() and stop > match.start():
                 part = row["content"][max(start, match.start()) : min(stop, match.end())]
-                if _EVENT.search(part) and not _NON_EVENT.search(part):
+                if _event_clause(part, effective) and not _NON_EVENT.search(part):
                     clauses.append(part)
     supported = set()
     for clause in clauses:
         supported.update(_dates(clause, reference))
     if single_day:
         try:
-            target = date.fromisoformat(end or begin or "")
+            target = (next(iter(supported)) if not (end or begin) and len(supported) == 1
+                      else date.fromisoformat(end or begin or ""))
         except ValueError:
-            _fail("An exact day needs a consistent YYYY-MM-DD date.")
+            fail("An exact day needs a consistent YYYY-MM-DD date.")
         if target not in supported:
-            _fail(
+            fail(
                 "The quote does not state this actual occurrence date. An asset observation/cutoff, covered rent months or recurring payday cannot date an individual purchase."
             )
         effective = target.isoformat()
     else:
         value = begin or end
-        if not isinstance(value, str) or len(value) < 7:
-            _fail("A month needs an explicitly known actual occurrence month.")
         # Month-only evidence must still describe an actual event, not a cost
         # coverage period. Full-day dates also establish their containing month.
         months = {value.strftime("%Y-%m") for value in supported}
         for clause in clauses:
-            if not _EVENT.search(clause) or _NON_EVENT.search(clause):
+            if not _event_clause(clause, effective) or _NON_EVENT.search(clause):
                 continue
             for match in re.finditer(
                 r"(?:(\d{4})年)?(?<!\d)(\d{1,2}|[一二三四五六七八九十]{1,3})月", clause
@@ -260,8 +308,12 @@ def verify_date_evidence(
                     year -= 1
                 if 1 <= month <= 12:
                     months.add(f"{year:04d}-{month:02d}")
+        if value is None and len(months) == 1:
+            value = next(iter(months))
+        if not isinstance(value, str) or len(value) < 7:
+            fail("A month needs an explicitly known actual occurrence month.")
         if value[:7] not in months:
-            _fail(
+            fail(
                 "The quote does not establish this actual payment month; a count of payments or recurring salary rule cannot establish past months."
             )
         effective = value[:7]
@@ -297,11 +349,6 @@ def verify_budget_due_days(
             422,
         )
 
-    if not isinstance(evidence, str) or not evidence.strip() or len(evidence) > 240:
-        fail(
-            "New or changed due_day needs a short date_evidence quote of the user's explicit recurring payment-day rule."
-        )
-    quote = evidence.strip()
     message_id = evidence_source_id or source_id
     with service.store._connection() as db:
         row = db.execute(
@@ -311,9 +358,11 @@ def verify_budget_due_days(
         row is None
         or row["role"] != "user"
         or row["status"] not in {"accepted", "applied"}
-        or quote not in row["content"]
     ):
         fail("The recurring-rule quote must occur verbatim in a real accepted user message.")
+    quote = evidence.strip() if isinstance(evidence, str) else ""
+    if not quote or quote not in row["content"]:
+        quote = row["content"]
     recurring = re.compile(
         r"每(?:个)?月|每[^，,。；;]{0,6}(?:个月|季度|年|次)|统一|固定|一律|都按", re.I
     )

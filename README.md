@@ -10,7 +10,7 @@
 
 **[0.2.5 发布](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.5)** 汇总每条回复的思考和工具过程、主／子 Agent 通用能力、财务纠正与报告交付，以及首页设置与输入区优化。正式安装包由 GitHub Actions 构建，统一从 [GitHub Releases](https://github.com/rgywd/zhixing-next/releases/latest) 下载；安装与覆盖升级见[0.2.5 发布说明](docs/RELEASE-0.2.5.md)。沿用正式签名，可覆盖同签旧版和预览，保留本机数据和密码库；请勿先卸载。安装包内嵌 JS，无需 Metro；首次连接仍需自己的服务访问令牌。配套后端已升级 v13，本次 APK 发版不重新改动账目。正式构建、安装与下载校验结果以工作流和 Release 附件为准。
 
-后续正式发版由 GitHub Actions 在推送正式版本标签时执行检查、签名构建和 Release 附件发布，普通提交和 PR 不消耗 Actions 运行时间；日常验证在本地完成。流程见[GitHub 发布](docs/DEPLOYMENT.md#客户端-github-发布)。设置中的“检查更新”手动读取公开 GitHub 正式版本，可查看发布说明和下载新 APK，无需连接知行服务。
+后续正式发版由 GitHub Actions 在推送正式版本标签时执行检查、签名构建和 Release 附件发布，普通提交和 PR 不消耗 Actions 运行时间；日常验证在本地完成。流程见[GitHub 发布](docs/DEPLOYMENT.md#客户端-github-发布)。设置中的“检查更新”自动使用公开 GitHub API、官方发布附件清单和本机已核验缓存；限流时仍能取得版本及 APK，断网显示缓存核验时间并保留下载入口，无需连接知行服务。
 
 首页新增位置天气、只读今日日程与财务／健康速览，手机信息按需授权，时间跟随手机时钟。“开始”只追加到可编辑的主 Agent 草稿；新增收支优先进入财务 AI，不自动发送模板，手动补记与已有记录纠正仍保留。具体使用与验证见[今天首页说明](docs/TODAY-HOME.md)。
 

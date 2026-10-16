@@ -89,6 +89,90 @@ def test_profile_revisions_and_durable_change_receipts(service, settings):
     assert error.value.code == "revision_conflict"
 
 
+def test_profile_patch_preserves_restrictions_and_retries_do_not_reapply_old_fields(service, settings):
+    original = service.set_profile({**service.profile(), "height_cm": 172,
+                                   "food_allergies": ["花生"], "activity_limitations": ["不能跑步"]})
+    first = service.patch_profile({"preferences": ["清淡"]}, operation_key="patch-profile")
+    assert first["food_allergies"] == ["花生"]
+    assert first["activity_limitations"] == ["不能跑步"]
+    assert first["height_cm"] == 172
+    service.patch_profile({"height_cm": 173})
+    replay = HealthService(Store(settings)).patch_profile({"preferences": ["清淡"]}, operation_key="patch-profile")
+    assert replay == first and service.profile()["height_cm"] == 173
+    with pytest.raises(StoreError) as error:
+        service.patch_profile({"revision": original["revision"], "height_cm": 174})
+    assert error.value.code == "revision_conflict"
+    # Even an unchanged value with an explicitly stale revision must not hide a conflict.
+    with pytest.raises(StoreError):
+        service.patch_profile({"revision": original["revision"], "height_cm": 173})
+    assert service.profile()["food_allergies"] == ["花生"]
+
+
+def test_reminder_patch_preserves_slots_quiet_hours_and_timezone(service):
+    first = service.set_reminders({**service.reminders(), "enabled": True,
+                                  "slots": [{"id": "dinner", "time": "18:00"}],
+                                  "quiet_start": "22:00", "quiet_end": "08:00"})
+    changed = service.patch_reminders({"tone": "轻声提醒"})
+    assert changed["enabled"] and changed["slots"] == first["slots"]
+    assert changed["timezone"] == first["timezone"]
+    assert (changed["quiet_start"], changed["quiet_end"]) == ("22:00", "08:00")
+    with pytest.raises(StoreError):
+        service.patch_reminders({"revision": first["revision"], "enabled": False})
+
+
+@pytest.mark.parametrize("kind,record,changes,retained", [
+    ("meals", {"occurred_at": "2026-04-05T12:30:00+08:00", "description": "午饭", "portion": "半碗"},
+     {"description": "米饭和蔬菜"}, {"portion": "半碗", "occurred_at": "2026-04-05T12:30:00+08:00"}),
+    ("weights", {"measured_at": "2026-04-05T09:00:00+08:00", "value": 80},
+     {"value": 81}, {"unit": "kg", "measured_at": "2026-04-05T09:00:00+08:00"}),
+    ("rules", {"content": "避免花生", "kind": "restriction", "excluded_terms": ["花生"]},
+     {"status": "paused"}, {"content": "避免花生", "excluded_terms": ["花生"]}),
+])
+def test_record_patch_keeps_omitted_facts_provenance_and_explicit_revision_guards(service, settings, kind, record, changes, retained):
+    original = service.create(kind, {**record, "source_id": "original", "conversation_id": "source-chat"})
+    first = service.patch_record(kind, original["id"], changes, operation_key=f"patch-{kind}")
+    assert all(first[key] == value for key, value in retained.items())
+    assert first["source_id"] == "original" and first["conversation_id"] == "source-chat"
+    later = {"content": "继续避免花生"} if kind == "rules" else {"note": "稍后补充"}
+    service.patch_record(kind, original["id"], later)
+    assert HealthService(Store(settings)).patch_record(kind, original["id"], changes,
+                                                     operation_key=f"patch-{kind}") == first
+    with pytest.raises(StoreError) as error:
+        service.patch_record(kind, original["id"], {**changes, "revision": original["revision"]})
+    assert error.value.code == "revision_conflict"
+    with pytest.raises(StoreError):
+        service.patch_record(kind, original["id"], {"made_up_field": True})
+
+
+async def test_health_tools_patch_only_changed_fields_and_bind_actual_seen_inputs(settings):
+    from zhixing_next.finance_context import active_finance_input, delegated_finance_input
+
+    service = HealthService(Store(settings))
+    service.patch_profile({"food_allergies": ["花生"], "activity_limitations": ["不能跑步"]})
+    available = {item.name: item for item in create_health_tools(settings, "health-chat", "first-input")}
+    profile = await available["save_health_profile"].ainvoke({"profile": {"preferences": ["清淡"]}, "entry_key": "profile"})
+    assert profile["food_allergies"] == ["花生"] and profile["activity_limitations"] == ["不能跑步"]
+    args = {"occurred_at": "2026-04-05T12:30:00+08:00", "description": "午饭", "entry_key": "meal"}
+    first = await available["record_meal"].ainvoke(args)
+    token = delegated_finance_input.set("second-input")
+    try:
+        second = await available["record_meal"].ainvoke({**args, "description": "晚饭"})
+        assert second["source_id"] == "second-input" and second["id"] != first["id"]
+        active = active_finance_input.set("first-input")
+        try:
+            replay = await available["record_meal"].ainvoke(args)
+            assert replay["id"] == first["id"] and replay["source_id"] == "first-input"
+        finally:
+            active_finance_input.reset(active)
+    finally:
+        delegated_finance_input.reset(token)
+    fixed = await available["correct_health_record"].ainvoke({"kind": "meals", "identifier": first["id"],
+                                                               "record": {"portion": "半碗"}, "entry_key": "fix"})
+    assert fixed["description"] == "午饭" and fixed["portion"] == "半碗"
+    deleted = await available["delete_health_record"].ainvoke({"kind": "meals", "identifier": first["id"], "entry_key": "retract"})
+    assert deleted["deleted"]
+
+
 def test_rules_effective_days_pause_and_ai_proposals_are_not_silently_adopted(service):
     rule = service.create("rules", {"id": "one-day", "content": "今天少放盐",
                                    "effective_from": "2026-04-05", "effective_until": "2026-04-05"})

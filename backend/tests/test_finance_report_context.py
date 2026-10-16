@@ -12,7 +12,6 @@ from zhixing_next.finance_context import active_finance_input
 from zhixing_next.finance_report_context import latest_verified_report
 from zhixing_next.resources import resource_bytes
 from zhixing_next.runtime import run_agent
-from zhixing_next.store import StoreError
 
 
 async def first_report(tmp_path):
@@ -84,7 +83,7 @@ async def test_actual_new_month_can_narrow_report_without_carrying_old_assets(tm
     assert receipt["finance"]["context"]["basis"] == "current_user_period"
 
 
-async def test_current_user_range_overrides_model_dates_and_must_be_real_quote(tmp_path):
+async def test_current_user_range_overrides_model_dates_despite_invalid_quote_hint(tmp_path):
     settings, store, service, old_run, args, first = await first_report(tmp_path)
     run = follow(store, old_run["conversation_id"], "报告改为3月2日至4月8日。今晚再聊。")
     tool = publisher(settings, store, run, [])
@@ -94,9 +93,19 @@ async def test_current_user_range_overrides_model_dates_and_must_be_real_quote(t
         "end_date": "2026-04-08",
     }
     for quote in ("4月报告", "今晚再聊"):
-        with pytest.raises(StoreError) as error:
-            await tool.ainvoke({**args, "period_evidence": quote})
-        assert error.value.code == "unverified_finance_report_scope"
+        recovered = await tool.ainvoke({**args, "period_evidence": quote})
+        assert recovered["finance"]["facts"]["period"] == receipt["finance"]["facts"]["period"]
+
+
+@pytest.mark.parametrize("hint", ["4月报告", "", "不要4月报告"])
+async def test_legacy_period_hint_cannot_shrink_a_continuing_verified_report(tmp_path, hint):
+    settings, store, service, old_run, args, first = await first_report(tmp_path)
+    run = follow(store, old_run["conversation_id"], "继续更新整份回顾，今晚再聊。")
+    receipt = await publisher(settings, store, run, []).ainvoke({
+        "start_date": "2026-04-01", "end_date": "2026-04-30", "period_evidence": hint,
+    })
+    assert receipt["finance"]["facts"]["period"] == first["finance"]["facts"]["period"]
+    assert receipt["finance"]["facts"]["assets"] == first["finance"]["facts"]["assets"]
 
 
 @pytest.mark.parametrize("asset_input", ["stale_pair", "closing_only", "omitted"])

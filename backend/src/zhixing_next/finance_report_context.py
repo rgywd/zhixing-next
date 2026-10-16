@@ -168,27 +168,9 @@ def resolve_finance_report_context(
     text = source["content"] if source else ""
     reference = _business_day(source) if source else None
     explicit = _requested_period(text, reference) if reference else None
-    if period_evidence is not None:
-        if not source or not period_evidence.strip() or period_evidence.strip() not in text:
-            raise StoreError(
-                "unverified_finance_report_scope",
-                "报表新范围必须引用当前实际用户原话；沿用上下文时省略period_evidence，不要猜当月或要求用户补日期。",
-                422,
-            )
-        quoted = _requested_period(period_evidence.strip(), reference)
-        if quoted is None and explicit is not None:
-            # A short date-only quote is enough when the complete original
-            # message already binds that same period to a report request.
-            candidate = _requested_period("报告" + period_evidence.strip(), reference)
-            if candidate == explicit:
-                quoted = candidate
-        explicit = quoted
-        if explicit is None:
-            raise StoreError(
-                "unverified_finance_report_scope",
-                "该原话未明确新的报表月份或起止范围；省略period_evidence沿用现有报告即可，今晚用餐等时间不改变报表范围。",
-                422,
-            )
+    # Legacy quote hints never grant or remove scope. The real bound user input
+    # already establishes an explicit period; otherwise keep the verified prior
+    # report. A paraphrase, cropped negation or fabricated hint cannot change it.
     args = dict(requested)
     basis = "provided_period"
     if prior is not None and explicit is None:
@@ -200,11 +182,7 @@ def resolve_finance_report_context(
             approximate=assets["approximate"] if assets else True,
         )
         basis = "previous_verified_report"
-    elif explicit is not None and (
-        prior is not None
-        or (args.get("start_date") is None and args.get("end_date") is None)
-        or period_evidence is not None
-    ):
+    elif explicit is not None:
         args.update(start_date=explicit[0], end_date=explicit[1])
         basis = "current_user_period"
         if prior is not None and explicit != (

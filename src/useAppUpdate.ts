@@ -1,8 +1,10 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useRef, useState } from "react";
 import { Linking } from "react-native";
-import { checkGitHubUpdate, isReleaseLink, type UpdateResult } from "./appUpdates";
+import { createAppUpdateChecker, isReleaseLink, type CheckedUpdate } from "./appUpdates";
 
-export type UpdateState = { status: "idle" | "checking" } | { status: "done"; result: UpdateResult } | { status: "error"; error: string };
+export type UpdateState = { status: "idle" | "checking" } | ({ status: "done" } & CheckedUpdate) | { status: "error"; error: string };
+const checker = createAppUpdateChecker(AsyncStorage);
 
 export function useAppUpdate(currentVersion: string) {
   const [visible, setVisible] = useState(false);
@@ -23,15 +25,15 @@ export function useAppUpdate(currentVersion: string) {
     setVisible(false); setOpening(false); setLinkError(""); setState({ status: "idle" });
   }
 
-  async function check() {
+  async function check(force = false) {
     const session = lifetime.current;
     if (!session.active || session.check) return;
     const controller = new AbortController(), generation = ++session.generation;
     session.check = controller; session.opening = false;
     setVisible(true); setOpening(false); setLinkError(""); setState({ status: "checking" });
     try {
-      const result = await checkGitHubUpdate(currentVersion, controller.signal);
-      if (session.active && generation === session.generation) setState({ status: "done", result });
+      const checked = await checker.check(currentVersion, controller.signal, force);
+      if (session.active && generation === session.generation) setState({ status: "done", ...checked });
     } catch (error) {
       if (session.active && generation === session.generation && !controller.signal.aborted) setState({ status: "error", error: error instanceof Error ? error.message : "检查更新失败，请重试。" });
     } finally {

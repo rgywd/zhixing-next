@@ -174,7 +174,7 @@ async def test_relative_date_is_bound_to_original_message_clock_not_replay_clock
     assert result["occurred_on"] == "2026-04-09"
 
 
-async def test_range_to_day_correction_needs_actual_event_quote_but_amount_change_does_not(setup):
+async def test_range_to_day_correction_reads_actual_event_source_without_repeated_quote(setup):
     store, conversation = setup
     service = FinanceService(store)
     original = service.create_transaction(
@@ -193,11 +193,7 @@ async def test_range_to_day_correction_needs_actual_event_quote_but_amount_chang
         "entry_key": "actual-date",
         "changes": {"occurred_on": "2026-04-09"},
     }
-    with pytest.raises(StoreError):
-        await available["correct_finance_transaction"].ainvoke(args)
-    corrected = await available["correct_finance_transaction"].ainvoke(
-        {**args, "date_evidence": "这次四月九交的"}
-    )
+    corrected = await available["correct_finance_transaction"].ainvoke(args)
     assert corrected["date_precision"] == "day"
     assert (
         await available["correct_finance_transaction"].ainvoke(
@@ -374,6 +370,64 @@ async def test_partial_range_end_correction_does_not_become_false_single_day(set
     )
     assert result["date_precision"] == "range" and result["date_start"] == "2026-03-01"
     assert result["date_end"] == result["occurred_on"] == "2026-04-09"
+
+
+@pytest.mark.parametrize("content,category", [
+    ("今天午饭32元", "午饭"), ("今天打车32元", "交通"),
+    ("今天订阅32", "订阅"), ("4月9日电影票32元", "娱乐"),
+])
+@pytest.mark.parametrize("hint", [None, "今天这笔消费"])
+async def test_current_explicit_transactions_need_no_repeated_verbatim_quote(setup, content, category, hint):
+    store, conversation = setup
+    source = user(store, conversation, content)
+    result = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category=category, date_evidence=hint)
+    )
+    assert result["date_verification"]["source_message_id"] == source
+    assert result["occurred_on"] == "2026-04-09"
+
+
+@pytest.mark.parametrize("precision,text,expected", [
+    ("day", "今天打车32元", "2026-04-09"),
+    ("month", "3月订阅32元", "2026-03-01"),
+])
+async def test_tool_resolves_omitted_unambiguous_date_from_actual_input(setup, precision, text, expected):
+    store, conversation = setup
+    source = user(store, conversation, text)
+    result = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category="交通", occurred_on=None, date_precision=precision)
+    )
+    assert result["date_start"] == expected
+
+
+async def test_historical_message_id_is_enough_without_copying_quote(setup):
+    store, conversation = setup
+    historical = user(store, conversation, "3月手机1200元", created_at="2026-04-09T07:00:00Z")
+    current = user(store, conversation, "把之前这笔手机支出记上")
+    result = await tools(store, conversation, current)["record_finance_transaction"].ainvoke(
+        fields(category="手机", amount="1200", occurred_on=None, date_precision="month",
+               date_start="2026-03", date_source_message_id=historical)
+    )
+    assert result["date_verification"]["source_message_id"] == historical
+    assert result["date_start"] == "2026-03-01"
+
+
+async def test_unsupported_exact_date_gives_known_range_without_dating_purchase(setup):
+    import json
+
+    store, conversation = setup
+    source = user(store, conversation, "3月2日资产6000，到现在资产7000。历史大件手机1200。")
+    with pytest.raises(StoreError) as error:
+        await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+            fields(category="手机", amount="1200")
+        )
+    suggestion = json.loads(str(error.value).split("suggested_fields=", 1)[1])
+    assert suggestion == {"date_precision": "range", "date_start": "2026-03-02",
+                          "date_end": "2026-04-09", "occurred_on": None}
+    result = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category="手机", amount="1200", **suggestion)
+    )
+    assert result["date_precision"] == "range"
 
 
 @pytest.mark.parametrize("agent_id", [None, "finance"])

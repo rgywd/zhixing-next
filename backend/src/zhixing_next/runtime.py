@@ -478,14 +478,17 @@ class RunControls(AgentMiddleware):
 
     async def awrap_tool_call(self, request, handler):
         from .finance_tools import FINANCE_TOOL_NAMES
+        from .health_tools import HEALTH_TOOL_NAMES
 
         call = request.tool_call
         journal_call = call
         source_id = None
         finance_tool = call["name"] in FINANCE_TOOL_NAMES or call["name"] in FINANCE_MUTATION_TOOLS
-        if (finance_tool or call["name"] == "task") and self.operations:
+        health_tool = call["name"] in HEALTH_TOOL_NAMES
+        health_writes = set(HEALTH_TOOL_NAMES) - {"query_health_context"}
+        if (finance_tool or health_tool or call["name"] == "task") and self.operations:
             source_id = _seen_finance_input(self.operations.journal.store, self.run_id, request.state.get("messages", []))
-            if call["name"] in FINANCE_MUTATION_TOOLS | {"publish_finance_report", "task"} and source_id and source_id != self.operations.run.get("message_id"):
+            if call["name"] in FINANCE_MUTATION_TOOLS | health_writes | {"publish_finance_report", "task"} and source_id and source_id != self.operations.run.get("message_id"):
                 journal_call = {**call, "id": call["id"] + ":" + source_id}
         if await self.pending(request.state):
             if self.operations:
@@ -514,10 +517,19 @@ class RunControls(AgentMiddleware):
         if self.budget:
             self.budget.reserve("tool_calls")
             self.budget.check_loop(call, request.state)
+        if self.operations and call["name"] in {"write_text_file", "copy_file"}:
+            # File planning reads paths before the tool handler. Route malformed
+            # arguments through the same safe feedback before planning any I/O.
+            schema = getattr(getattr(request, "tool", None), "args_schema", None)
+            if hasattr(schema, "model_validate"):
+                try:
+                    schema.model_validate(call["args"])
+                except ValidationError:
+                    return await self._invoke_tool(request, handler)
         if self.operations:
             from .finance_context import active_finance_input, delegated_finance_input
 
-            context = active_finance_input if finance_tool else delegated_finance_input if call["name"] == "task" else None
+            context = active_finance_input if finance_tool or health_tool else delegated_finance_input if call["name"] == "task" else None
             context_token = context.set(source_id) if context is not None else None
             try:
                 result = await self.operations.invoke(journal_call, lambda: self._invoke_tool(request, handler))
@@ -551,9 +563,10 @@ class RunControls(AgentMiddleware):
         }
         async def checked_handler():
             from .finance_tools import FINANCE_TOOL_NAMES
+            from .tool_errors import FILE_TOOLS
 
             schema = getattr(getattr(request, "tool", None), "args_schema", None)
-            if call["name"] in FINANCE_TOOL_NAMES and hasattr(schema, "model_validate"):
+            if call["name"] in set(FINANCE_TOOL_NAMES) | FILE_TOOLS | {"fetch_public_page"} and hasattr(schema, "model_validate"):
                 # ToolNode otherwise formats validation failures with all supplied
                 # kwargs before returning them to middleware. Validate here so only
                 # bounded field errors reach the model, never raw input values.
@@ -633,6 +646,20 @@ class RunControls(AgentMiddleware):
                     content=content,
                     tool_call_id=call["id"], status="error",
                 )
+            from .tool_errors import FILE_TOOLS, safe_tool_failure
+
+            failure = safe_tool_failure(exc, call["name"])
+            if isinstance(exc, ValidationError) and call["name"] in FILE_TOOLS | {"fetch_public_page"}:
+                failure = {
+                    "code": "invalid_tool_parameters", "message": "Some tool parameters are missing or have the wrong type.",
+                    "fields": [{"field": ".".join(str(part) for part in item["loc"])[:100], "type": item["type"][:60]}
+                               for item in exc.errors(include_url=False, include_context=False, include_input=False)[:4]],
+                    "next_action": "Correct the listed parameter fields using the tool schema, then retry. No file read/write was started.",
+                    "retryable": False,
+                }
+            if failure is not None:
+                return ToolMessage(content=json.dumps({"error": failure}, ensure_ascii=False),
+                                   tool_call_id=call["id"], status="error")
             # Sandbox diagnostics contain task-local outputs, like execute itself. Give
             # the model enough information to repair selectors and invalid artifacts.
             detail = str(exc)[-2000:] if call["name"] in {"browser_action", "publish_artifact", "publish_report", "calculate", "date_info", "start_background_task", "schedule_task"} else "Check the tool's permitted inputs, capability and size limits before retrying."
