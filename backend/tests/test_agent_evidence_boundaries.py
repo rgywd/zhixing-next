@@ -22,11 +22,15 @@ def assert_shared_evidence_limits(prompt):
     assert "does not establish who bears liability" in prompt
     assert "original user statement or an identified source explicitly supports" in prompt
     assert "do not turn another assistant's inference into an original user fact" in prompt
-    assert "A process, condition or trigger does not establish exclusivity, nonexistence or a guarantee" in prompt
+    assert "A process, condition or trigger does not establish exclusivity, nonexistence, a guarantee, or an unstated sequence or prerequisite" in prompt
     assert "'goods are prepared against orders' does not establish that no ready stock exists" in prompt
     assert "when inventory availability is unstated, keep inventory unknown" in prompt
     assert "Preserve the source wording's scope and qualifications" in prompt
-    assert "State your own inference separately as a hypothesis and retain the original unknown" in prompt
+    assert "Ordinary checks of facts, limitations and unknowns do not request speculation" in prompt
+    assert "do not generate assumptions or inferred explanations for them" in prompt
+    assert "Only when the user explicitly requests scenario analysis, label any inference as a hypothesis and retain the original unknown" in prompt
+    assert "State your own inference separately as a hypothesis" not in prompt
+    assert "Label your own inferences" not in prompt
     assert "never inline a conjecture as an established limitation" in prompt
     assert "Never invent an exact meal time or serving count" in prompt
     assert "do not silently use submission time or one serving" in prompt
@@ -73,6 +77,25 @@ async def test_main_and_consulted_models_receive_evidence_and_meal_uncertainty_r
     if consulted:
         assert "report limitations as limitations" in prompt
         assert "cannot mistake an inference for a user statement" in prompt
+
+
+async def test_actual_named_finance_graph_receives_the_same_no_speculation_contract(tmp_path):
+    settings = make_settings(tmp_path)
+    run = make_run("named-evidence", "请只核对已有来源中的事实、限制和未知，不补充推测。")
+    run["agents"] = [Store(settings).get_agent("finance")]
+    model = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "task", "args": {"subagent_type": "finance", "description": run["prompt"]},
+            "id": "finance-fact-check", "type": "tool_call",
+        }]),
+        AIMessage(content="已核对；未说明的条件继续保持未知。"),
+        AIMessage(content="汇总已有事实及未知。"),
+    ])
+    await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=model)
+    assert len(model.seen) == 3
+    child_prompt = "\n".join(str(message.content) for message in model.seen[1] if isinstance(message, SystemMessage))
+    assert "You are 财务助手" in child_prompt
+    assert_shared_evidence_limits(child_prompt)
 
 
 async def test_actual_research_graph_receives_the_same_grounding_limits(tmp_path, monkeypatch):

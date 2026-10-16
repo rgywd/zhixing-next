@@ -384,8 +384,8 @@ class RunControls(AgentMiddleware):
         self.named_task_schema = create_schema_model(
             "NamedAgentTask",
             __config__=ConfigDict(extra="forbid"),
-            description=(str, Field(min_length=1, description="The specific service request, relevant user facts and expected result.")),
-            subagent_type=(Literal[tuple(sorted(self.allowed_subagents))], Field(description="Choose one of the available named service agents.")),
+            subagent_type=(Literal[tuple(sorted(self.allowed_subagents))], Field(description="Choose a specialist whose configured service domain matches the request; this is not a research-agent type.")),
+            description=(str, Field(min_length=1, description="One request within the selected specialist's service domain, necessary user facts and the expected service outcome. This is a synchronous service call, not a concurrent research session.")),
         ) if self.allowed_subagents else None
         self.blocked_tools = (set() if execution_enabled else {"execute"}) | (set() if self.allowed_subagents else {"task"})
         self.internal_files_only = not execution_enabled and not restricted_files
@@ -425,13 +425,18 @@ class RunControls(AgentMiddleware):
             + ("use record_life_meal for creation and correct_life_meal for correction. " if len(joint_tools) == 2 else "use its available " + ", ".join(sorted(joint_tools)) + " tool for the supported operation. ")
             + "Do not delegate a linked meal-and-payment operation to health or finance through task.\n"
         ) if joint_tools else "Task does not provide atomic joint meal-and-expense operations; do not split a linked request across specialist agents or report unsupported completion.\n"
-        description = (
-            joint_route + "Delegate an independent domain request to one of these configured specialist agents:\n"
-            + "\n".join(f"- {name}: " + ("Independent health requests only; not the route for joint meal-and-expense writes or financial-ledger recording. " if name == "agent_health" else "") + self.subagent_descriptions.get(name, "Configured specialist") for name in names)
-            + "\nSet subagent_type to exactly one listed name and put the complete relevant context in description. The call returns that specialist's final report."
-        )
+        service_scopes = {
+            "finance": "Financial ledger, income/expense, cash-flow and budget services only; not a general file or document researcher. ",
+            "agent_health": "Independent health requests only; not a general file researcher, joint meal-and-expense writer or financial-ledger service. ",
+        }
+        description = "Synchronous specialist business service: each call blocks until one final service report. It creates no persistent agent_id, non-blocking start/wait lifecycle or later send_agent follow-up. "
         if self.collaboration is not None:
-            description += " For parallel research or general evidence gathering use start_agent, then wait_agents."
+            description += "For independent or parallel file/evidence research, use start_agent; its returned agent_id supports send_agent and wait_agents. "
+        description += (
+            "\n" + joint_route + "Configured service domains:\n"
+            + "\n".join(f"- {name}: " + service_scopes.get(name, "") + self.subagent_descriptions.get(name, "Configured specialist") for name in names)
+            + "\nSet subagent_type to exactly one listed service and put only its relevant service request/context in description."
+        )
         if isinstance(tool, dict):
             return {**tool, "description": description, "parameters": self.named_task_schema.model_json_schema()}
         return tool.model_copy(update={"description": description, "args_schema": self.named_task_schema})
@@ -521,6 +526,9 @@ class RunControls(AgentMiddleware):
 
             if not any(len(row.get("result") or "") > RESULT_WINDOW for row in children):
                 tools = [self.unpaged_wait_contract(item) if (item.get("name") if isinstance(item, dict) else item.name) == "wait_agents" else item for item in tools]
+            # The SDK prepends its generic `task`; concrete tools and the actual
+            # research lifecycle should be encountered before service delegation.
+            tools = [item for item in tools if (item.get("name") if isinstance(item, dict) else item.name) != "task"] + [item for item in tools if (item.get("name") if isinstance(item, dict) else item.name) == "task"]
         if self.read_only:
             from .agent_collaboration import READ_ONLY_TOOLS
 

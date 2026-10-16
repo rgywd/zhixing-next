@@ -19,7 +19,8 @@ async def test_main_first_model_routes_joint_creation_and_correction_before_spec
     await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=model)
     assert JOINT_TOOLS <= model.contracts.keys()
     task = model.contracts["task"]["description"]
-    assert task.startswith("Joint meal-and-expense operations stay in the main assistant:")
+    assert task.startswith("Synchronous specialist business service:")
+    assert task.index("Joint meal-and-expense operations stay in the main assistant:") < task.index("Configured service domains:")
     assert "record_life_meal for creation and correct_life_meal for correction" in task
     assert "Do not delegate a linked meal-and-payment operation to health or finance through task" in task
     health_entry = next(line for line in task.splitlines() if line.startswith("- agent_health:"))
@@ -42,7 +43,7 @@ async def test_absent_joint_tools_are_not_advertised_as_available(tmp_path, monk
     await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=model)
     assert JOINT_TOOLS.isdisjoint(model.contracts)
     task = model.contracts["task"]["description"]
-    assert task.startswith("Task does not provide atomic joint meal-and-expense operations")
+    assert "Task does not provide atomic joint meal-and-expense operations" in task
     assert all(name not in task for name in JOINT_TOOLS)
     prompt = str(model.seen[0])
     assert "No joint meal-and-expense write tool is available here" in prompt
