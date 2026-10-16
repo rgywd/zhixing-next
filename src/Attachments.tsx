@@ -22,8 +22,12 @@ export function Attachments({ connection, items = [], remove }: {
       {items.map((item) => <View key={item.id} style={{ padding: 8, borderRadius: 12, backgroundColor: colors.blueSoft, maxWidth: 170, minWidth: 130, gap: 4 }}>
         {item.mime_type.startsWith("image/") ? <Pressable accessibilityRole="button" accessibilityLabel={`查看图片 ${item.name}`} onPress={() => setSelected(item)}>
           <ResourceImage connection={connection} resource={item} style={{ width: 140, height: 95 }} />
-        </Pressable> : <Ionicons name="document-outline" size={22} color={colors.blue} />}
-        <Text numberOfLines={2} style={s.muted}>{item.name}</Text>
+        </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={`打开文件 ${item.name}`} onPress={() => setSelected(item)} style={{ minHeight: 44, justifyContent: "center" }}>
+          <Ionicons name="document-text-outline" size={22} color={colors.blue} />
+        </Pressable>}
+        <Pressable accessibilityRole="button" accessibilityLabel={`查看附件 ${item.name}`} onPress={() => setSelected(item)} style={{ minHeight: 44, justifyContent: "center" }}>
+          <Text numberOfLines={2} style={s.muted}>{item.name}</Text>
+        </Pressable>
         {remove ? <ActionLink icon="close" tone="blue" onPress={() => remove(item.id)}>移除</ActionLink> : <ActionLink icon="share-outline" tone="blue" disabled={busy} onPress={() => {
           setBusy(true); setError("");
           void shareResource(connection, item).catch((e) => setError(humanError(e))).finally(() => setBusy(false));

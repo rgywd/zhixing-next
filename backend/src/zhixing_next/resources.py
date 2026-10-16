@@ -109,6 +109,24 @@ def resource_bytes(settings: Settings, resource: dict, *, preview=False) -> byte
     return data
 
 
+def resource_text(settings: Settings, resource: dict) -> dict:
+    """Read immutable UTF-8 report content as data, never execute uploaded HTML."""
+    suffix = Path(resource["name"]).suffix.lower()
+    if not (resource["mime_type"].startswith("text/") or suffix in {".md", ".markdown", ".txt", ".csv", ".json", ".log"}):
+        raise StoreError("preview_unavailable", "This file has no text preview", 422)
+    data = resource_bytes(settings, resource)
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise StoreError("preview_unavailable", "This file is not UTF-8 text; download to open it", 422) from exc
+    if "\0" in text:
+        raise StoreError("preview_unavailable", "This file contains binary data", 422)
+    limit = 128 * 1024
+    return {"resource_id": resource["id"], "name": resource["name"], "content": text[:limit],
+            "format": "markdown" if suffix in {".md", ".markdown"} or resource["mime_type"] == "text/markdown" else "text",
+            "truncated": len(text) > limit, "sha256": resource["sha256"]}
+
+
 def capture_file(settings: Settings, conversation_id: str, path: str) -> dict:
     from .files import read_file
 
@@ -199,18 +217,19 @@ def hydrate_messages(settings: Settings, messages: list, *, image_input: bool) -
     return result
 
 
-def create_image_tool(settings: Settings, workspace: Path, conversation_id: str):
+def create_image_tool(settings: Settings, workspace: Path, conversation_id: str, *, allow_saved_resources: bool = False):
     from langchain_core.tools import tool
 
     from .tools import FileAccess
 
     @tool
     def view_image(path: str = "", resource_id: str = "") -> list[dict]:
-        """View an uploaded resource by its resource_id or a generated PNG/JPEG/WebP image by workspace-relative path. Use this to inspect actual rendered pages and charts."""
+        """View an immutable uploaded/saved image by resource_id or a generated PNG/JPEG/WebP by workspace-relative path. Use this to inspect actual screenshots, rendered pages and charts. Workspace paths never grant access to other conversations or host files."""
         if resource_id:
-            item = Store(settings).get_resource(resource_id, conversation_id)
+            item = Store(settings).get_resource(resource_id, None if allow_saved_resources else conversation_id)
             if not item["mime_type"].startswith("image/"):
                 raise ValueError("Resource is not a supported image")
+            resource_bytes(settings, item)  # Verify the immutable original before using its preview.
             data = resource_bytes(settings, item, preview=True)
         else:
             _, raw = FileAccess(settings, workspace).read_bytes(

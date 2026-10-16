@@ -81,7 +81,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 12:
+            if version > 13:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -178,6 +178,24 @@ class Store:
                 # Old generic work schedules must not continue after their UI is removed.
                 db.execute("UPDATE schedules SET enabled=0")
                 db.execute("PRAGMA user_version=12")
+            if version < 13:
+                from .finance_service import migrate as migrate_finance
+                from .finance_tools import FINANCE_TOOL_NAMES
+
+                migrate_finance(db)
+                finance = db.execute("SELECT instructions,tools_json FROM agents WHERE id='finance'").fetchone()
+                if finance:
+                    old_defaults = {
+                        "只记录用户明确提供的金额，不猜测扣款链路。记录是观察值，不自动对账或计算总资产；截图识别尚未接入。",
+                        "只记录用户明确提供的金额，不猜测扣款链路。记录是观察值，不自动对账或计算总资产。截图中清楚可见的金额也属于用户提供的信息；看不清时只追问必要的问题。",
+                        "只记录用户明确提供的金额，不猜测扣款链路。记录是观察值，不自动对账或计算总资产。",
+                    }
+                    instructions = finance["instructions"]
+                    if instructions in old_defaults:
+                        instructions = "帮助用户自然整理财务信息、预算和收支，结合已有记录与通用工具完成分析和报告。已有预算是当前安排；保留不确定性，只在影响实际行动时追问。"
+                    db.execute("UPDATE agents SET instructions=?,tools_json=?,updated_at=? WHERE id='finance'",
+                               (instructions, _json(sorted(set(json.loads(finance["tools_json"])) | set(FINANCE_TOOL_NAMES))), timestamp()))
+                db.execute("PRAGMA user_version=13")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)

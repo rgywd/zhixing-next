@@ -2,17 +2,26 @@ import { request, type Connection } from "./api";
 
 export type FinanceTransaction = {
   id: string; revision: number; kind: "expense" | "income" | "transfer" | "refund";
-  amount: string; occurred_on: string; bucket: "daily" | "fixed" | "one_time";
+  amount: string; occurred_on: string; date_precision?: "day" | "month" | "range"; date_start?: string | null; date_end?: string | null; coverage_start?: string | null; coverage_end?: string | null; bucket: "daily" | "fixed" | "one_time";
   category: string; note: string; commitment_key?: string | null; related_transaction_id?: string | null;
 };
-export type FinanceCommitment = { key: string; label: string; amount: string; kind: "fixed" | "one_time" };
+export type FinanceCommitment = { key: string; label: string; amount: string; kind: "fixed" | "one_time"; every_months?: number; anchor_month?: string | null; due_day?: number | null; monthly_cost?: string | null; paid_through?: string | null };
+export type IncomeSchedule = { rule: "last_business_day" | "day_of_month"; day?: number | null; weekdays?: number[]; working_dates?: string[]; non_working_dates?: string[]; calendar_basis?: "weekdays_only" | "user_overrides" };
+export function financeDateLabel(record: FinanceTransaction) {
+  if (record.date_precision === "month") return `${(record.date_start ?? record.occurred_on).slice(0, 7)}（日期待定）`;
+  if (record.date_precision === "range") return `${record.date_start ?? "日期待定"} 至 ${record.date_end ?? record.occurred_on}（区间）`;
+  return record.occurred_on;
+}
 export type FinanceBudget = {
   month: string; source_month?: string | null; recurring: boolean; revision: number;
   expected_income: string | null; savings_target: string | null; daily_budget: string | null;
-  commitments: FinanceCommitment[]; coverage_start?: string | null; coverage_through?: string | null;
+  commitments: FinanceCommitment[]; income_schedule?: IncomeSchedule | null; coverage_start?: string | null; coverage_through?: string | null;
 };
 export type FinanceDashboardSummary = {
   month: string; budget: FinanceBudget;
+  expected_income_on?: string | null;
+  commitments?: { monthly_cost: string; cash_due: string; items: { key: string; monthly_cost: string; cash_due: string; remaining_due: string; next_due_on: string | null; paid_through: string | null }[] };
+  unallocated?: { items: FinanceTransaction[]; count: number; reason: string };
   totals: { income: string; expense: string; net: string; daily: string; fixed: string; one_time: string; refund: string; transfer: string };
   reservations: { fixed: string; one_time: string; total: string };
   remaining: { daily_budget: string | null; total_spend_budget: string | null; savings_target_headroom: string | null };
@@ -60,7 +69,10 @@ export type ServiceMutation = { path: string; method: "POST" | "PUT" | "PATCH" |
 export const readFinanceDashboard = (connection: Connection, month: string) => Promise.all([
   request<FinanceDashboardSummary>(connection, `/finance/summary?month=${encodeURIComponent(month)}`),
   request<{ items: FinanceTransaction[]; total: number }>(connection, `/finance/transactions?month=${encodeURIComponent(month)}&limit=100&offset=0`),
-]).then(([summary, records]) => ({ summary, records }));
+]).then(([summary, records]) => {
+  const unallocated = new Set(summary.unallocated?.items.map((item) => item.id) ?? []);
+  return { summary, records: { ...records, items: records.items.filter((item) => !unallocated.has(item.id)), total: Math.max(0, records.total - (summary.unallocated?.count ?? 0)) } };
+});
 export const readHealthSummary = (connection: Connection, date: string) =>
   request<HealthSummary>(connection, `/health/summary?date=${encodeURIComponent(date)}`);
 export const mutateService = <T>(connection: Connection, mutation: ServiceMutation) => request<T>(connection, mutation.path, mutation);

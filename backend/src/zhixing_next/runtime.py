@@ -22,15 +22,15 @@ from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.errors import GraphInterrupt
+from langgraph.errors import GraphInterrupt, NodeCancelledError
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
+from .common_tools import COMMON_INSTRUCTIONS, assign_common_tools, create_common_tools
 from .config import Settings
-from .memory import create_memory_lookup_tool, forget_memory_request, relevant_memories
+from .memory import forget_memory_request, relevant_memories
 from .models import ModelConfigurationError, configured_model, create_model
-from .resources import create_image_tool, hydrate_messages, input_message
-from .search import create_search_tool
+from .resources import hydrate_messages, input_message
 from .sqlite_policy import safe_journal_mode
 from .store import Store, StoreError
 from .tools import create_file_tools, create_finance_tools
@@ -259,6 +259,7 @@ class RunControls(AgentMiddleware):
             "read_document",
             "view_image",
             "copy_file",
+            "publish_report",
         }
         tool_task = asyncio.create_task(handler(request))
         try:
@@ -316,7 +317,7 @@ class RunControls(AgentMiddleware):
                 )
             # Sandbox diagnostics contain task-local outputs, like execute itself. Give
             # the model enough information to repair selectors and invalid artifacts.
-            detail = str(exc)[-2000:] if call["name"] in {"browser_action", "publish_artifact", "start_background_task", "schedule_task"} else "Check the tool's permitted inputs, capability and size limits before retrying."
+            detail = str(exc)[-2000:] if call["name"] in {"browser_action", "publish_artifact", "publish_report", "calculate", "date_info", "start_background_task", "schedule_task"} else "Check the tool's permitted inputs, capability and size limits before retrying."
             return ToolMessage(
                 content=f"The tool operation failed ({type(exc).__name__}). {detail}",
                 tool_call_id=call["id"],
@@ -365,6 +366,12 @@ async def run_agent(
             if not timeout.expired():
                 raise
             raise RunLimitError("任务已达到累计执行时间预算，执行已停止，已有结果保留。") from exc
+        except NodeCancelledError as exc:
+            # LangGraph wraps node-raised CancelledError; preserve the user's actual
+            # cancellation receipt rather than classifying it as a failed run.
+            if (await kwargs["controls"]()).get("cancel_requested"):
+                raise asyncio.CancelledError("Run cancellation requested") from exc
+            raise
     finally:
         budget.elapsed(time.monotonic() - started)
         if sandbox is not None:
@@ -433,19 +440,14 @@ async def _run_agent(
     images_enabled = model_override is not None or model_config.image_input
     if not images_enabled and any(item["mime_type"].startswith("image/") for item in run.get("attachments", [])):
         raise RuntimeConfigurationError("当前执行模型不支持本次图片输入，请启用已验证的视觉模型后重新发送。")
-    if images_enabled:
-        physical_tools.append(create_image_tool(file_settings, workspace, run["conversation_id"]))
+    common_tools = create_common_tools(settings, run, workspace, emit, image_input=images_enabled, forgetting=forgetting)
     if not direct_agent and not forgetting:
         from .gitlab import create_gitlab_tools
-        from .retrieval import create_retrieval_tools
 
-        physical_tools.extend(create_retrieval_tools(store))
         if settings.gitlab.projects:
             physical_tools.extend(create_gitlab_tools(settings.gitlab))
         physical_tools.extend(create_taskflow_tools(store, run, sandbox))
-        physical_tools.append(create_memory_lookup_tool(store, run["conversation_id"]))
-    if search_enabled:
-        physical_tools.append(create_search_tool(run["search_provider"]))
+    physical_tools = list({item.name: item for item in [*common_tools, *physical_tools]}.values())
     agents = run.get("agents", []) if not direct_agent else []
     unavailable_agents = [item["name"] for item in agents if item.get("model_id") and item["model_id"] not in settings.models]
     agents = [item for item in agents if not item.get("model_id") or item["model_id"] in settings.models]
@@ -468,16 +470,8 @@ async def _run_agent(
     from .operations import OperationRunner, RunPaused
 
     operations = OperationRunner(settings, {**run, "workspace_path": str(workspace)}, sandbox)
-    middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"])
-    assigned_tools = [by_name[name] for name in direct_agent["tools"] if name in by_name] if direct_agent else physical_tools
-    if direct_agent and direct_agent["id"] in {"finance", "health"}:
-        # Finance attachments are readable only inside this conversation's workspace.
-        assigned_tools.extend(
-            tool for tool in physical_tools
-            if tool.name in {"list_directory", "read_text_file", "read_document"}
-        )
-    if direct_agent and search_enabled:
-        assigned_tools.append(by_name["search_web"])
+    middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, restricted_files=direct_agent is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"])
+    assigned_tools = assign_common_tools(common_tools, direct_agent["tools"], by_name) if direct_agent else physical_tools
     business_time_prompt = (
         f"Current service time: {datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}. "
         "Resolve relative dates from the user's stated context; ask only for an ambiguity that changes a record. "
@@ -495,6 +489,7 @@ async def _run_agent(
         f"Assistant persona:\n{persona}"
     )
     system_prompt += "\nCompleted operations can be returned from durable receipts without replay. Read actual outputs when needed. After a pause or restart the container and browser session are recreated: never assume earlier navigation or background processes still exist. Never repeat an unconfirmed external operation without the user's decision."
+    system_prompt += "\n" + COMMON_INSTRUCTIONS
     if unavailable_agents:
         system_prompt += "\nThese assistants are currently unavailable because their selected models are disabled or missing: " + ", ".join(unavailable_agents)
     if run["kind"] == "task" and not direct_agent:
@@ -539,10 +534,13 @@ async def _run_agent(
         {
             "name": "finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}",
             "description": f"{item['name']}: {item['description']}",
-            "system_prompt": (business_time_prompt if item["id"] in service_instructions else "") + f"You are {item['name']}. {item['description']}\n{item['instructions']}\n{service_instructions.get(item['id'], '')}\nOnly use the explicitly assigned physical tools. Do not guess missing service facts or claim unavailable capabilities.",
-            "tools": [by_name[name] for name in item["tools"] if name in by_name],
+            "system_prompt": business_time_prompt + f"You are {item['name']}. {item['description']}\n{item['instructions']}\n{service_instructions.get(item['id'], '')}\n" + COMMON_INSTRUCTIONS + "\nOnly use the explicitly assigned physical tools. Do not guess missing service facts or claim unavailable capabilities.",
+            "tools": assign_common_tools(
+                create_common_tools(settings, run, workspace, emit, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, forgetting=forgetting),
+                item["tools"], by_name,
+            ),
             **({"model": create_model(settings, run["kind"], item["model_id"])} if item.get("model_id") else {}),
-            "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=sandbox is not None, operations=operations, budget=budget)],
+            "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=True, operations=operations, budget=budget)],
         }
         for item in agents
     ]
@@ -565,7 +563,7 @@ async def _run_agent(
         from .skills import skill_bundle
 
         _, skill_digest = skill_bundle(settings) if sandbox else (None, None)
-        fingerprint = hashlib.sha256(json.dumps({"recovery_protocol": 2, "gitlab": settings.gitlab.model_dump(), "limits": settings.limits.model_dump(), "sdk": {package: version(package) for package in ("deepagents", "langgraph", "langchain")}, "model": identity, "images": images_enabled, "execution": settings.execution.model_dump(mode="json"), "skills": skill_digest, "child_models": {item.get("model_id"): settings.models[item["model_id"]].model_dump(mode="json") for item in agents if item.get("model_id")}, "grants": [grant.model_dump(mode="json") for grant in settings.grants], "agent": direct_agent, "agents": agents}, sort_keys=True).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps({"recovery_protocol": 3, "gitlab": settings.gitlab.model_dump(), "limits": settings.limits.model_dump(), "sdk": {package: version(package) for package in ("deepagents", "langgraph", "langchain")}, "model": identity, "images": images_enabled, "execution": settings.execution.model_dump(mode="json"), "skills": skill_digest, "child_models": {item.get("model_id"): settings.models[item["model_id"]].model_dump(mode="json") for item in agents if item.get("model_id")}, "grants": [grant.model_dump(mode="json") for grant in settings.grants], "agent": direct_agent, "agents": agents}, sort_keys=True).encode()).hexdigest()
         resuming = old.values.get("active_run_id") == run["id"]
         if resuming and (old.values.get("recovery_fingerprint") != fingerprint or old.values.get("memory_reset_revision", 0) != reset_revision):
             raise RuntimeConfigurationError("恢复期间模型、权限、助手、记忆或运行时版本配置发生变化。请发送新要求核对已有结果，不能直接重放旧步骤。")

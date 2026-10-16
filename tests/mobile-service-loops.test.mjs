@@ -368,3 +368,30 @@ test("recommendation safety notes and candidates stay visible while reasoning ex
   expanded.find((node) => node.type === "ActionLink" && node.props.children === "收起建议依据").props.onPress();
   assert.equal(textNode(page.render(), context), -1);
 });
+
+
+test("editing another budget field preserves quarterly coverage and income schedule", () => {
+  const { forms } = setup(); const { buildFinanceMutation } = pages(forms);
+  const commitment = { key: "rent-cycle", label: "租住", amount: "4800.00", kind: "fixed", every_months: 3, anchor_month: "2028-03", due_day: 8, monthly_cost: "1600.00", paid_through: "2028-05" };
+  const income_schedule = { rule: "last_business_day", calendar_basis: "weekdays_only" };
+  const previous = { revision: 3, source_month: "2028-03", commitments: [commitment], income_schedule };
+  const fields = { month: "2028-06", income: "15000", savings: "7000", daily: "", recurring: "yes", commitments: "租住 | 4800 | 固定", from: "", through: "" };
+  const unchanged = buildFinanceMutation(draft("budget", fields, { budget: previous }));
+  assert.equal(unchanged.body.commitments[0].every_months, 3);
+  assert.equal(unchanged.body.commitments[0].paid_through, "2028-05");
+  assert.equal(unchanged.body.commitments[0].monthly_cost, "1600.00");
+  assert.deepEqual(unchanged.body.income_schedule, income_schedule);
+  const changed = buildFinanceMutation(draft("budget", { ...fields, commitments: "租住 | 5100 | 固定" }, { budget: previous }));
+  assert.equal(changed.body.commitments[0].every_months, 3);
+  assert.equal(changed.body.commitments[0].monthly_cost, undefined);
+});
+
+test("unrelated correction preserves uncertain transaction range and payment coverage", () => {
+  const { forms } = setup(); const { buildFinanceMutation } = pages(forms);
+  const record = { id: "uncertain", revision: 2, occurred_on: "2028-06-30", date_precision: "range", date_start: "2028-03-01", date_end: "2028-06-30", coverage_start: "2028-06", coverage_end: "2028-08" };
+  const fields = { kind: "expense", amount: "4800", date: record.occurred_on, bucket: "fixed", category: "租住", note: "已付", commitment: "rent-cycle", related: "" };
+  const change = buildFinanceMutation(draft("transaction", fields, { record }));
+  assert.equal(change.body.date_precision, "range");
+  assert.equal(change.body.date_start, "2028-03-01");
+  assert.equal(change.body.coverage_end, "2028-08");
+});

@@ -51,7 +51,11 @@ export function parseCommitments(value: string, previous: FinanceCommitment[]) {
     const candidate = matches[index] ?? (oldKey && !reserved.has(oldKey) ? oldKey : undefined);
     const key = candidate && !used.has(candidate) ? candidate : randomUUID();
     used.add(key);
-    return { key, ...item };
+    const old = previous.find((entry) => entry.key === key);
+    const metadata: Partial<FinanceCommitment> = old ? { ...old } : {};
+    // A changed payment amount must recalculate the monthly cost; preserve its cycle.
+    if (old && Number(old.amount) !== Number(item.amount)) delete metadata.monthly_cost;
+    return { ...metadata, key, ...item };
   });
 }
 export function parseReminderSlots(value: string, previous: { id: string; time: string; meal_type: string; kind: string }[]) {
