@@ -104,7 +104,14 @@ async def test_generic_or_legacy_store_errors_do_not_leak_uncontrolled_details(n
     result = await RunControls(no_controls, emit)._invoke_tool(request, fail)
     assert result.status == "error"
     assert "synthetic-sensitive-value" not in result.content
-    assert "Check the tool's permitted inputs" in result.content
+    if name == "read_text_file":
+        error = json.loads(result.content)["error"]
+        assert error["code"] == "file_operation_failed"
+        assert error["retryable"] is False
+        assert "read_saved_resource" in error["next_action"]
+        assert "do not repeat unchanged inputs" in error["next_action"]
+    else:
+        assert "Check the tool's permitted inputs" in result.content
     assert "synthetic-sensitive-value" not in str(events)
 
 
