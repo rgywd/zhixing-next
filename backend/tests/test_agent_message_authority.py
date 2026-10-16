@@ -8,7 +8,11 @@ from langchain_core.messages import HumanMessage
 from test_runtime import make_settings
 
 from zhixing_next.finance_context import delegated_finance_input
-from zhixing_next.finance_dates import verify_budget_due_days, verify_date_evidence
+from zhixing_next.finance_dates import (
+    normalize_history_range,
+    verify_budget_due_days,
+    verify_date_evidence,
+)
 from zhixing_next.finance_report_context import resolve_finance_report_context
 from zhixing_next.finance_service import FinanceService
 from zhixing_next.retrieval import create_retrieval_tools
@@ -100,3 +104,13 @@ async def test_internal_message_remains_readable_as_historical_data(state):
     tools = {item.name: item for item in create_retrieval_tools(store)}
     result = await tools["read_history_message"].ainvoke({"message_id": forwarded})
     assert result["content"] == "咨询结论仅供参考"
+
+
+@pytest.mark.parametrize("origin", [None, "user", "agent_message"])
+def test_history_range_normalization_uses_only_real_user_span(state, origin):
+    _, store, conversation = state
+    message = source(store, conversation, "3月5日资产6000，到现在提取过两次公积金，共2000元", origin=origin)
+    fields = {"date_precision": "range", "date_start": "2026-04-01", "date_end": "2026-04-09", "category": "公积金", "amount": "2000"}
+    result = normalize_history_range(store, source_id=message, fields=fields)
+    assert result["date_start"] == ("2026-04-01" if origin == "agent_message" else "2026-03-05")
+    assert result["date_end"] == "2026-04-09"
