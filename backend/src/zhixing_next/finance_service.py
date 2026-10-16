@@ -849,11 +849,18 @@ class FinanceService:
             ):
                 merged.update(date_start=None, date_end=None, date_precision="day")
             elif "date_start" in fields or "date_end" in fields or "date_precision" in fields:
-                merged.update(
-                    occurred_on=fields.get("occurred_on"),
-                    date_start=fields.get("date_start"),
-                    date_end=fields.get("date_end"),
-                )
+                precision = merged.get("date_precision", "day")
+                if precision == "day" and fields.get("occurred_on"):
+                    merged.update(
+                        date_start=fields.get("date_start"), date_end=fields.get("date_end")
+                    )
+                elif (
+                    precision == "month"
+                    and ("date_start" in fields or "occurred_on" in fields)
+                    and "date_end" not in fields
+                ):
+                    merged["date_end"] = None
+                merged["occurred_on"] = fields.get("occurred_on") or merged.get("date_end")
             data = self._validate_transaction(db, merged, identifier)
             columns = sorted(allowed)
             db.execute(
@@ -1009,6 +1016,20 @@ class FinanceService:
             }
 
         return self._mutate(idempotency_key, request, operation)
+
+    def reconcile_assets(
+        self, *, start_date, end_date, opening_assets, closing_assets, approximate=True
+    ):
+        from .finance_reconcile import reconcile_assets
+
+        return reconcile_assets(
+            self,
+            start_date=start_date,
+            end_date=end_date,
+            opening_assets=opening_assets,
+            closing_assets=closing_assets,
+            approximate=approximate,
+        )
 
     def list_transactions(self, *, month=None, limit=50, offset=0):
         month = _month(month)

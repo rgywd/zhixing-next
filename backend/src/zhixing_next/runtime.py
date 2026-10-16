@@ -519,6 +519,8 @@ async def _run_agent(
         physical_tools.extend(create_life_tools(settings, run["conversation_id"], source_id))
     if finance_tools:
         finance_tools.extend(create_finance_service_tools(settings, run["conversation_id"], source_id))
+    if not direct_agent and not forgetting:
+        physical_tools.extend(tool for tool in finance_tools if tool.name == "reconcile_finance_assets")
     health_tools = create_health_tools(settings, run["conversation_id"], source_id) if (direct_agent and direct_agent["id"] == "health") or any(item["id"] == "health" for item in agents) else []
     by_name = {tool.name: tool for tool in [*physical_tools, *finance_tools, *health_tools]}
     subagent_names = {"finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}" for item in agents}

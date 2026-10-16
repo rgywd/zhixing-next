@@ -79,7 +79,20 @@ class BudgetChanges(FinanceInput):
     ] = Field(default_factory=list)
 
 
-class RecordArguments(FinanceInput):
+class DatedToolInput(FinanceInput):
+    date_evidence: str | None = Field(
+        default=None,
+        max_length=240,
+        description="A short verbatim user quote stating the actual transaction date/month, e.g. 今天午饭32 or 9月10日交的. Required for precise AI day/month attribution. Observation balances, review cutoffs, fee coverage and payday schedules are not occurrence evidence; unknown history stays range without asking the user for a form.",
+    )
+    date_source_message_id: str | None = Field(
+        default=None,
+        max_length=200,
+        description="ID of that original user message; defaults to the current message. Retrieve historical source IDs using shared history tools when needed.",
+    )
+
+
+class RecordArguments(DatedToolInput):
     entry_key: str
     kind: Literal["expense", "income", "transfer", "refund"]
     amount: str
@@ -101,7 +114,7 @@ class RecordArguments(FinanceInput):
     coverage_end: str | None = None
 
 
-class CorrectionArguments(FinanceInput):
+class CorrectionArguments(DatedToolInput):
     transaction_id: str
     entry_key: str
     changes: TransactionChanges | None = None
@@ -124,8 +137,17 @@ class BatchOperation(FinanceInput):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
+class AIBatchOperation(BatchOperation):
+    date_evidence: str | None = Field(
+        default=None,
+        max_length=240,
+        description="Verbatim actual event-date quote, required for create/precise-date changes; do not put this inside fields",
+    )
+    date_source_message_id: str | None = Field(default=None, max_length=200)
+
+
 class BatchArguments(FinanceInput):
     entry_key: str
-    operations: list[BatchOperation] = Field(min_length=1, max_length=100)
+    operations: list[AIBatchOperation] = Field(min_length=1, max_length=100)
     conserve_total: bool = True
     reason: str = ""

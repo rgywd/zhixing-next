@@ -131,7 +131,11 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
 | `DELETE /v1/finance/transactions/{id}?idempotency_key=` | 软删除；存在关联退款时先处理退款，返回 `{deleted:true,id}` |
 | `GET /v1/finance/summary?month=&as_of=YYYY-MM-DD` | `{month,budget,totals,reservations,remaining,projection,coverage,daily_average,record_count}` |
 
-模型工具采用严格参数 schema，未知字段报错。已确认的既有资产提取不能记成新增收入；同用途预留的新 key 会返回已有项目供复用或显式替换，明确独立的项目可声明 `separate_from_keys`。这些有限语义检查不能取代核验原文与写后回读。纠正使用 `changes` 对象（兼容旧 `changes_json`，两者不能同时传）；放在顶层的 `amount` 不再被静默忽略。预算更新是字段 patch，省略保持现状，清空需 `clear_fields`；`commitments_upsert` 按 key 更新项目，`commitment_keys_remove` 显式移除。单月 patch 按字段继承后续沿用预算的修改。
+模型工具采用严格参数 schema，未知字段报错。已确认的既有资产提取不能记成新增收入；同用途预留的新 key 会返回已有项目供复用或显式替换，明确独立的项目可声明 `separate_from_keys`。这些有限语义检查不能取代核验原文与写后回读。AI 工具将历史记录收窄到日／月时还需 `date_evidence`（真实用户短引文）与可选 `date_source_message_id`；同日起止的 range 同样校验。余额时点、覆盖月份或发薪规则不能证明消费日。不明历史保留范围，由助手查原文与处理，不新增用户填表步骤；手工 HTTP 的明确日期输入保持原样。
+
+纠正使用 `changes` 对象（兼容旧 `changes_json`，两者不能同时传）；放在顶层的 `amount` 不再被静默忽略。预算更新是字段 patch，省略保持现状，清空需 `clear_fields`；`commitments_upsert` 按 key 更新项目，`commitment_keys_remove` 显式移除。单月 patch 按字段继承后续沿用预算的修改。
+
+`reconcile_finance_assets(start_date,end_date,opening_assets,closing_assets,approximate=true)` 只读已落账的已知流水，按相同资产范围计算期初加收入减净支出、预计期末及未解释差额。转账单列排除；部分相交的日期区间不猜分摊，累计和明细避免重复，近似余额与记录缺口随回执返回。报告引用程序公式，差额不自动变成消费或收入。
 
 `apply_finance_transaction_batch` 可将创建／纠正／删除作为同一事务执行；任一 revision 冲突或校验失败全部回滚。拆分需声明总额守恒，结果包含最终记录与校验信息，重试复用原回执。
 

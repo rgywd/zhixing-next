@@ -20,24 +20,65 @@ def fixture(tmp_path):
     settings = make_settings(tmp_path)
     store = Store(settings)
     service = FinanceService(store)
-    original = service.create_transaction(idempotency_key="received", kind="income", amount="16500", occurred_on="2026-10-15")
+    original = service.create_transaction(
+        idempotency_key="received", kind="income", amount="16500", occurred_on="2026-10-15"
+    )
     conversation = store.create_conversation("工资拆分", agent_id="finance")["id"]
-    store.submit_message(conversation, id="split-input", content="把16500拆成工资15000和奖金1500")
+    store.submit_message(
+        conversation, id="split-input", content="2026年10月15日收到16500，拆成工资15000和奖金1500"
+    )
     run = store.claim_next("chat")
     run["agent"] = store.get_agent("finance")
-    arguments = {"entry_key": "split-salary", "operations": [
-        {"operation": "update", "transaction_id": original["id"], "expected_revision": 1, "fields": {"amount": "15000", "category": "工资"}},
-        {"operation": "create", "fields": {"kind": "income", "amount": "1500", "occurred_on": "2026-10-15", "category": "奖金"}},
-    ]}
-    call = AIMessage(content="", tool_calls=[{"name": "apply_finance_transaction_batch", "args": arguments, "id": "split-batch", "type": "tool_call"}])
+    arguments = {
+        "entry_key": "split-salary",
+        "operations": [
+            {
+                "operation": "update",
+                "transaction_id": original["id"],
+                "expected_revision": 1,
+                "fields": {"amount": "15000", "category": "工资"},
+            },
+            {
+                "operation": "create",
+                "date_evidence": "2026年10月15日收到16500",
+                "fields": {
+                    "kind": "income",
+                    "amount": "1500",
+                    "occurred_on": "2026-10-15",
+                    "category": "奖金",
+                },
+            },
+        ],
+    }
+    call = AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "name": "apply_finance_transaction_batch",
+                "args": arguments,
+                "id": "split-batch",
+                "type": "tool_call",
+            }
+        ],
+    )
     return settings, store, service, run, call
 
 
 async def invoke(settings, run, model, controls=no_controls):
-    return await run_agent(settings, run, persona="", emit=ignore, controls=controls, acknowledge=ignore, model_override=model)
+    return await run_agent(
+        settings,
+        run,
+        persona="",
+        emit=ignore,
+        controls=controls,
+        acknowledge=ignore,
+        model_override=model,
+    )
 
 
-async def test_batch_committed_before_journal_crash_replays_same_receipt_without_duplicate_or_approval(tmp_path, monkeypatch):
+async def test_batch_committed_before_journal_crash_replays_same_receipt_without_duplicate_or_approval(
+    tmp_path, monkeypatch
+):
     settings, store, service, run, call = fixture(tmp_path)
     original = FinanceService.apply_transaction_batch
 
@@ -53,7 +94,11 @@ async def test_batch_committed_before_journal_crash_replays_same_receipt_without
     assert service.list_transactions(month="2026-10")["total"] == 2
     assert service.summary(month="2026-10")["totals"]["income"] == "16500.00"
     receipt = Journal(settings).receipts(run["id"])["items"]
-    assert len(receipt) == 1 and receipt[0]["tool"] == "apply_finance_transaction_batch" and receipt[0]["state"] == "started"
+    assert (
+        len(receipt) == 1
+        and receipt[0]["tool"] == "apply_finance_transaction_batch"
+        and receipt[0]["state"] == "started"
+    )
     store.recover_interrupted()
     resumed = Store(settings).claim_next("chat")
     resumed["agent"] = store.get_agent("finance")
@@ -62,9 +107,16 @@ async def test_batch_committed_before_journal_crash_replays_same_receipt_without
     assert Journal(settings).approvals()["items"] == []
     receipt = Journal(settings).receipts(run["id"])["items"]
     assert len(receipt) == 1 and receipt[0]["state"] == "succeeded"
-    actual = next(json.loads(message.content) for message in model.seen[0] if isinstance(message, ToolMessage) and message.tool_call_id == "split-batch")
+    actual = next(
+        json.loads(message.content)
+        for message in model.seen[0]
+        if isinstance(message, ToolMessage) and message.tool_call_id == "split-batch"
+    )
     assert actual["before"]["income"] == actual["after"]["income"] == "16500.00"
-    assert sorted(row["amount"] for row in service.list_transactions(month="2026-10")["items"]) == ["1500.00", "15000.00"]
+    assert sorted(row["amount"] for row in service.list_transactions(month="2026-10")["items"]) == [
+        "1500.00",
+        "15000.00",
+    ]
 
 
 async def test_cancel_before_batch_boundary_starts_no_mutation_or_journal(tmp_path):
@@ -86,7 +138,9 @@ async def test_worker_preserves_cancelled_receipt_and_pauses_followup_queue(tmp_
     store.cancel_run(run["id"])
 
     async def runner(settings, run, **callbacks):
-        return await run_agent(settings, run, **callbacks, model_override=ScriptedModel(replies=[call]))
+        return await run_agent(
+            settings, run, **callbacks, model_override=ScriptedModel(replies=[call])
+        )
 
     await Worker(settings, runner)._execute(run)
     assert store.get_run(run["id"])["status"] == "cancelled"

@@ -6,6 +6,7 @@ import json
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from .finance_dates import verify_date_evidence
 from .finance_schema import (
     BatchArguments,
     BudgetArguments,
@@ -25,11 +26,14 @@ FINANCE_TOOL_NAMES = [
     "delete_finance_transaction",
     "update_finance_budget",
     "apply_finance_transaction_batch",
+    "reconcile_finance_assets",
 ]
 FINANCE_INSTRUCTIONS = """你是知行的财务助手。新消费和收入必须使用record_finance_transaction；旧record_finance_observation仅用于balance余额观察，不能承接新收支。用户清楚表达的消费、收入、退款与预算修改直接通过财务服务工具保存，只有真实成功回执才能说已记录。收支以业务日期而非录入时间归月；今天使用Asia/Shanghai业务日期。不能编造金额、收入、消费或预算。日常、固定、一次性分别记录，大件仍计入真实结余。转账/信用卡还款使用transfer，不能当作新增消费。退款引用原消费ID。先查询真实记录和有效预算再纠正；不要把同日同额不同笔消费合并。固定费用付款仅在明确匹配时填写预算commitment_key。预计收入本身包含实收，不能相加两次。预算可默认沿用或单月覆盖，不把个人数字或规则写死。update_finance_budget仅修改用户提及字段；AI提出的预算不是用户已接受安排。同句多笔用不同且稳定的entry_key（如expense_1、expense_2），同一笔跨重试保持原entry_key；纠正用新操作entry_key及原记录ID。每个工具自动使用原消息source_id确保重试不重复。累计总额用aggregate及period_start，覆盖范围内明细不重复计；禁止把旧余额观察自动变为收入或确定业务日期的账目。覆盖不完整的日均未知，不把漏记当零消费；预测需说明依据和缺口。只有用户确认记录覆盖完整时才修改coverage_start/coverage_through。用户只发饮食照片时不猜餐费，跨服务部分成功时说明已经保存的部分并只补失败项。"""
 FINANCE_INSTRUCTIONS += " 收支日期不完整时使用date_precision=month或range及date_start/date_end，不可猜成今天；跨月未知单列未分配，不当作当月现金流。付款日期与费用覆盖月份coverage_start/end分开。季付租金只保留一份承诺，amount为实际付款额、every_months为周期、monthly_cost为月成本，不能另建月摊承诺重复预留。发薪规则存income_schedule；最后工作日通过共用date_info计算，未接法定调休时明确按周一至周五和用户例外。预算只传changes中修改字段，承诺用commitments_upsert或commitment_keys_remove，绝不能为省略未改字段传null；明确清空用clear_fields。更正用结构化changes；未知字段会报错，不能把未成功写入说成不支持。拆分已有收入/消费使用apply_finance_transaction_batch单事务且默认总额守恒；金额本身确需纠正才conserve_total=false并注明原因。工具成功后核对回执中的实际值，报告使用共用publish_report交付可打开文件，不能仅声称工作区文件已交付。"
 
 FINANCE_INSTRUCTIONS += " 重要记账语义：公积金提取、存款提现、取回赎回本金等是已有资产内部转移，使用transfer，不能因为到账银行卡就当income；只有新工资、新收益、新缴存才是income，混合时分别记录。首尾资产都包含的同一资产尤其不可再加作收入。用户只说某段期间收到N笔工资/提取时，N笔不证明实际月份，先把整个明确期间保存range；不要拆猜8月/9月或按发薪规则倒推已到账月份。后续发薪日规则只说明预计日程，不证明过去每笔发生日期。修改付款周期/金额要先查看现有commitments并复用同用途key，或在同一patch显式remove旧key后新增；不能保留旧月摊承诺再加季度款。amount永远是一次实际付款额，monthly_cost是amount/every_months，仅分币舍入。commitment工具回执verification同时给月成本、现金到期款、剩余预留与所有生效项，必须核对并再get_finance_summary；若仍有同用途项应纠正而非直接交付重复预留报告。"
+
+FINANCE_INSTRUCTIONS += " 实际发生日期必须来自原用户话：AI记day/month（包括同日起止range）或更正到精确日期时，date_evidence引用真实用户短句，date_source_message_id默认当前输入；历史原话可用共用read_history_message读取。余额观察日、回顾截止日、租金覆盖月份或发薪日程不能证明购买日。历史大件只有金额没有购买日时直接保留原历史范围，不可按‘现在余额更新时点’塞今天/本月，也不要让用户补表。报告涉及起止资产核对时必须调用reconcile_finance_assets，并原样采用回执计算公式和金额；内部transfer单列，永远不加到新增收入，不得另用calculate把transfer加回。unexplained_difference仅是已知流水口径未解释的资产差额，不是已发生消费，不得自动记账或称为实际日常开销。近似资产、范围部分相交及覆盖缺口在报告简述。"
 
 
 class SummaryArguments(FinanceInput):
@@ -38,6 +42,14 @@ class SummaryArguments(FinanceInput):
 
 class ListArguments(SummaryArguments):
     offset: int = Field(default=0, ge=0)
+
+
+class ReconcileArguments(FinanceInput):
+    start_date: str
+    end_date: str
+    opening_assets: str
+    closing_assets: str
+    approximate: bool = True
 
 
 class DeleteArguments(FinanceInput):
@@ -101,8 +113,25 @@ def create_finance_service_tools(settings, conversation_id: str, source_id: str)
         date_end: str | None = None,
         coverage_start: str | None = None,
         coverage_end: str | None = None,
+        date_evidence: str | None = None,
+        date_source_message_id: str | None = None,
     ) -> dict:
-        """Record explicit CNY cash flow with stable distinct entry_key. Exact day: occurred_on YYYY-MM-DD. Month-only: date_precision=month,date_start=YYYY-MM. Uncertain range: date_precision=range,date_start/date_end YYYY-MM-DD. Never invent today. coverage_start/end are YYYY-MM costs covered by a payment. Withdrawals of provident funds, deposits or returned principal are existing-asset transfer, never income; new external earnings/contributions are income. A count of past payments does not prove months: preserve the user's stated whole period as range. Refund references an expense. aggregate is an explicit cumulative total with period_start."""
+        """Record explicit CNY cash flow with stable distinct entry_key. Exact day: occurred_on YYYY-MM-DD. Month-only: date_precision=month,date_start=YYYY-MM. Uncertain range: date_precision=range,date_start/date_end YYYY-MM-DD. Never invent today. coverage_start/end are YYYY-MM costs covered by a payment. Withdrawals of provident funds, deposits or returned principal are existing-asset transfer, never income; new external earnings/contributions are income. A count of past payments does not prove months: preserve the user's stated whole period as range. Precise day/month or same-day range requires date_evidence quoting a user-stated ACTUAL event date; do not use an asset observation date, review cutoff, cost coverage or recurring rule. Refund references an expense. aggregate is an explicit cumulative total with period_start."""
+        proof = verify_date_evidence(
+            service.store,
+            conversation_id=conversation_id,
+            source_id=source_id,
+            fields={
+                "date_precision": date_precision,
+                "date_start": date_start,
+                "date_end": date_end,
+                "occurred_on": occurred_on,
+                "category": category,
+                "note": note,
+            },
+            evidence=date_evidence,
+            evidence_source_id=date_source_message_id,
+        )
         row = service.create_transaction(
             idempotency_key=key("record", entry_key),
             kind=kind,
@@ -123,7 +152,7 @@ def create_finance_service_tools(settings, conversation_id: str, source_id: str)
             coverage_start=coverage_start,
             coverage_end=coverage_end,
         )
-        return {**row, "verified": True}
+        return {**row, "verified": True, "date_verification": proof}
 
     @tool(args_schema=CorrectionArguments)
     async def correct_finance_transaction(
@@ -132,20 +161,38 @@ def create_finance_service_tools(settings, conversation_id: str, source_id: str)
         changes=None,
         changes_json: str | None = None,
         expected_revision: int | None = None,
+        date_evidence: str | None = None,
+        date_source_message_id: str | None = None,
     ) -> dict:
-        """Correct an existing ID with structured changes object, e.g. changes={amount:'42'}. Read ID/revision first. Do not place amount at top level. Unknown fields are rejected. Legacy changes_json is accepted instead of changes, never together. Keep entry_key stable across retry."""
+        """Correct an existing ID with structured changes object, e.g. changes={amount:'42'}. Read ID/revision first. Do not place amount at top level. Unknown fields are rejected. Legacy changes_json is accepted instead of changes, never together. Keep entry_key stable across retry. Precise date changes require top-level date_evidence and optional date_source_message_id referencing the actual user occurrence-date quote; other non-date changes need no new evidence."""
         fields = _changes(changes, changes_json, TransactionChanges)
         if not fields:
             raise StoreError(
                 "invalid_finance_record", "At least one changed field is required", 422
             )
+        with service.store._connection() as db:
+            current = service._require(db, transaction_id)
+        proof = verify_date_evidence(
+            service.store,
+            conversation_id=conversation_id,
+            source_id=source_id,
+            fields=fields,
+            current=current,
+            evidence=date_evidence,
+            evidence_source_id=date_source_message_id,
+        )
         row = service.update_transaction(
             transaction_id,
             idempotency_key=key("correct", entry_key),
             expected_revision=expected_revision,
             **fields,
         )
-        return {**row, "verified": True, "changed_fields": sorted(fields)}
+        return {
+            **row,
+            "verified": True,
+            "changed_fields": sorted(fields),
+            "date_verification": proof,
+        }
 
     @tool(args_schema=DeleteArguments)
     async def delete_finance_transaction(transaction_id: str, entry_key: str) -> dict:
@@ -173,18 +220,58 @@ def create_finance_service_tools(settings, conversation_id: str, source_id: str)
     async def apply_finance_transaction_batch(
         entry_key: str, operations: list, conserve_total: bool = True, reason: str = ""
     ) -> dict:
-        """Atomically create/correct/delete multiple records. Each operation is {operation:create|update|delete,transaction_id?,expected_revision?,fields:{...}}. Split by updating/deleting original plus creating distinct parts in ONE batch; default conserve_total=true checks each income/expense/transfer total. For an explicitly corrected total/classification set false with reason. Any failure rolls back all operations. Never first record parts then delete original in separate tools."""
+        """Atomically create/correct/delete multiple records. Each operation is {operation:create|update|delete,transaction_id?,expected_revision?,fields:{...}}. Split by updating/deleting original plus creating distinct parts in ONE batch; default conserve_total=true checks each income/expense/transfer total. For an explicitly corrected total/classification set false with reason. Any failure rolls back all operations. Each precise-date create/change requires date_evidence and optional date_source_message_id at operation top level (outside fields). Never first record parts then delete original in separate tools."""
         values = [
             item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
             for item in operations
         ]
-        return service.apply_transaction_batch(
+        proofs = []
+        for operation in values:
+            evidence = operation.pop("date_evidence", None)
+            evidence_source_id = operation.pop("date_source_message_id", None)
+            if operation["operation"] == "delete":
+                proofs.append(None)
+                continue
+            current = None
+            if operation["operation"] == "update":
+                with service.store._connection() as db:
+                    current = service._require(db, operation.get("transaction_id"))
+            proofs.append(
+                verify_date_evidence(
+                    service.store,
+                    conversation_id=conversation_id,
+                    source_id=source_id,
+                    fields=operation.get("fields") or {},
+                    current=current,
+                    evidence=evidence,
+                    evidence_source_id=evidence_source_id,
+                )
+            )
+        result = service.apply_transaction_batch(
             idempotency_key=key("batch", entry_key),
             operations=values,
             conserve_total=conserve_total,
             reason=reason,
             conversation_id=conversation_id,
             source_id=source_id,
+        )
+        return {**result, "date_verifications": proofs}
+
+    @tool(args_schema=ReconcileArguments)
+    async def reconcile_finance_assets(
+        start_date: str,
+        end_date: str,
+        opening_assets: str,
+        closing_assets: str,
+        approximate: bool = True,
+    ) -> dict:
+        """Read-only reconciliation for the SAME total-assets scope at start/end. Program computes opening + actual income - net expense = expected closing. Transfers/withdrawals of existing assets are listed separately and NEVER added to income. Whole known-date ranges inside this observation period are included; partial overlaps remain unknown. Return exact formula for reports; unexplained difference is NOT a new consumption record. Approximate balance inputs default true. Do not manually add transfers back into this formula."""
+        return service.reconcile_assets(
+            start_date=start_date,
+            end_date=end_date,
+            opening_assets=opening_assets,
+            closing_assets=closing_assets,
+            approximate=approximate,
         )
 
     return [
@@ -195,4 +282,5 @@ def create_finance_service_tools(settings, conversation_id: str, source_id: str)
         delete_finance_transaction,
         update_finance_budget,
         apply_finance_transaction_batch,
+        reconcile_finance_assets,
     ]

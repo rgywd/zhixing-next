@@ -625,7 +625,7 @@ async def test_real_graph_sees_finance_errors_and_corrects_without_false_success
             ]
         },
     )
-    run = make_run("finance-errors")
+    run = make_run("finance-errors", "2026年10月15日提取公积金100元")
     run["agent"] = store.get_agent("finance")
 
     def call(name, args, identifier):
@@ -640,6 +640,7 @@ async def test_real_graph_sees_finance_errors_and_corrects_without_false_success
         "amount": "100",
         "occurred_on": "2026-10-15",
         "category": "公积金提取",
+        "date_evidence": "2026年10月15日提取公积金100元",
     }
     quarterly = {
         "key": "new-rent",
