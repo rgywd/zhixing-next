@@ -7,6 +7,7 @@ import json
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
+from .finance_context import active_finance_input, delegated_finance_input
 from .finance_dates import verify_budget_due_days, verify_date_evidence
 from .finance_schema import (
     BatchArguments,
@@ -100,10 +101,14 @@ def create_finance_service_tools(
 
     service = FinanceService(Store(settings))
 
+    def actual_source():
+        return active_finance_input.get() or delegated_finance_input.get() or source_id
+
     def key(operation, entry_key):
-        if not source_id or not entry_key or not entry_key.strip():
+        current_source = actual_source()
+        if not current_source or not entry_key or not entry_key.strip():
             raise StoreError("missing_source", "A stable source and entry key are required", 422)
-        scope = json.dumps([source_id, operation, entry_key], ensure_ascii=False)
+        scope = json.dumps([current_source, operation, entry_key], ensure_ascii=False)
         return "finance-tool:" + hashlib.sha256(scope.encode()).hexdigest()
 
     @tool(args_schema=SummaryArguments)
@@ -141,7 +146,7 @@ def create_finance_service_tools(
         proof = verify_date_evidence(
             service.store,
             conversation_id=conversation_id,
-            source_id=source_id,
+            source_id=actual_source(),
             fields={
                 "date_precision": date_precision,
                 "date_start": date_start,
@@ -164,7 +169,7 @@ def create_finance_service_tools(
             commitment_key=commitment_key,
             related_transaction_id=related_transaction_id,
             conversation_id=conversation_id,
-            source_id=source_id,
+            source_id=actual_source(),
             entry_type=entry_type,
             period_start=period_start,
             date_precision=date_precision,
@@ -196,7 +201,7 @@ def create_finance_service_tools(
         proof = verify_date_evidence(
             service.store,
             conversation_id=conversation_id,
-            source_id=source_id,
+            source_id=actual_source(),
             fields=fields,
             current=current,
             evidence=date_evidence,
@@ -245,7 +250,7 @@ def create_finance_service_tools(
                 service,
                 month=month,
                 changes=fields,
-                source_id=source_id,
+                source_id=actual_source(),
                 evidence=date_evidence,
                 evidence_source_id=date_source_message_id,
             )
@@ -284,7 +289,7 @@ def create_finance_service_tools(
                 verify_date_evidence(
                     service.store,
                     conversation_id=conversation_id,
-                    source_id=source_id,
+                    source_id=actual_source(),
                     fields=operation.get("fields") or {},
                     current=current,
                     evidence=evidence,
@@ -297,7 +302,7 @@ def create_finance_service_tools(
             conserve_total=conserve_total,
             reason=reason,
             conversation_id=conversation_id,
-            source_id=source_id,
+            source_id=actual_source(),
         )
         return {**result, "date_verifications": proofs}
 
@@ -330,7 +335,6 @@ def create_finance_service_tools(
     ]
     if run is not None and emit is not None:
         from .common_reports import create_report_tool
-        from .finance_context import active_finance_input
         from .finance_report import build_finance_report, format_finance_completion
         from .resources import resource_bytes
 
@@ -387,7 +391,7 @@ def create_finance_service_tools(
                 "approximate": approximate,
                 "filename": filename,
             }
-            actual_input = active_finance_input.get() or source_id
+            actual_input = actual_source()
             report_scope = [source_id, arguments]
             if actual_input != source_id:
                 report_scope.append(actual_input)

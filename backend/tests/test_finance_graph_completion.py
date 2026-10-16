@@ -208,7 +208,7 @@ async def test_same_publisher_id_new_steer_crash_replays_scoped_journal_and_orig
     with pytest.raises(Crash):
         await run_agent(settings, run, persona="", emit=emit, controls=controls, acknowledge=acknowledge, model_override=model)
     receipts = Journal(settings).receipts(run["id"])["items"]
-    assert {item["call_id"] for item in receipts} == {"same-provider-id", "budget-write", "same-provider-id:new-input"}
+    assert {item["call_id"] for item in receipts} == {"same-provider-id", "budget-write:new-input", "same-provider-id:new-input"}
     assert next(item for item in receipts if item["call_id"] == "same-provider-id:new-input")["state"] == "started"
     store.recover_interrupted()
     resumed = store.claim_next("chat")

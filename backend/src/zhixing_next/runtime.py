@@ -54,6 +54,7 @@ FINANCE_REPORT_WRITES = {
     "update_finance_budget", "apply_finance_transaction_batch", "record_finance_observation",
     "remove_finance_observation", "record_life_meal", "correct_life_meal",
 }
+FINANCE_MUTATION_TOOLS = FINANCE_REPORT_WRITES - {"record_life_meal", "correct_life_meal"}
 
 
 class RuntimeState(DeepAgentState):
@@ -184,10 +185,15 @@ def _portable_history(messages: list[Any]) -> list[Any]:
 
 
 def _seen_finance_input(store, run_id, messages):
+    from .finance_context import delegated_finance_input
+
     with store._connection() as db:
         for message in reversed(messages):
             if isinstance(message, HumanMessage) and message.id and db.execute("SELECT 1 FROM messages WHERE id=? AND run_id=? AND role='user' AND status IN ('accepted','applied')", (message.id, run_id)).fetchone():
                 return message.id
+        inherited = delegated_finance_input.get()
+        if inherited and db.execute("SELECT 1 FROM messages WHERE id=? AND run_id=? AND role='user' AND status IN ('accepted','applied')", (inherited, run_id)).fetchone():
+            return inherited
     return None
 
 
@@ -279,16 +285,21 @@ def _successful_finance_writes(settings, run_id, messages):
                     calls[call["id"]] = call["name"]
     if not calls:
         return []
-    with Store(settings)._connection() as db:
+    store = Store(settings)
+    source_id = _seen_finance_input(store, run_id, messages)
+    with store._connection() as db:
+        run = db.execute("SELECT message_id FROM runs WHERE id=?", (run_id,)).fetchone()
         rows = db.execute("SELECT id,call_id,tool,result_json FROM operations WHERE run_id=? AND state='succeeded' ORDER BY created_at,id", (run_id,)).fetchall()
+    scoped = {call_id + ":" + source_id if source_id and run and source_id != run["message_id"] and name in FINANCE_MUTATION_TOOLS else call_id: call_id for call_id, name in calls.items()}
     result = []
     for row in rows:
-        if calls.get(row["call_id"]) != row["tool"] or not row["result_json"]:
+        call_id = scoped.get(row["call_id"])
+        if call_id is None or calls.get(call_id) != row["tool"] or not row["result_json"]:
             continue
         message = decode_result(json.loads(row["result_json"]))
         if not isinstance(message, ToolMessage) or message.status != "success":
             continue
-        actual = replies.get(row["call_id"])
+        actual = replies.get(call_id)
         if actual is None or actual.status != "success" or actual.content != message.content:
             continue
         try:
@@ -454,12 +465,15 @@ class RunControls(AgentMiddleware):
         return response
 
     async def awrap_tool_call(self, request, handler):
+        from .finance_tools import FINANCE_TOOL_NAMES
+
         call = request.tool_call
         journal_call = call
         source_id = None
-        if call["name"] == "publish_finance_report" and self.operations:
+        finance_tool = call["name"] in FINANCE_TOOL_NAMES or call["name"] in FINANCE_MUTATION_TOOLS
+        if (finance_tool or call["name"] == "task") and self.operations:
             source_id = _seen_finance_input(self.operations.journal.store, self.run_id, request.state.get("messages", []))
-            if source_id and source_id != self.operations.run.get("message_id"):
+            if call["name"] in FINANCE_MUTATION_TOOLS | {"publish_finance_report", "task"} and source_id and source_id != self.operations.run.get("message_id"):
                 journal_call = {**call, "id": call["id"] + ":" + source_id}
         if await self.pending(request.state):
             if self.operations:
@@ -489,16 +503,15 @@ class RunControls(AgentMiddleware):
             self.budget.reserve("tool_calls")
             self.budget.check_loop(call, request.state)
         if self.operations:
-            from .finance_context import active_finance_input
+            from .finance_context import active_finance_input, delegated_finance_input
 
-            context_token = None
-            if call["name"] == "publish_finance_report":
-                context_token = active_finance_input.set(source_id)
+            context = active_finance_input if finance_tool else delegated_finance_input if call["name"] == "task" else None
+            context_token = context.set(source_id) if context is not None else None
             try:
                 result = await self.operations.invoke(journal_call, lambda: self._invoke_tool(request, handler))
             finally:
                 if context_token is not None:
-                    active_finance_input.reset(context_token)
+                    context.reset(context_token)
             result = _original_tool_reply(result, call["id"])
             if call["name"] in {"write_text_file", "copy_file"}:
                 await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed" if result.status == "error" else "completed"})
