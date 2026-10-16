@@ -5,8 +5,10 @@ import hashlib
 import json
 from typing import Any
 
+import httpx
 import pytest
 from langchain.agents import create_agent
+from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import tool
@@ -100,6 +102,31 @@ async def test_research_cap_does_not_change_other_readonly_graphs():
     assert len(model.seen) == 8 and guard.research_model_calls == 0
 
 
+async def test_retry_wakeup_without_provider_response_does_not_acknowledge_input(tmp_path, monkeypatch):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    conversation = store.create_conversation("Retry receipt")
+    store.submit_message(conversation["id"], id="request", content="Check the evidence")
+    run = store.claim_next("chat")
+    calls = 0
+
+    async def controls():
+        nonlocal calls
+        calls += 1
+        return {"cancel_requested": False, "steers": [{"id": "new-input", "content": "A correction"}] if calls > 1 else []}
+
+    async def failed_provider(request):
+        raise httpx.ConnectError("Synthetic connection failure")
+
+    monkeypatch.setattr("zhixing_next.resilience.retry_delay", lambda *args: 1)
+    guard = RunControls(controls, ignore, budget=RunBudget(store, run["id"]), research=True)
+    message = HumanMessage(content="Not successfully consumed", id="unconsumed-input")
+    request = ModelRequest(model=ScriptedModel(replies=[]), messages=[message], tools=[], state={"messages": [message]})
+    response = await guard.awrap_model_call(request, failed_provider)
+    assert response.result[0].content == ""  # Budget's wakeup, not a provider result.
+    assert guard.research_consumed_ids == set()
+
+
 class BoundaryModel(ScriptedModel):
     final_entered: Any
     final_release: Any
@@ -113,6 +140,54 @@ class BoundaryModel(ScriptedModel):
             finally:
                 self.stopped.set()
         return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+
+class BoundaryCoordinator(LimitCoordinator):
+    child_entered: Any
+    child_release: Any
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+        if len(self.seen) == 1:
+            self.seen.append(messages)
+            await self.child_entered.wait()
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content="", tool_calls=[{
+                "name": "send_agent", "args": {"agent_id": self.child_id, "message": "Correct the assumption"},
+                "id": "late-followup", "type": "tool_call",
+            }]))])
+        if len(self.seen) == 2:
+            self.child_release.set()
+        return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+
+@pytest.mark.parametrize("at_final_boundary", [False, True])
+async def test_delivery_receipt_tracks_actual_model_consumption_not_history_snapshot(tmp_path, monkeypatch, at_final_boundary):
+    settings = make_settings(tmp_path)
+    run = make_run("delivery-at-boundary")
+    child_id = "a_" + hashlib.sha256(f"{run['id']}:start".encode()).hexdigest()[:16]
+    entered, release, stopped = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    if at_final_boundary:
+        child = BoundaryModel(replies=[*[calculation(index) for index in range(5)], AIMessage(content="Obsolete summary")], final_entered=entered, final_release=release, stopped=stopped)
+    else:
+        child = ScriptedModel(replies=[calculation(0), AIMessage(content="The new instruction is included in this result.")], entered=entered, release=release)
+    monkeypatch.setattr("zhixing_next.runtime.create_model", lambda *args, **kwargs: child)
+    parent = BoundaryCoordinator(replies=[], child_id=child_id, child_entered=entered, child_release=release)
+    await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=parent)
+    store = Store(settings)
+    row = ChildLedger(store, run["id"]).get(child_id)
+    with store._connection() as db:
+        delivery = dict(db.execute("SELECT * FROM agent_child_inputs WHERE child_id=?", (child_id,)).fetchone())
+    history = _decode_history(row["history_json"])
+    assert any(isinstance(message, HumanMessage) and message.id == delivery["id"] for message in history)
+    model_saw_delivery = any(isinstance(message, HumanMessage) and message.id == delivery["id"] for messages in child.seen for message in messages)
+    if at_final_boundary:
+        assert row["status"] == "failed" and row["error_code"] == "ResearchLimitError"
+        assert delivery["status"] == "interrupted" and not model_saw_delivery
+        assert stopped.is_set() and len(child.seen) == 6
+        assert row["result"] is None
+    else:
+        assert row["status"] == "completed" and row["error_code"] is None
+        assert delivery["status"] == "applied" and model_saw_delivery
+        assert "new instruction" in row["result"]
 
 
 async def test_summary_boundary_still_checks_cancel_and_does_not_discard_steer():

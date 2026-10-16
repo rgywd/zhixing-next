@@ -379,6 +379,7 @@ class RunControls(AgentMiddleware):
         self.finance_completion = finance_completion
         self.collaboration, self.read_only = collaboration, read_only
         self.research, self.research_model_calls = research, 0
+        self.research_consumed_ids: set[str] = set()
         self.subagent_descriptions = subagent_descriptions or {}
         self.named_task_schema = create_schema_model(
             "NamedAgentTask",
@@ -507,11 +508,17 @@ class RunControls(AgentMiddleware):
             prepared = prepared.override(system_message=SystemMessage(content=(_text(request.system_message) if request.system_message else "") + "\n" + policy))
         from .finance_context import finance_write_model
 
+        async def research_handler(prepared_request):
+            result = await handler(prepared_request)
+            self.research_consumed_ids.update(message.id for message in prepared_request.messages if isinstance(message, HumanMessage) and message.id)
+            return result
+
         token = finance_write_model.set(bool(writes or report_completion))
         try:
             if self.research:
                 self.research_model_calls += 1
-            response = await self.budget.invoke_model(handler, prepared, self.controls, self.emit) if self.budget else await handler(prepared)
+            model_handler = research_handler if self.research else handler
+            response = await self.budget.invoke_model(model_handler, prepared, self.controls, self.emit) if self.budget else await model_handler(prepared)
         finally:
             finance_write_model.reset(token)
         envelope = response.model_response if isinstance(response, ExtendedModelResponse) else response
@@ -961,7 +968,7 @@ async def _run_agent(
             latest = initial
             async for value in graph.astream({"messages": initial}, config={"recursion_limit": 50, "tags": ["langsmith:nostream"], "metadata": {"zhixing_child_id": child["id"]}}, stream_mode="values"):
                 latest = value.get("messages", latest)
-                save_snapshot(latest)
+                save_snapshot(latest, applied_ids=child_middleware.research_consumed_ids)
             return latest
 
         collaboration = AgentCollaboration(store, run, research_runner, emit, controls)

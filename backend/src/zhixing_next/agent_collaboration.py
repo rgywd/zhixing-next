@@ -169,8 +169,10 @@ class ChildLedger:
             self._require(db, child_id)
             return [dict(row) for row in db.execute("SELECT * FROM agent_child_inputs WHERE child_id=? AND status='queued' ORDER BY seq", (child_id,))]
 
-    def save_snapshot(self, child_id, history):
+    def save_snapshot(self, child_id, history, *, applied_ids=None):
         present = {message.id for message in history}
+        if applied_ids is not None:
+            present.intersection_update(applied_ids)
         with self.store._connection(write=True) as db:
             self._require(db, child_id)
             db.execute("UPDATE agent_children SET history_json=?,updated_at=? WHERE id=?", (_encode_history(history), timestamp(), child_id))
@@ -259,7 +261,7 @@ class AgentCollaboration:
                         return
                     await self.emit(kind, {**data, "child_id": child.id})
 
-                child.history = await self.runner(row, child.history, controls, emit, lambda history: self.ledger.save_snapshot(child.id, history))
+                child.history = await self.runner(row, child.history, controls, emit, lambda history, *, applied_ids=None: self.ledger.save_snapshot(child.id, history, applied_ids=applied_ids))
                 if child.close_requested or self.shutting_down:
                     raise asyncio.CancelledError()
                 from langchain_core.messages import AIMessage
