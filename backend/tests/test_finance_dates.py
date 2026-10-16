@@ -406,6 +406,28 @@ async def test_equal_amount_events_cannot_lend_a_date_to_undated_history(setup, 
     assert FinanceService(store).list_transactions(month="2026-04")["total"] == 0
 
 
+@pytest.mark.parametrize("separator", ["、", "以及", "还有", " ", ""])
+@pytest.mark.parametrize("hint", [None, "4月9日打车32元"])
+async def test_unseparated_equal_amount_events_cannot_borrow_a_date(setup, separator, hint):
+    store, conversation = setup
+    source = user(store, conversation, f"4月9日打车32元{separator}之前买书32元记一下")
+    with pytest.raises(StoreError) as error:
+        await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+            fields(category="图书", date_evidence=hint)
+        )
+    assert error.value.code == "unverified_finance_date"
+    assert FinanceService(store).list_transactions(month="2026-04")["total"] == 0
+
+
+async def test_separable_enumerated_equal_amount_events_can_bind_to_their_own_dates(setup):
+    store, conversation = setup
+    source = user(store, conversation, "4月9日打车32元、昨天买书32元")
+    book = await tools(store, conversation, source)["record_finance_transaction"].ainvoke(
+        fields(category="买书", occurred_on="2026-04-08")
+    )
+    assert book["occurred_on"] == "2026-04-08"
+
+
 async def test_equal_amount_events_with_explicit_subject_binding_keep_their_own_dates(setup):
     store, conversation = setup
     source = user(store, conversation, "4月9日打车32元，昨天买书32元")

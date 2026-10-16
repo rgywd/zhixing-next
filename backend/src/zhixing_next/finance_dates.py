@@ -142,11 +142,15 @@ def _event_clause(clause, fields):
 
 
 def _same_amount(clause, value):
+    return _amount_count(clause, value) > 0
+
+
+def _amount_count(clause, value):
     try:
         amount = Decimal(str(value))
     except InvalidOperation:
-        return False
-    return any(
+        return 0
+    return sum(
         Decimal(match[1]) == amount
         and not re.match(r"\s*(?:年|月|日|号|笔|次|个|%)", clause[match.end():])
         for match in re.finditer(r"(?<![\d.])(\d+(?:\.\d{1,2})?)(?![\d.])", clause)
@@ -248,7 +252,15 @@ def verify_date_evidence(
         for index, aliases in enumerate(_SUBJECTS)
         if any(re.sub(r"\s", "", alias).casefold() in subject for alias in aliases)
     }
-    contexts = list(re.finditer(r"[^，,。；;\n]+", row["content"]))
+    contexts = list(re.finditer(r"[^，,。；;、\n]+", row["content"]))
+    if any(
+        not _NON_EVENT.search(match.group()) and _amount_count(match.group(), effective.get("amount")) > 1
+        for match in contexts
+    ):
+        # The source contains more than one equal-amount candidate inside one
+        # unsplit phrase. Neither a cropped quote nor category text identifies
+        # which occurrence a date modifies. Do not guess a conjunction grammar.
+        fail("Several equal-amount occurrences have no separable event/date binding. Keep the known period rather than borrowing another occurrence's date.")
     amount_contexts = [
         match for match in contexts
         if not _NON_EVENT.search(match.group()) and _same_amount(match.group(), effective.get("amount"))
