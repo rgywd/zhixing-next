@@ -150,3 +150,115 @@ async def test_recurring_rule_quote_preserves_spaces_and_does_not_use_wages_day_
         await tool(store, conversation, other).ainvoke(
             {**arguments(20, "mixed-rule"), "date_evidence": "房租每月7日、工资每月20日到账"}
         )
+
+
+@pytest.mark.parametrize(
+    "content,quote,label",
+    [
+        ("房租按季度支付，电费每月12号交。", "电费每月12号交", "房租"),
+        ("房租按季度支付，医疗保险每月12号交。", "医疗保险每月12号交", "房租"),
+        ("医疗保险按年缴纳，音乐会员每月12号交。", "音乐会员每月12号交", "医疗保险"),
+        ("音乐会员按年支付，医疗保险每月12号交。", "医疗保险每月12号交", "音乐会员"),
+        ("房租按季度付而电费每月12号交。", "每月12号交", "房租"),
+        ("房租每月7号和电费每月12号支付。", "房租每月7号和电费每月12号支付", "房租"),
+    ],
+)
+async def test_recurring_day_cannot_borrow_another_explicit_cost_subject(
+    state, content, quote, label
+):
+    store, conversation = state
+    message = source(store, conversation, content)
+    args = arguments(12)
+    args["changes"]["commitments_upsert"][0]["label"] = label
+    with pytest.raises(StoreError) as error:
+        await tool(store, conversation, message).ainvoke({**args, "date_evidence": quote})
+    assert error.value.code == "unverified_budget_due_day"
+    assert FinanceService(store).get_budget("2026-04")["commitments"] == []
+
+
+@pytest.mark.parametrize(
+    "content,quote,label",
+    [
+        ("所有固定费用统一按12号支付。", "所有固定费用统一按12号支付", "房租"),
+        ("全部费用每月12号统一支付。", "全部费用每月12号统一支付", "医疗保险"),
+        ("医疗保险每月12号缴费。", "医疗保险每月12号缴费", "医疗保险"),
+        ("音乐会员每月12号付款。", "音乐会员每月12号付款", "音乐会员"),
+        ("房租按季度支付，统一按12号付款。", "统一按12号付款", "房租"),
+        ("医疗保险按年缴费，统一按12号付款。", "统一按12号付款", "医疗保险"),
+        ("房租每月 12 号支付。", "每月 12 号支付", "房租"),
+    ],
+)
+async def test_recurring_day_accepts_own_label_global_rule_or_direct_subject_reference(
+    state, content, quote, label
+):
+    store, conversation = state
+    message = source(store, conversation, content)
+    args = arguments(12)
+    args["changes"]["commitments_upsert"][0]["label"] = label
+    receipt = await tool(store, conversation, message).ainvoke({**args, "date_evidence": quote})
+    assert receipt["commitments"][0]["due_day"] == 12
+
+
+async def test_explicit_rent_day_ten_with_spaces_remains_accepted(state):
+    store, conversation = state
+    message = source(store, conversation, "房租支付统一按 10 日计算，然后采用季度付款。")
+    receipt = await tool(store, conversation, message).ainvoke(
+        {**arguments(10), "date_evidence": "房租支付统一按 10 日计算"}
+    )
+    assert receipt["commitments"][0]["due_day"] == 10
+
+
+@pytest.mark.parametrize("old_label,new_label", [("房租", "电费"), ("医疗保险", "音乐会员")])
+async def test_same_patch_rename_cannot_borrow_another_cost_day(state, old_label, new_label):
+    store, conversation = state
+    original = arguments(None)["changes"]["commitments_upsert"][0]
+    original["label"] = old_label
+    service = FinanceService(store)
+    service.patch_budget(
+        month="2026-04", idempotency_key="existing-identity", changes={"commitments_upsert": [original]}
+    )
+    quote = f"{new_label}每月12号交"
+    message = source(store, conversation, f"{old_label}按季度支付，{quote}。")
+    incoming = arguments(12)
+    incoming["changes"]["commitments_upsert"][0]["label"] = new_label
+    with pytest.raises(StoreError) as error:
+        await tool(store, conversation, message).ainvoke({**incoming, "date_evidence": quote})
+    assert error.value.code == "unverified_budget_due_day"
+    assert service.get_budget("2026-04")["commitments"][0]["label"] == old_label
+
+
+async def test_same_cost_label_adjustment_still_uses_saved_identity_rule(state):
+    store, conversation = state
+    original = arguments(None)["changes"]["commitments_upsert"][0]
+    FinanceService(store).patch_budget(
+        month="2026-04", idempotency_key="existing-identity", changes={"commitments_upsert": [original]}
+    )
+    message = source(store, conversation, "房租统一按 10 日支付，名称改成季度租金。")
+    incoming = arguments(10)
+    incoming["changes"]["commitments_upsert"][0]["label"] = "季度租金"
+    receipt = await tool(store, conversation, message).ainvoke(
+        {**incoming, "date_evidence": "房租统一按 10 日支付"}
+    )
+    assert receipt["commitments"][0]["label"] == "季度租金"
+    assert receipt["commitments"][0]["due_day"] == 10
+
+
+@pytest.mark.parametrize(
+    "content,quote,label",
+    [
+        ("所有账单除房租外每月12日支付。", "所有账单除房租外每月12日支付", "房租"),
+        ("所有账单每月12日支付，房租除外。", "所有账单每月12日支付", "房租"),
+        ("全部费用统一12号支付，但医疗保险另行约定。", "全部费用统一12号支付", "医疗保险"),
+    ],
+)
+async def test_global_rule_with_an_exception_never_authorizes_a_cost_day(
+    state, content, quote, label
+):
+    store, conversation = state
+    message = source(store, conversation, content)
+    args = arguments(12)
+    args["changes"]["commitments_upsert"][0]["label"] = label
+    with pytest.raises(StoreError) as error:
+        await tool(store, conversation, message).ainvoke({**args, "date_evidence": quote})
+    assert error.value.code == "unverified_budget_due_day"
+    assert FinanceService(store).get_budget("2026-04")["commitments"] == []

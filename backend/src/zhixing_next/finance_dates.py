@@ -325,19 +325,61 @@ def verify_budget_due_days(
     from .finance_service import _commitment_purposes
 
     known = {"purpose:housing", "purpose:commute", "purpose:telecom"}
-    source_purposes = _commitment_purposes({"label": row["content"]}) & known
+    contexts = re.findall(r"[^，,。；;、\n]+", row["content"])
+    global_rule = re.compile(r"(?:所有|全部|各项|各笔)(?:固定|计划)?(?:费用|开销|支出|账单|付款|款项)")
+    exceptions = re.compile(r"除|不含|不包括|例外|另行|单独|特殊|但|不过|不适用")
+    sentences = re.split(r"[。；;\n]", row["content"])
+
+    def normalize(value):
+        value = re.sub(r"[（(][^）)]*[）)]", "", value)
+        return re.sub(r"[^\w]", "", value).lower()
+
+    def generic_rule(value):
+        # An omitted subject may refer back to the immediately preceding cost.
+        # A different explicit subject (electricity, insurance, membership, ...)
+        # must survive this small payment-language grammar and cannot borrow it.
+        value = re.sub(
+            r"付款日|支付日|缴费日|支付|付款|缴费|缴纳|交款|统一|一律|固定|都按|都在|每个月|季度|这笔|这项|一次|每次|按|每|个|月|年|日|号|次|付|交|缴|扣款|扣|还款|款|的|在|于|是|来|计算",
+            "", value,
+        )
+        return not re.sub(r"[\s\d一二三四五六七八九十两，,。；;、]+", "", value)
+
     proofs = []
     for item in changed:
-        purposes = _commitment_purposes(item) & known
+        previous = current.get(item["key"], {})
+        # Existing keys keep their saved identity. A model-supplied rename in
+        # this same patch cannot authorize borrowing another cost's due day.
+        identity = previous if previous.get("label") else item
+        purposes = _commitment_purposes(identity) & known
+        labels = [normalize(identity["label"])]
+
+        def names_this_cost(value):
+            return bool(
+                purposes & (_commitment_purposes({"label": value}) & known)
+                or any(len(label) >= 2 and label in normalize(value) for label in labels)
+            )
+
+        def only_this_cost_rule(value):
+            if not names_this_cost(value):
+                return False
+            subjectless = normalize(value)
+            for label in labels:
+                subjectless = subjectless.replace(label, "")
+            for purpose, pattern in {
+                "purpose:housing": r"房租|租金|租住|租房|rent(?:al)?",
+                "purpose:commute": r"通勤|地铁|commut(?:e|ing)|subway",
+                "purpose:telecom": r"话费|手机套餐|移动通信|通讯费|通信费|mobileplan|phonebill",
+            }.items():
+                if purpose in purposes:
+                    subjectless = re.sub(pattern, "", subjectless)
+            return generic_rule(subjectless)
+
         found = False
-        for match in re.finditer(r"[^，,。；;、\n]+", row["content"]):
-            context = match.group()
+        for index, context in enumerate(contexts):
             if uncertain.search(context):
                 continue
             contextual = _commitment_purposes({"label": context}) & known
             if purposes and contextual and not purposes & contextual:
-                continue
-            if purposes and not contextual and len(source_purposes) > 1:
                 continue
             for part in re.split(r"[，,。；;、\n]", quote):
                 if (
@@ -347,6 +389,26 @@ def verify_budget_due_days(
                     or uncertain.search(part)
                     or income_rule.search(part)
                 ):
+                    continue
+                if global_rule.search(part) and any(
+                    part in sentence and exceptions.search(sentence) for sentence in sentences
+                ):
+                    continue
+                # A quote must identify this cost, explicitly apply to all
+                # costs, or be a subjectless rule directly following this cost.
+                # Empty known-purpose extraction is not evidence of identity.
+                global_scope = bool(global_rule.search(part)) and (
+                    "固定" not in part or item.get("kind") == "fixed"
+                )
+                traced = generic_rule(part) and (
+                    only_this_cost_rule(context)
+                    or (generic_rule(context) and index > 0 and only_this_cost_rule(contexts[index - 1]))
+                )
+                if not (names_this_cost(part) or global_scope or traced):
+                    continue
+                # A broad quotation with different payment days cannot bind a
+                # particular day to a cost. The model may quote its short rule.
+                if len({_number(value[1]) for value in day_pattern.finditer(part)}) > 1:
                     continue
                 for day in day_pattern.finditer(part):
                     # A known actual month/day (e.g. M月D日) is not itself a

@@ -22,7 +22,13 @@ from deepagents.graph import DeepAgentState
 from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.errors import GraphInterrupt, NodeCancelledError
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
@@ -294,6 +300,17 @@ def _successful_finance_writes(settings, run_id, messages):
     return result
 
 
+def _finance_source(settings, run_id, messages):
+    store = Store(settings)
+    with store._connection() as db:
+        run = db.execute("SELECT message_id FROM runs WHERE id=?", (run_id,)).fetchone()
+        if run is None:
+            return None
+        source_id = _seen_finance_input(store, run_id, messages) or run["message_id"]
+        source = db.execute("SELECT id,created_at,content FROM messages WHERE id=? AND role='user'", (source_id,)).fetchone()
+        return dict(source) if source else None
+
+
 def _finance_write_completion(settings, run_id, messages, operations):
     from datetime import datetime as MessageDatetime
 
@@ -301,10 +318,7 @@ def _finance_write_completion(settings, run_id, messages, operations):
     from .finance_service import FinanceService
 
     store = Store(settings)
-    with store._connection() as db:
-        run = db.execute("SELECT message_id FROM runs WHERE id=?", (run_id,)).fetchone()
-        source_id = _seen_finance_input(store, run_id, messages) or run["message_id"]
-        source = db.execute("SELECT created_at FROM messages WHERE id=?", (source_id,)).fetchone()
+    source = _finance_source(settings, run_id, messages)
     zone = ZoneInfo("Asia/Shanghai")
     sent = MessageDatetime.fromisoformat(source["created_at"].replace("Z", "+00:00"))
     sent = sent.replace(tzinfo=zone) if sent.tzinfo is None else sent.astimezone(zone)
@@ -325,7 +339,7 @@ def _finance_write_completion(settings, run_id, messages, operations):
     if failed:
         summary["write_completion_partial"] = True
     completion = format_finance_write_completion(summary, values)
-    return {"input_message_id": source_id, "operation_ids": [item["id"] for item in operations], "operations": values, "summary": summary, "completion": completion}
+    return {"input_message_id": source["id"], "operation_ids": [item["id"] for item in operations], "operations": values, "summary": summary, "completion": completion}
 
 
 class RunControls(AgentMiddleware):
@@ -385,10 +399,15 @@ class RunControls(AgentMiddleware):
         return {"messages": [RemoveMessage(id=latest.id), *pending], "jump_to": "model"}
 
     async def awrap_model_call(self, request, handler):
+        from .finance_reply import requested_analysis, requests_analysis
+
+        analysis_requested, report_completion = False, None
         if self.finance_completion and not await self.pending(request.state):
-            completion = await asyncio.to_thread(_verified_finance_completion, self.settings, self.run_id, request.messages)
-            if completion is not None and not await self.pending(request.state):
-                return ModelResponse(result=[completion])
+            source = await asyncio.to_thread(_finance_source, self.settings, self.run_id, request.messages)
+            analysis_requested = bool(source and requests_analysis(source["content"]))
+            report_completion = await asyncio.to_thread(_verified_finance_completion, self.settings, self.run_id, request.messages)
+            if report_completion is not None and not analysis_requested and not await self.pending(request.state):
+                return ModelResponse(result=[report_completion])
         # Only the task sandbox and explicitly configured agents may execute.
         tools = [
             item
@@ -400,9 +419,17 @@ class RunControls(AgentMiddleware):
         messages = hydrate_messages(self.settings, request.messages, image_input=self.image_input) if self.settings else request.messages
         prepared = request.override(tools=tools, messages=messages)
         writes = await asyncio.to_thread(_successful_finance_writes, self.settings, self.run_id, request.messages) if self.finance_completion else []
+        if analysis_requested and (writes or report_completion):
+            policy = (
+                "The user also explicitly requested advice, explanation or comparison. Finish their requested analysis after all necessary tools. "
+                "A separate program paragraph will confirm actual saved results. Your prose should answer the requested analysis, "
+                "not repeat completed-write claims or invent ledger facts. Suggested amounts are recommendations, not actual expenses. "
+                "Do not ask for old transaction lists, deposits or missing purchase dates; preserve known uncertainty."
+            )
+            prepared = prepared.override(system_message=SystemMessage(content=(_text(request.system_message) if request.system_message else "") + "\n" + policy))
         from .finance_context import finance_write_model
 
-        token = finance_write_model.set(bool(writes))
+        token = finance_write_model.set(bool(writes or report_completion))
         try:
             response = await self.budget.invoke_model(handler, prepared, self.controls, self.emit) if self.budget else await handler(prepared)
         finally:
@@ -410,12 +437,18 @@ class RunControls(AgentMiddleware):
         envelope = response.model_response if isinstance(response, ExtendedModelResponse) else response
         results = envelope.result if isinstance(envelope, ModelResponse) else [envelope]
         final = next((message for message in reversed(results) if isinstance(message, AIMessage)), None)
-        if writes and final is not None and not final.tool_calls and not await self.pending(request.state):
-            receipt = await asyncio.to_thread(_finance_write_completion, self.settings, self.run_id, request.messages, writes)
+        if (writes or report_completion) and final is not None and not final.tool_calls and not await self.pending(request.state):
+            receipt = await asyncio.to_thread(_finance_write_completion, self.settings, self.run_id, request.messages, writes) if writes else {"input_message_id": source["id"], "operation_ids": [], "completion": report_completion.content}
+            confirmation = report_completion.content if report_completion else receipt["completion"]
+            analysis = requested_analysis(_text(final)) if analysis_requested else ""
+            answer = analysis + "\n\n---\n\n" + confirmation if analysis else confirmation
+            if analysis:
+                receipt.update({"analysis": analysis, "response": answer})
             if not await self.pending(request.state):
-                await self.emit("finance.write_completion", receipt)
-                identity = hashlib.sha256(json.dumps([self.run_id, receipt["input_message_id"], receipt["operation_ids"], receipt["completion"]]).encode()).hexdigest()[:32]
-                replacement = final.model_copy(update={"content": receipt["completion"], "id": "finance-write-completion-" + identity, "additional_kwargs": {**{key: value for key, value in final.additional_kwargs.items() if key != "reasoning_content"}, "zhixing_program_finance_write": True}})
+                if writes:
+                    await self.emit("finance.write_completion", receipt)
+                identity = hashlib.sha256(json.dumps([self.run_id, receipt["input_message_id"], receipt["operation_ids"], answer]).encode()).hexdigest()[:32]
+                replacement = final.model_copy(update={"content": answer, "id": "finance-write-completion-" + identity, "additional_kwargs": {**{key: value for key, value in final.additional_kwargs.items() if key != "reasoning_content"}, "zhixing_program_finance_write": True}})
                 updated = replace(envelope, result=[replacement if message is final else message for message in results]) if isinstance(envelope, ModelResponse) else replacement
                 return replace(response, model_response=updated) if isinstance(response, ExtendedModelResponse) else updated
         return response
