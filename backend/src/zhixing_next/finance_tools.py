@@ -7,7 +7,7 @@ import json
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 
-from .finance_dates import verify_date_evidence
+from .finance_dates import verify_budget_due_days, verify_date_evidence
 from .finance_schema import (
     BatchArguments,
     BudgetArguments,
@@ -40,6 +40,8 @@ FINANCE_INSTRUCTIONS += " 实际发生日期必须来自原用户话：AI记day/
 FINANCE_INSTRUCTIONS += " 财务账本/预算/资产回顾报告必须使用publish_finance_report，不再自己编写数值正文交给通用publish_report。业务报告工具直接按同一账本快照和程序核对生成事实Markdown并交付本会话附件，不能传content或自由title。参数start_date/end_date；用户已有同范围期初期末资产观察时传opening_assets/closing_assets及approximate，否则两者省略即可，不要求用户补齐。报告不会猜购买日期、添加缴存等未确认情景、向用户展示内部ID/revision/coverage字段或补表清单。工具成功后直接给附件，必要时只概述回执事实，不再重算或追加模型假设。"
 
 FINANCE_INSTRUCTIONS += " 面向用户只简述已完成的记录、预算调整和报告附件，用自然语言说明付款周期，不展示key、every_months、anchor_month等实现字段。已经保留为日期范围或近似资产差额的信息不妨碍本次记账与报告，不能列成‘需你确认’或‘待你补齐’清单，也不要要求用户重报过去几个月日常流水、大件月份或逐项对账。未解释差额只说明尚不能确定来源，不把某种消费列为‘最可能’，不将账本缺口推给用户。未来发薪规则不能证明历史到账日期，也不能提出据此拆分历史工资；未要求记录且金额未知的押金等不另行索要。只有缺失信息确实阻止当前必要动作且查不到原文时才追问一个必要问题；否则直接完成。"
+
+FINANCE_INSTRUCTIONS += " 付款日规则不能从实际付款日、费用覆盖月份或余额观察日外推。AI新设/改变due_day时用date_evidence引用用户明确的每月/每季度/统一付款日规则；原来同key已确认且未变的日可沿用。用户没有说具体规则时省略due_day保留月份，不猜1号、不追问补日期。预算承诺和付款覆盖安排本身不等于已经支付，不据此自动生成消费记录。"
 
 
 class SummaryArguments(FinanceInput):
@@ -225,15 +227,38 @@ def create_finance_service_tools(
         changes=None,
         changes_json: str | None = None,
         recurring: bool = True,
+        date_evidence: str | None = None,
+        date_source_message_id: str | None = None,
     ) -> dict:
-        """Patch only user-mentioned budget fields for YYYY-MM. Structured changes supports expected_income,savings_target,daily_budget,income_schedule,coverage_start/through,commitments_upsert,commitment_keys_remove,clear_fields. Missing fields inherit. Null is rejected: explicit clearing names clear_fields. Commitment amount is actual due cash; every_months/anchor_month/due_day define cycle, monthly_cost is amount/every_months rounded to cents, paid_through marks explicitly paid coverage. Reuse existing same-purpose keys when changing cycle/amount, or explicitly remove old keys in the same patch. Only clearly independent costs may list separate_from_keys; purpose is an optional stable expense identity. recurring=false overrides only changed fields for that month. Legacy changes_json is accepted instead of changes; legacy commitments list is safe keyed upsert, never implicit deletion."""
+        """Patch only user-mentioned budget fields for YYYY-MM. Structured changes supports expected_income,savings_target,daily_budget,income_schedule,coverage_start/through,commitments_upsert,commitment_keys_remove,clear_fields. Missing fields inherit. Null is rejected: explicit clearing names clear_fields. New/changed due_day requires top-level date_evidence quoting the user's explicit recurring rule (date_source_message_id defaults to current source). One actual payment date, covered months or balance date do not establish a recurring day. Omit unknown due_day; never guess the 1st or ask for a date form. Unchanged existing due_day needs no new proof. Commitment amount is actual due cash; every_months/anchor_month/due_day define cycle, monthly_cost is amount/every_months rounded to cents, paid_through marks explicitly paid coverage. Reuse existing same-purpose keys when changing cycle/amount, or explicitly remove old keys in the same patch. Only clearly independent costs may list separate_from_keys; purpose is an optional stable expense identity. recurring=false overrides only changed fields for that month. Legacy changes_json is accepted instead of changes; legacy commitments list is safe keyed upsert, never implicit deletion."""
         fields = _changes(changes, changes_json, BudgetChanges)
-        return service.patch_budget(
+        mutation_key = key("budget", entry_key)
+        with service.store._connection() as db:
+            replay = (
+                db.execute(
+                    "SELECT 1 FROM finance_mutations WHERE key=?", (mutation_key,)
+                ).fetchone()
+                is not None
+            )
+        if not replay:
+            verify_budget_due_days(
+                service,
+                month=month,
+                changes=fields,
+                source_id=source_id,
+                evidence=date_evidence,
+                evidence_source_id=date_source_message_id,
+            )
+        # Existing keys still pass the service's exact request fingerprint check;
+        # an old successful mutation may be acknowledged without re-authorizing
+        # it against a later, independently changed budget.
+        result = service.patch_budget(
             month=month,
-            idempotency_key=key("budget", entry_key),
+            idempotency_key=mutation_key,
             recurring=recurring,
             changes=fields,
         )
+        return result
 
     @tool(args_schema=BatchArguments)
     async def apply_finance_transaction_batch(

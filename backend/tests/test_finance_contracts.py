@@ -690,7 +690,8 @@ async def test_real_graph_sees_finance_errors_and_corrects_without_false_success
         acknowledge=ignore,
         model_override=model,
     )
-    assert result == "已核对实际保存的分类及周期。"
+    assert "本轮已成功新增 1 笔记录、保存预算修改" in result
+    assert "已核对实际保存的分类及周期。" not in result
     messages = {
         message.tool_call_id: message
         for context in model.seen

@@ -122,7 +122,7 @@ class CorrectionArguments(DatedToolInput):
     expected_revision: int | None = Field(default=None, ge=1)
 
 
-class BudgetArguments(FinanceInput):
+class BudgetArguments(DatedToolInput):
     month: str
     entry_key: str
     changes: BudgetChanges | None = None

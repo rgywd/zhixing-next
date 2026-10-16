@@ -272,3 +272,106 @@ def verify_date_evidence(
         "basis": "user_stated_event_date",
         "message_business_date": reference.isoformat(),
     }
+
+
+def verify_budget_due_days(
+    service, *, month, changes, source_id, evidence=None, evidence_source_id=None
+):
+    """AI may set a precise recurring day only from a user-stated recurring rule."""
+    incoming = changes.get("commitments_upsert", changes.get("commitments", [])) or []
+    current = {item["key"]: item for item in service.get_budget(month)["commitments"]}
+    changed = [
+        item
+        for item in incoming
+        if item.get("due_day") is not None
+        and item.get("due_day") != current.get(item["key"], {}).get("due_day")
+    ]
+    if not changed:
+        return []
+
+    def fail(message):
+        raise StoreError(
+            "unverified_budget_due_day",
+            message
+            + " Omit due_day (or leave it null) and retain the known payment month/cycle. Do not guess the 1st or ask the user to fill a payment date.",
+            422,
+        )
+
+    if not isinstance(evidence, str) or not evidence.strip() or len(evidence) > 240:
+        fail(
+            "New or changed due_day needs a short date_evidence quote of the user's explicit recurring payment-day rule."
+        )
+    quote = evidence.strip()
+    message_id = evidence_source_id or source_id
+    with service.store._connection() as db:
+        row = db.execute(
+            "SELECT id,role,status,content FROM messages WHERE id=?", (message_id,)
+        ).fetchone()
+    if (
+        row is None
+        or row["role"] != "user"
+        or row["status"] not in {"accepted", "applied"}
+        or quote not in row["content"]
+    ):
+        fail("The recurring-rule quote must occur verbatim in a real accepted user message.")
+    recurring = re.compile(
+        r"每(?:个)?月|每[^，,。；;]{0,6}(?:个月|季度|年|次)|统一|固定|一律|都按", re.I
+    )
+    uncertain = re.compile(
+        r"余额|资产|覆盖|不是|不按|不再|不确定|未确定|未知|不知道|没说|没有|待定|可能|大概", re.I
+    )
+    day_pattern = re.compile(r"(?<![\d])([\d]{1,2}|[一二三四五六七八九十两]{1,3})\s*(?:日|号)")
+    income_rule = re.compile(r"工资|薪资|发薪|到账|salary|payday", re.I)
+    from .finance_service import _commitment_purposes
+
+    known = {"purpose:housing", "purpose:commute", "purpose:telecom"}
+    source_purposes = _commitment_purposes({"label": row["content"]}) & known
+    proofs = []
+    for item in changed:
+        purposes = _commitment_purposes(item) & known
+        found = False
+        for match in re.finditer(r"[^，,。；;、\n]+", row["content"]):
+            context = match.group()
+            if uncertain.search(context):
+                continue
+            contextual = _commitment_purposes({"label": context}) & known
+            if purposes and contextual and not purposes & contextual:
+                continue
+            if purposes and not contextual and len(source_purposes) > 1:
+                continue
+            for part in re.split(r"[，,。；;、\n]", quote):
+                if (
+                    not part
+                    or part not in context
+                    or not recurring.search(part)
+                    or uncertain.search(part)
+                    or income_rule.search(part)
+                ):
+                    continue
+                for day in day_pattern.finditer(part):
+                    # A known actual month/day (e.g. M月D日) is not itself a
+                    # recurring rule, even when another rule shares the clause.
+                    prefix = part[: day.start()]
+                    if re.search(r"(?:\d{1,2}|[一二三四五六七八九十]{1,3})\s*月\s*$", prefix):
+                        continue
+                    if _number(day[1]) == item["due_day"]:
+                        found = True
+                        break
+                if found:
+                    break
+            if found:
+                break
+        if not found:
+            fail(
+                "The quote does not establish this commitment's recurring due_day. A balance date, covered months or one actual payment date cannot establish a recurring rule."
+            )
+        proofs.append(
+            {
+                "key": item["key"],
+                "due_day": item["due_day"],
+                "source_message_id": row["id"],
+                "quote": quote,
+                "basis": "user_stated_recurring_payment_day",
+            }
+        )
+    return proofs

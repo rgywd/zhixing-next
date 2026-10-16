@@ -8,6 +8,7 @@ import json
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -19,7 +20,7 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.graph import DeepAgentState
 from langchain.agents.middleware import AgentMiddleware, hook_config
-from langchain.agents.middleware.types import ModelResponse
+from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -255,6 +256,78 @@ def _verified_finance_completion(settings, run_id, messages):
     return None
 
 
+def _successful_finance_writes(settings, run_id, messages):
+    """Only actual successful calls since this graph's latest user instruction."""
+    from .operations import decode_result
+
+    calls = {}
+    replies = {}
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            break
+        if isinstance(message, ToolMessage):
+            replies.setdefault(message.tool_call_id, message)
+        if isinstance(message, AIMessage):
+            for call in message.tool_calls:
+                if call["name"] in FINANCE_REPORT_WRITES:
+                    calls[call["id"]] = call["name"]
+    if not calls:
+        return []
+    with Store(settings)._connection() as db:
+        rows = db.execute("SELECT id,call_id,tool,result_json FROM operations WHERE run_id=? AND state='succeeded' ORDER BY created_at,id", (run_id,)).fetchall()
+    result = []
+    for row in rows:
+        if calls.get(row["call_id"]) != row["tool"] or not row["result_json"]:
+            continue
+        message = decode_result(json.loads(row["result_json"]))
+        if not isinstance(message, ToolMessage) or message.status != "success":
+            continue
+        actual = replies.get(row["call_id"])
+        if actual is None or actual.status != "success" or actual.content != message.content:
+            continue
+        try:
+            receipt = json.loads(message.content)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(receipt, dict) and "error" not in receipt:
+            result.append({"id": row["id"], "tool": row["tool"], "receipt": receipt})
+    return result
+
+
+def _finance_write_completion(settings, run_id, messages, operations):
+    from datetime import datetime as MessageDatetime
+
+    from .finance_report import format_finance_write_completion
+    from .finance_service import FinanceService
+
+    store = Store(settings)
+    with store._connection() as db:
+        run = db.execute("SELECT message_id FROM runs WHERE id=?", (run_id,)).fetchone()
+        source_id = _seen_finance_input(store, run_id, messages) or run["message_id"]
+        source = db.execute("SELECT created_at FROM messages WHERE id=?", (source_id,)).fetchone()
+    zone = ZoneInfo("Asia/Shanghai")
+    sent = MessageDatetime.fromisoformat(source["created_at"].replace("Z", "+00:00"))
+    sent = sent.replace(tzinfo=zone) if sent.tzinfo is None else sent.astimezone(zone)
+    as_of = sent.date().isoformat()
+    month = next((item["receipt"]["month"] for item in reversed(operations) if item["tool"] == "update_finance_budget" and item["receipt"].get("month")), as_of[:7])
+    summary = FinanceService(store).summary(month=month, as_of=as_of)
+    values = [{"tool": item["tool"], "receipt": item["receipt"]} for item in operations]
+    since = next((index + 1 for index in range(len(messages) - 1, -1, -1) if isinstance(messages[index], HumanMessage)), 0)
+    tools, failed = {}, set()
+    for message in messages[since:]:
+        if isinstance(message, AIMessage):
+            tools.update({call["id"]: call["name"] for call in message.tool_calls})
+        elif isinstance(message, ToolMessage) and (name := tools.get(message.tool_call_id)):
+            if message.status == "error":
+                failed.add(name)
+            else:
+                failed.discard(name)
+    if failed:
+        summary["write_completion_partial"] = True
+    completion = format_finance_write_completion(summary, values)
+    return {"input_message_id": source_id, "operation_ids": [item["id"] for item in operations], "operations": values, "summary": summary, "completion": completion}
+
+
 class RunControls(AgentMiddleware):
     """The runner is the only checkpoint writer for a conversation."""
 
@@ -326,9 +399,26 @@ class RunControls(AgentMiddleware):
         await self.emit("progress", {"stage": "model"})
         messages = hydrate_messages(self.settings, request.messages, image_input=self.image_input) if self.settings else request.messages
         prepared = request.override(tools=tools, messages=messages)
-        if self.budget:
-            return await self.budget.invoke_model(handler, prepared, self.controls, self.emit)
-        return await handler(prepared)
+        writes = await asyncio.to_thread(_successful_finance_writes, self.settings, self.run_id, request.messages) if self.finance_completion else []
+        from .finance_context import finance_write_model
+
+        token = finance_write_model.set(bool(writes))
+        try:
+            response = await self.budget.invoke_model(handler, prepared, self.controls, self.emit) if self.budget else await handler(prepared)
+        finally:
+            finance_write_model.reset(token)
+        envelope = response.model_response if isinstance(response, ExtendedModelResponse) else response
+        results = envelope.result if isinstance(envelope, ModelResponse) else [envelope]
+        final = next((message for message in reversed(results) if isinstance(message, AIMessage)), None)
+        if writes and final is not None and not final.tool_calls and not await self.pending(request.state):
+            receipt = await asyncio.to_thread(_finance_write_completion, self.settings, self.run_id, request.messages, writes)
+            if not await self.pending(request.state):
+                await self.emit("finance.write_completion", receipt)
+                identity = hashlib.sha256(json.dumps([self.run_id, receipt["input_message_id"], receipt["operation_ids"], receipt["completion"]]).encode()).hexdigest()[:32]
+                replacement = final.model_copy(update={"content": receipt["completion"], "id": "finance-write-completion-" + identity, "additional_kwargs": {**{key: value for key, value in final.additional_kwargs.items() if key != "reasoning_content"}, "zhixing_program_finance_write": True}})
+                updated = replace(envelope, result=[replacement if message is final else message for message in results]) if isinstance(envelope, ModelResponse) else replacement
+                return replace(response, model_response=updated) if isinstance(response, ExtendedModelResponse) else updated
+        return response
 
     async def awrap_tool_call(self, request, handler):
         call = request.tool_call

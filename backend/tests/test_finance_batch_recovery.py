@@ -5,6 +5,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from test_runtime import ScriptedModel, ignore, make_settings, no_controls
 
+from zhixing_next.finance_report import format_finance_write_completion
 from zhixing_next.finance_service import FinanceService
 from zhixing_next.operations import Journal
 from zhixing_next.runtime import run_agent
@@ -64,12 +65,12 @@ def fixture(tmp_path):
     return settings, store, service, run, call
 
 
-async def invoke(settings, run, model, controls=no_controls):
+async def invoke(settings, run, model, controls=no_controls, emit=ignore):
     return await run_agent(
         settings,
         run,
         persona="",
-        emit=ignore,
+        emit=emit,
         controls=controls,
         acknowledge=ignore,
         model_override=model,
@@ -103,7 +104,16 @@ async def test_batch_committed_before_journal_crash_replays_same_receipt_without
     resumed = Store(settings).claim_next("chat")
     resumed["agent"] = store.get_agent("finance")
     model = ScriptedModel(replies=[AIMessage(content="工资和奖金已分别保存，总收入保持16500。")])
-    assert await invoke(settings, resumed, model) == "工资和奖金已分别保存，总收入保持16500。"
+    completed = []
+
+    async def emit(kind, data):
+        if kind == "finance.write_completion":
+            completed.append(data)
+
+    result = await invoke(settings, resumed, model, emit=emit)
+    assert len(completed) == 1
+    assert result == format_finance_write_completion(completed[0]["summary"], completed[0]["operations"])
+    assert len(model.seen) == 1 and completed[0]["operations"][0]["tool"] == "apply_finance_transaction_batch"
     assert Journal(settings).approvals()["items"] == []
     receipt = Journal(settings).receipts(run["id"])["items"]
     assert len(receipt) == 1 and receipt[0]["state"] == "succeeded"

@@ -185,7 +185,7 @@ def build_finance_report(
         "",
         "## 预算与付款安排",
         "",
-        "以下是已保存的预算安排，可以随实际情况调整；预计收入不等于已经到账。本月已归属收入仅统计日期已能归到该月的记录，跨月范围尚未归属不代表没有到账。",
+        "以下是已保存的预算安排，可以随实际情况调整；预计收入不等于已经到账。付款安排不等于实际支出；尚未确认支付的项目不会自动入账。本月已归属收入仅统计日期已能归到该月的记录，跨月范围尚未归属不代表没有到账。",
         "",
     ]
     for budget in budgets:
@@ -349,4 +349,131 @@ def format_finance_completion(facts):
             lines.append(
                 f"已知流水口径核对差额 {qualifier}{_cash(difference)}，仅为未解释的资产变化，未认定为消费。"
             )
+    return "\n\n".join(lines)
+
+
+def format_finance_write_completion(summary, operations):
+    """Describe this input's confirmed writes without completing unrelated work."""
+    records, created, corrected, deleted = {}, set(), set(), set()
+    balances, other_observations = set(), set()
+    observations_removed = 0
+    budget_saved = False
+
+    def saved(kind, record):
+        if not isinstance(record, dict) or "error" in record or not record.get("id"):
+            return
+        identifier = record["id"]
+        if kind == "delete" and record.get("deleted"):
+            deleted.add(identifier)
+            created.discard(identifier)
+            corrected.discard(identifier)
+            records.pop(identifier, None)
+        elif kind in {"create", "update"} and not record.get("deleted"):
+            if kind == "create":
+                created.add(identifier)
+            elif identifier not in created:
+                corrected.add(identifier)
+            deleted.discard(identifier)
+            records[identifier] = record
+
+    for operation in operations:
+        if not isinstance(operation, dict):
+            continue
+        tool, receipt = operation.get("tool"), operation.get("receipt")
+        if not isinstance(receipt, dict) or "error" in receipt:
+            continue
+        if tool == "update_finance_budget":
+            budget_saved = True
+        elif tool == "record_finance_observation" and receipt.get("id"):
+            if receipt.get("kind") == "balance":
+                balances.add(receipt["id"])
+            elif receipt.get("kind") in {"income", "expense"}:
+                other_observations.add(receipt["id"])
+        elif tool == "remove_finance_observation" and receipt.get("deleted") is True:
+            # The legacy delete receipt carries no kind or observation ID.
+            # Count confirmed removals without inventing the removed content.
+            observations_removed += 1
+        elif tool == "record_finance_transaction":
+            saved("create", receipt)
+        elif tool == "correct_finance_transaction":
+            saved("update", receipt)
+        elif tool == "delete_finance_transaction":
+            saved("delete", receipt)
+        elif tool == "apply_finance_transaction_batch":
+            for item in receipt.get("items", []):
+                saved(item.get("operation"), item.get("record"))
+    changes = []
+    if created:
+        changes.append(f"新增 {len(created)} 笔记录")
+    if corrected:
+        changes.append(f"纠正 {len(corrected)} 笔记录")
+    if deleted:
+        changes.append(f"删除 {len(deleted)} 笔误记")
+    if budget_saved:
+        changes.append("保存预算修改")
+    if balances:
+        changes.append(f"保存 {len(balances)} 条余额观察")
+    if other_observations:
+        changes.append(f"保存 {len(other_observations)} 条历史财务观察")
+    if observations_removed:
+        changes.append(f"删除 {observations_removed} 条财务观察")
+    if not changes:
+        return "当前没有可确认成功的财务写入回执。"
+    lines = ["本轮已成功" + "、".join(changes) + "。"]
+    if balances or observations_removed:
+        lines.append("余额观察仅记录账户状态，不计为新增收入或支出。")
+    dates = []
+    for row in records.values():
+        if row.get("date_precision") and row.get("date_start") and row.get("date_end"):
+            value = _record_date(row)
+            if value not in dates:
+                dates.append(value)
+    if dates:
+        lines.append(
+            "记录日期按保存结果保留为："
+            + "；".join(dates[:3])
+            + ("等。" if len(dates) > 3 else "。")
+        )
+    budget = summary.get("budget", {})
+    current = []
+    if budget.get("expected_income") is not None:
+        current.append(f"预计收入 {_cash(budget['expected_income'])}")
+    if budget.get("savings_target") is not None:
+        current.append(f"结余目标 {_cash(budget['savings_target'])}")
+    if current:
+        lines.append(
+            f"当前{_month_label(summary['month'])}预算："
+            + "，".join(current)
+            + "，可随实际情况调整。"
+        )
+    rental = [
+        item
+        for item in summary.get("commitments", {}).get("items", [])
+        if re.search(r"房租|租金|租房|租住|\brent\b|\brental\b", item["label"], re.I)
+    ]
+    if len(rental) == 1:
+        item = rental[0]
+        timing = item.get("next_due_on")
+        if not timing and item.get("next_due_month"):
+            timing = _month_label(item["next_due_month"]) + "（具体日未确定）"
+        definitions = [
+            value for value in budget.get("commitments", []) if value["key"] == item["key"]
+        ]
+        if timing:
+            sentence = f"下一房租付款安排：{timing}"
+            if len(definitions) == 1 and definitions[0].get("amount") is not None:
+                sentence += f"，约定付款额 {_cash(definitions[0]['amount'])}"
+            lines.append(sentence + "。付款安排不等于实际支出，未确认的支付不会自动入账。")
+    schedule = summary.get("income_schedule") or budget.get("income_schedule")
+    if schedule:
+        if schedule.get("rule") == "last_business_day":
+            lines.append(
+                "工资日规则为每月最后一个工作日，仅作预计安排；未接入官方节假日调休，不能据此认定已经到账。"
+            )
+        elif schedule.get("rule") == "day_of_month" and schedule.get("day"):
+            lines.append(
+                f"工资日规则为每月 {schedule['day']} 日，仅作预计安排，不能据此认定已经到账。"
+            )
+    if summary.get("write_completion_partial") is True:
+        lines.append("另有操作尚未成功，以上只包含已核验的保存结果。")
     return "\n\n".join(lines)
