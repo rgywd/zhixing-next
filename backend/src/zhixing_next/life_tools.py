@@ -10,6 +10,7 @@ from .meal_input import normalise_meal_fields
 LIFE_TOOL_NAMES = ["record_life_meal", "correct_life_meal", "query_life_events"]
 LIFE_INSTRUCTIONS = """一句输入同时包含明确餐费和实际饮食时，优先record_life_meal一次原子保存两项；不要再委派子助手重复记同一笔。meal只写实际吃过或明确跳过的记录；付款amount和业务日期必须来自用户已知信息，只有菜品照片不推断金额。缺金额时只保存meal。稳定entry_key跨重试保持一致。工具成功的event_id关联两域，用户纠正同一顿的日期/金额/食物时用correct_life_meal；需要同时改日期时meal_changes.occurred_at和finance_changes.occurred_on都填写。纠正前可query_life_events拿event_id，引用原记录，不另建两份。此工具是同一数据库内的原子写入；任一记录失败则两项均未保存，不能声称部分成功。"""
 LIFE_INSTRUCTIONS += " 用餐时刻未知就省略occurred_at，只知日期用YYYY-MM-DD，不按午餐等类型猜12点。程序提供的原消息记录时钟不代表实际用餐时刻，实际时刻未知时回复需保留未知。portion逐项只记用户说出的份量；例如只说米饭剩一半，就仅记录米饭信息，豆腐和青菜份量仍未知，不能补一份。"
+LIFE_INSTRUCTIONS += " 用户已明确纠正同一顿时，description和portion中对同一事实的重复表达必须在本次correct_life_meal原子纠正中同步更新，去掉已推翻的旧份量；保留其他食物、日期和未纠正内容。明确纠错已获授权，不再询问是否同步描述，也不要求用户再次批准同一纠正。"
 
 
 def create_life_tools(settings, conversation_id, source_id):

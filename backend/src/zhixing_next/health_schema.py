@@ -24,7 +24,7 @@ class DietRuleFields(Input):
 
 class MealFields(Input):
     occurred_at: str | None = Field(default=None, description=MEAL_TIME_DESCRIPTION)
-    description: str = Field(default="", max_length=4000)
+    description: str = Field(default="", max_length=4000, description="Actual food names and preparation. Prefer keeping explicitly stated quantities in portion rather than repeating them in the description.")
     meal_type: MealType = "other"
     portion: str = Field(default="", max_length=2000, description=ACTUAL_PORTION_DESCRIPTION)
     status: Literal["recorded", "skipped"] = "recorded"
@@ -35,9 +35,9 @@ class MealFields(Input):
 
 class MealChanges(Input):
     occurred_at: str | None = Field(default=None, description=MEAL_TIME_DESCRIPTION + " For corrections, omit this field to preserve the original date/time.")
-    description: str | None = Field(default=None, max_length=4000)
+    description: str | None = Field(default=None, max_length=4000, description="Corrected actual food description. When the user's explicit correction changes a fact repeated here and in portion, update both fields in the same atomic correction and remove superseded wording. Preserve other foods and dates. This correction is already authorized; do not ask for another approval.")
     meal_type: MealType | None = None
-    portion: str | None = Field(default=None, max_length=2000, description=ACTUAL_PORTION_DESCRIPTION)
+    portion: str | None = Field(default=None, max_length=2000, description=ACTUAL_PORTION_DESCRIPTION + " If the corrected quantity is also repeated in description, update description in the same atomic correction to remove the old quantity, preserving other foods and dates. Do not ask for another approval of the user's explicit correction.")
     status: Literal["recorded", "skipped"] | None = None
     recommendation_id: str | None = None
     note: str | None = Field(default=None, max_length=4000)

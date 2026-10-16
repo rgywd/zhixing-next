@@ -4,6 +4,8 @@ import hashlib
 
 import pytest
 from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from pydantic import Field
 from test_agent_collaboration import Coordinator
 from test_runtime import ScriptedModel, ignore, make_run, make_settings, no_controls
 from test_runtime import run_agent as fixture_run_agent
@@ -29,6 +31,32 @@ def assert_shared_evidence_limits(prompt):
     assert "Never invent an exact meal time or serving count" in prompt
     assert "do not silently use submission time or one serving" in prompt
     assert "recording metadata, explicitly distinguished from the actual eating time" in prompt
+
+
+class MealContractModel(ScriptedModel):
+    meal_contract: dict = Field(default_factory=dict)
+
+    def bind_tools(self, tools, **kwargs):
+        for item in tools:
+            name = item.get("name") if isinstance(item, dict) else item.name
+            if name == "correct_life_meal":
+                self.meal_contract = convert_to_openai_tool(item)["function"]["parameters"]
+        return super().bind_tools(tools, **kwargs)
+
+
+async def test_main_graph_receives_authorized_atomic_correction_of_repeated_meal_facts(tmp_path):
+    settings = make_settings(tmp_path)
+    run = make_run("meal-correction-contract", "那顿饭米饭实际只吃三分之一，请改原来的记录，其他内容保留。")
+    model = MealContractModel(replies=[AIMessage(content="已阅读明确的纠正。")])
+    await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=model)
+    prompt = system_text(model)
+    assert "description和portion中对同一事实的重复表达必须在本次correct_life_meal原子纠正中同步更新" in prompt
+    assert "保留其他食物、日期和未纠正内容" in prompt
+    assert "不再询问是否同步描述，也不要求用户再次批准同一纠正" in prompt
+    changes = model.meal_contract["properties"]["meal_changes"]["anyOf"][0]["properties"]
+    assert "update both fields in the same atomic correction" in changes["description"]["description"]
+    assert "remove superseded wording" in changes["description"]["description"]
+    assert "update description in the same atomic correction" in changes["portion"]["description"]
 
 
 @pytest.mark.parametrize("consulted", [False, True])

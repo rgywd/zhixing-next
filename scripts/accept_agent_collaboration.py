@@ -70,6 +70,15 @@ def require(condition, code):
         raise AcceptanceError(code)
 
 
+def linked_meal_old_rice_fact_in_description(description):
+    """Finite saved-field check for this fixture, not a natural-reply grader."""
+    compact = "".join(description.split())
+    return any(fact in compact for fact in (
+        "米饭剩了一半", "米饭剩一半", "米饭剩半", "米饭吃了一半", "米饭吃一半",
+        "米饭半份", "米饭半碗", "米饭剩1/2", "米饭剩了1/2",
+    ))
+
+
 def validate_directory(evidence_dir):
     supplied = Path(evidence_dir)
     require(supplied.is_absolute() and supplied.is_dir() and not supplied.is_symlink(),
@@ -413,6 +422,8 @@ class AcceptanceSuite:
             "same_original_ids": len(new_tx) == len(new_meals) == 1,
             "corrected_amount": len(new_tx) == 1 and new_tx[0]["amount"] == "22.60",
             "corrected_portion": len(new_meals) == 1 and any(text in new_meals[0]["portion"] for text in ("三分之一", "1/3")),
+            "superseded_rice_fact_removed_from_description": len(new_meals) == 1
+            and not linked_meal_old_rice_fact_in_description(new_meals[0]["description"]),
             "food_preserved": len(new_meals) == 1 and all(
                 food in f"{new_meals[0]['description']} {new_meals[0]['portion']}"
                 for food in ("豆腐", "青菜", "米饭")),

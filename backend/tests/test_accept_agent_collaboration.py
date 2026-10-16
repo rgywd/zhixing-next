@@ -77,6 +77,59 @@ def test_unknown_time_assertion_checks_saved_source_recording_time_not_reply_wor
     assert suite.unknown_meal_time_preserved(meal, "lunch") is (change == "none")
 
 
+@pytest.mark.parametrize("description,consistent", [
+    ("午饭：豆腐、青菜、米饭（米饭剩了一半）", False),
+    ("豆腐、青菜、米饭剩半", False),
+    ("午饭：豆腐、青菜、米饭", True),
+    ("午饭：豆腐、青菜、米饭（米饭吃约三分之一）", True),
+])
+async def test_linked_correction_checker_rejects_superseded_quantity_in_saved_description(
+    isolated, monkeypatch, description, consistent,
+):
+    # Synthetic snapshots exercise the real case checker. This is not a model
+    # choice test or a natural-language reply classifier.
+    settings, directory = isolated
+    store = Store(settings)
+    conversation = store.create_conversation("虚构联餐纠正检查")
+    source = store.submit_message(conversation["id"], id="lunch", content="午饭24.60元，豆腐青菜米饭，米饭剩了一半")
+    meal = {"id": "meal", "source_id": "lunch", "description": "午饭：豆腐、青菜、米饭（米饭剩了一半）",
+            "portion": "米饭剩了一半", "occurred_at": source["message"]["created_at"],
+            "note": "实际用餐时间未知，使用记录时间。"}
+    transaction = {"id": "payment", "source_id": "lunch", "amount": "24.60"}
+    snapshots = {
+        "linked_meal": {"meals": [meal], "transactions": [transaction]},
+        "linked_meal_correction": {
+            "meals": [{**meal, "description": description, "portion": "米饭吃约三分之一"}],
+            "transactions": [{**transaction, "amount": "22.60"}],
+        },
+    }
+    suite = acceptance.AcceptanceSuite(settings, directory, None, store, None, 1, None)
+
+    async def existing_conversation(*args):
+        return conversation["id"]
+
+    async def supplied_snapshot(key, *args):
+        evidence = {"message_id": "lunch", "snapshot": snapshots[key],
+                    "run": {"result": "已按明确纠正更新原来的同一条记录。"}, "events": [],
+                    "operations": [{"tool": "record_life_meal" if key == "linked_meal" else "correct_life_meal",
+                                    "state": "succeeded"}]}
+        suite.evidence[key] = evidence
+        return evidence
+
+    monkeypatch.setattr(suite, "conversation", existing_conversation)
+    monkeypatch.setattr(suite, "turn", supplied_snapshot)
+    if consistent:
+        await suite.linked_meal()
+    else:
+        with pytest.raises(acceptance.AcceptanceError, match="linked_meal_correction_business_assertion_failed"):
+            await suite.linked_meal()
+    assert suite.case_results["linked_meal"]["passed"]
+    corrected = suite.case_results["linked_meal_correction"]
+    assert corrected["passed"] is consistent
+    assert corrected["checks"]["superseded_rice_fact_removed_from_description"] is consistent
+    assert corrected["checks"]["corrected_portion"] and corrected["checks"]["food_preserved"]
+
+
 @pytest.mark.parametrize("reply", [
     "实际用餐时刻：未知，18:37只是消息发送时间，不代表吃饭时间。",
     "实际用餐时间是18:37。",  # Incorrect: independent review must reject it.
