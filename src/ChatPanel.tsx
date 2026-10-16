@@ -633,9 +633,9 @@ function RunDetail({
                 </Text>
               </View>
             ) : null}
-            {run.status === "interrupted" && run.recovery_enabled ? <Button disabled={controlBusy} onPress={() => {
+            {(run.status === "interrupted" || run.status === "failed") && run.recovery_enabled && !run.cancel_requested ? <Button disabled={controlBusy} onPress={() => {
               void control(async () => { setRun(await request<Run>(connection, `/runs/${run.id}/resume`, { method: "POST" })); });
-            }}>核对已有步骤并继续原任务</Button> : null}
+            }}>{run.status === "failed" ? "重试这次回复" : "继续这次回复"}</Button> : null}
             <ApprovalCards connection={connection} runId={run.id} />
             {run.result ? (
               <View style={s.card}>

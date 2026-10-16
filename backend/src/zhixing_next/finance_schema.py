@@ -92,7 +92,16 @@ class DatedToolInput(FinanceInput):
     )
 
 
-class RecordArguments(DatedToolInput):
+class FactToolInput(DatedToolInput):
+    fact_evidence: str | None = Field(
+        default=None,
+        max_length=240,
+        description="Optional short verbatim user statement of actual new income and amount when distinguishing it from existing-asset withdrawals. Current original text is checked automatically; use this only to cite already retrieved history, never ask the user to fill a form.",
+    )
+    fact_source_message_id: str | None = Field(default=None, max_length=200)
+
+
+class RecordArguments(FactToolInput):
     entry_key: str
     kind: Literal["expense", "income", "transfer", "refund"]
     amount: str
@@ -114,7 +123,7 @@ class RecordArguments(DatedToolInput):
     coverage_end: str | None = None
 
 
-class CorrectionArguments(DatedToolInput):
+class CorrectionArguments(FactToolInput):
     transaction_id: str
     entry_key: str
     changes: TransactionChanges | None = None
@@ -144,6 +153,8 @@ class AIBatchOperation(BatchOperation):
         description="Verbatim actual event-date quote, required for create/precise-date changes; do not put this inside fields",
     )
     date_source_message_id: str | None = Field(default=None, max_length=200)
+    fact_evidence: str | None = Field(default=None, max_length=240)
+    fact_source_message_id: str | None = Field(default=None, max_length=200)
 
 
 class BatchArguments(FinanceInput):

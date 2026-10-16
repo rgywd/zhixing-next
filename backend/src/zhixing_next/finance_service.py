@@ -668,7 +668,7 @@ class FinanceService:
         data["note"] = _text(data.get("note", ""), "note")
         if kind == "income" and _explicit_existing_asset_move(data["category"], data["note"]):
             raise _error(
-                "This description explicitly withdraws or transfers existing assets. Use kind=transfer, not income. Only external new earnings/new contributions are income; split any new yield from returned principal. No record was saved.",
+                "未保存：该描述明确涉及已有资产提取或转移，应使用kind=transfer，不能记为新增income。请保留提取的transfer记录，先查询get_finance_summary或reconcile_finance_assets核对后继续。不要靠修改分类或删除备注反复尝试新增缴存，也不要索要用户未提及的缴存确认。真正的新工资、新缴存或收益应按真实原话分别记录，收益与取回本金分开。",
                 "existing_asset_is_transfer",
                 422,
             )

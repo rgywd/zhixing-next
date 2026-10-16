@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from .finance_context import active_finance_input, delegated_finance_input
 from .finance_dates import verify_budget_due_days, verify_date_evidence
+from .finance_facts import verify_income_facts
 from .finance_schema import (
     BatchArguments,
     BudgetArguments,
@@ -43,6 +44,7 @@ FINANCE_INSTRUCTIONS += " 财务账本/预算/资产回顾报告必须使用publ
 FINANCE_INSTRUCTIONS += " 面向用户只简述已完成的记录、预算调整和报告附件，用自然语言说明付款周期，不展示key、every_months、anchor_month等实现字段。已经保留为日期范围或近似资产差额的信息不妨碍本次记账与报告，不能列成‘需你确认’或‘待你补齐’清单，也不要要求用户重报过去几个月日常流水、大件月份或逐项对账。未解释差额只说明尚不能确定来源，不把某种消费列为‘最可能’，不将账本缺口推给用户。未来发薪规则不能证明历史到账日期，也不能提出据此拆分历史工资；未要求记录且金额未知的押金等不另行索要。只有缺失信息确实阻止当前必要动作且查不到原文时才追问一个必要问题；否则直接完成。"
 
 FINANCE_INSTRUCTIONS += " 付款日规则不能从实际付款日、费用覆盖月份或余额观察日外推。AI新设/改变due_day时用date_evidence引用用户明确的每月/每季度/统一付款日规则；原来同key已确认且未变的日可沿用。用户没有说具体规则时省略due_day保留月份，不猜1号、不追问补日期。预算承诺和付款覆盖安排本身不等于已经支付，不据此自动生成消费记录。"
+FINANCE_INSTRUCTIONS += " 原用户文字只描述公积金提取、存款提现或赎回本金时，不得另造新增缴存income；备注中的‘用户确认’不是真实证据。出现existing_asset_is_transfer应保留transfer并查询summary/reconcile继续处理，不通过反复改分类或删备注重试，也不索要原文没有的新缴存确认。工具自动核验当前原文的实际工资/新缴存条款及金额（含明确倍数）；必要历史原话用可选fact_evidence/fact_source_message_id引用已查真实用户消息。明确新增缴存和提现分别记income/transfer，不能借用另一个条款、资产余额或消费金额。"
 
 
 class SummaryArguments(FinanceInput):
@@ -141,8 +143,17 @@ def create_finance_service_tools(
         coverage_end: str | None = None,
         date_evidence: str | None = None,
         date_source_message_id: str | None = None,
+        fact_evidence: str | None = None,
+        fact_source_message_id: str | None = None,
     ) -> dict:
         """Record explicit CNY cash flow with stable distinct entry_key. Exact day: occurred_on YYYY-MM-DD. Month-only: date_precision=month,date_start=YYYY-MM. Uncertain range: date_precision=range,date_start/date_end YYYY-MM-DD. Never invent today. coverage_start/end are YYYY-MM costs covered by a payment. Withdrawals of provident funds, deposits or returned principal are existing-asset transfer, never income; new external earnings/contributions are income. A count of past payments does not prove months: preserve the user's stated whole period as range. Precise day/month or same-day range requires date_evidence quoting a user-stated ACTUAL event date; do not use an asset observation date, review cutoff, cost coverage or recurring rule. Refund references an expense. aggregate is an explicit cumulative total with period_start."""
+        fact_proof = verify_income_facts(
+            service.store,
+            source_id=actual_source(),
+            fields={"kind": kind, "amount": amount, "category": category, "note": note},
+            evidence=fact_evidence,
+            evidence_source_id=fact_source_message_id,
+        )
         proof = verify_date_evidence(
             service.store,
             conversation_id=conversation_id,
@@ -178,7 +189,12 @@ def create_finance_service_tools(
             coverage_start=coverage_start,
             coverage_end=coverage_end,
         )
-        return {**row, "verified": True, "date_verification": proof}
+        return {
+            **row,
+            "verified": True,
+            "date_verification": proof,
+            "income_fact_verification": fact_proof,
+        }
 
     @tool(args_schema=CorrectionArguments)
     async def correct_finance_transaction(
@@ -189,6 +205,8 @@ def create_finance_service_tools(
         expected_revision: int | None = None,
         date_evidence: str | None = None,
         date_source_message_id: str | None = None,
+        fact_evidence: str | None = None,
+        fact_source_message_id: str | None = None,
     ) -> dict:
         """Correct an existing ID with structured changes object, e.g. changes={amount:'42'}. Read ID/revision first. Do not place amount at top level. Unknown fields are rejected. Legacy changes_json is accepted instead of changes, never together. Keep entry_key stable across retry. Precise date changes require top-level date_evidence and optional date_source_message_id referencing the actual user occurrence-date quote; other non-date changes need no new evidence."""
         fields = _changes(changes, changes_json, TransactionChanges)
@@ -198,6 +216,14 @@ def create_finance_service_tools(
             )
         with service.store._connection() as db:
             current = service._require(db, transaction_id)
+        fact_proof = verify_income_facts(
+            service.store,
+            source_id=actual_source(),
+            fields=fields,
+            current=current,
+            evidence=fact_evidence,
+            evidence_source_id=fact_source_message_id,
+        )
         proof = verify_date_evidence(
             service.store,
             conversation_id=conversation_id,
@@ -218,6 +244,7 @@ def create_finance_service_tools(
             "verified": True,
             "changed_fields": sorted(fields),
             "date_verification": proof,
+            "income_fact_verification": fact_proof,
         }
 
     @tool(args_schema=DeleteArguments)
@@ -274,17 +301,30 @@ def create_finance_service_tools(
             item.model_dump(exclude_unset=True) if isinstance(item, BaseModel) else item
             for item in operations
         ]
-        proofs = []
+        proofs, fact_proofs = [], []
         for operation in values:
             evidence = operation.pop("date_evidence", None)
             evidence_source_id = operation.pop("date_source_message_id", None)
+            fact_evidence = operation.pop("fact_evidence", None)
+            fact_source_message_id = operation.pop("fact_source_message_id", None)
             if operation["operation"] == "delete":
                 proofs.append(None)
+                fact_proofs.append(None)
                 continue
             current = None
             if operation["operation"] == "update":
                 with service.store._connection() as db:
                     current = service._require(db, operation.get("transaction_id"))
+            fact_proofs.append(
+                verify_income_facts(
+                    service.store,
+                    source_id=actual_source(),
+                    fields=operation.get("fields") or {},
+                    current=current,
+                    evidence=fact_evidence,
+                    evidence_source_id=fact_source_message_id,
+                )
+            )
             proofs.append(
                 verify_date_evidence(
                     service.store,
@@ -304,7 +344,7 @@ def create_finance_service_tools(
             conversation_id=conversation_id,
             source_id=actual_source(),
         )
-        return {**result, "date_verifications": proofs}
+        return {**result, "date_verifications": proofs, "income_fact_verifications": fact_proofs}
 
     @tool(args_schema=ReconcileArguments)
     async def reconcile_finance_assets(

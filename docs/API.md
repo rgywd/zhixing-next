@@ -89,6 +89,7 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 - `POST /v1/approvals/{UUID}/decision {decision}`：返回 Approval。overwrite/network 支持 `approve|deny`，uncertain 支持 `retry|skip`；同决定重试幂等，冲突或已撤销返回 409，不适用的决定返回 422。全部待决定项处理后继续原任务。
 - `GET /v1/approvals/{UUID}/file?version=before|after`：overwrite 的原件或完整拟写入文件，默认 after；最大 20 MiB，SHA-256 校验、nosniff、private/no-store。没有文件预览返回 422。
 - `GET /v1/runs/{id}/operations`：`{items:Operation[],next_cursor:null}`，用于核查操作状态；不返回完整工具结果编码。
+- `POST /v1/runs/{id}/resume`：继续同一条带恢复记录的中断或失败回复。失败回复还需核验真实 checkpoint 属于该 run；已取消、没有 checkpoint 或会话已执行后续回复时拒绝。沿用原输入和步骤回执，旧版本缺失的模型快照仅补缺，运行前仍核对配置指纹与现有权限；无法确认副作用时继续走原批准流程，不自动重复写入。
 
 `Approval={id,run_id,operation_id:string|null,kind:overwrite|network|uncertain,details,state:pending|approve|deny|retry|skip|cancelled,created_at,decided_at}`。
 details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes、backup、最多 4000 字符 preview；network 含 description、task、network；uncertain 含 description、tool、arguments。
@@ -136,6 +137,8 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
 AI 新增或改变承诺的付款日同样需要真实用户付款规则依据，不能借用其他费用的日期；实际某次付款日、余额观察日和覆盖月份不能自动推成固定日期，未知日保留 null。已确认的同项目原付款日可继续沿用，手工 HTTP 不变。财务 Agent 在本次成功写入后仍由模型完成工具规划，纯记录和规则修改使用已核验保存值生成回执；当前真实用户同时要求建议、解释或比较时保留 AI 分析，并附独立的核验结果，不能用固定回执吞掉分析。报告和修改后的分析正文先缓冲，再随最终消息投影，思考与工具过程继续保留；未写入的普通分析对话继续使用原有流式正文。
 
 处理中补充指令被图实际接收后，财务委派、默认日期依据、写入防重复键和报告交付统一继承该真实用户消息；尚未接收的排队指令和模型改写的委派描述不能替代它。同一消息的恢复仍重放原回执，新消息可继续使用同一业务 entry key。
+
+原用户文字已明确已有资产提取时，AI 新建或改成收入还需对应的真实新增收入条款与金额，不能用模型备注中的“用户确认”代替事实，也不能靠删备注或改分类绕过。当前原文自动核验，可选 `fact_evidence`／`fact_source_message_id` 引用已读历史；批量操作放在每项顶层，不写入业务字段。该有限保护不把附件自动当作新缴存，也不为无文字提取矛盾的图片输入增加必填表单；手工 HTTP 仍沿用原服务校验。
 
 纠正使用 `changes` 对象（兼容旧 `changes_json`，两者不能同时传）；放在顶层的 `amount` 不再被静默忽略。预算更新是字段 patch，省略保持现状，清空需 `clear_fields`；`commitments_upsert` 按 key 更新项目，`commitment_keys_remove` 显式移除。单月 patch 按字段继承后续沿用预算的修改。
 
@@ -237,7 +240,7 @@ emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可�
 
 ModelInput 为 `{model,display_name?,enabled?,image_input?,reasoning_levels?,reasoning_effort?,temperature?,timeout?}`；默认启用、文本输入、模型默认温度、60 秒超时。已识别模型按实际 ID 自动匹配思考档位，未知模型使用显式 `reasoning_levels`；空列表表示不可调整。温度 0–2，超时大于 0 且不超过 300 秒；默认思考值必须可用（省略支持列表时由服务端匹配）。已识别的 Gemini 可设置默认思考，2.5 Flash 可关闭，Pro 与 3 系列不能关闭；未知 Gemini 不接受默认思考及 none/xhigh/max。`reasoning_kind` 和 `reasoning_labels` 是可选展示元数据，开关模型的 `high` 显示“开启”。规则与请求转换见[模型思考适配](MODEL-THINKING.md)。ManagedModel 在原 ModelInfo 上增加 `enabled,temperature,timeout`。
 
-配置和凭据保存在服务端 `app.sqlite`；API 与 worker 按操作读取新配置。私有运行快照独立于公开运行记录，完成、失败、取消后清除；可恢复中断任务保留。v9 现有 TOML 条目仅在迁移时导入一次，详见[升级说明](PROVIDER-MANAGEMENT.md)。
+配置和凭据保存在服务端 `app.sqlite`；API 与 worker 按操作读取新配置。私有运行快照独立于公开运行记录，完成、取消及不可恢复失败后清除；带真实 checkpoint 的可恢复失败和中断任务保留。v9 现有 TOML 条目仅在迁移时导入一次，详见[升级说明](PROVIDER-MANAGEMENT.md)。
 
 ## 执行闭环与必要问答（v11）
 

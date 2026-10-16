@@ -1137,9 +1137,13 @@ class Store:
             (status, result, error, now, run["id"]),
         )
         if status in {"cancelled", "completed", "failed"}:
-            db.execute("DELETE FROM run_agent_assignments WHERE run_id=?", (run["id"],))
-            db.execute("DELETE FROM agent_model_configs WHERE run_id=?", (run["id"],))
-            db.execute("DELETE FROM run_model_configs WHERE run_id=?", (run["id"],))
+            from .recovery import has_run_checkpoint
+
+            recoverable_failure = status == "failed" and run["recovery_enabled"] and has_run_checkpoint(self.settings, run)
+            if not recoverable_failure:
+                db.execute("DELETE FROM run_agent_assignments WHERE run_id=?", (run["id"],))
+                db.execute("DELETE FROM agent_model_configs WHERE run_id=?", (run["id"],))
+                db.execute("DELETE FROM run_model_configs WHERE run_id=?", (run["id"],))
             db.execute("UPDATE approvals SET state='cancelled',decided_at=? WHERE run_id=? AND state='pending'", (now, run["id"]))
             db.execute("UPDATE input_requests SET state='cancelled' WHERE run_id=? AND state='pending'", (run["id"],))
         db.execute(
@@ -1206,11 +1210,30 @@ class Store:
             run = self._require(db, "runs", run_id)
             if run["status"] == "queued" and run["phase"] == "recovering":
                 return _record(run)
-            if run["status"] != "interrupted" or not run["recovery_enabled"] or run["cancel_requested"]:
-                raise StoreError("cannot_resume", "只有带恢复记录的中断任务可以继续", 422)
+            if run["status"] not in {"interrupted", "failed"} or not run["recovery_enabled"] or run["cancel_requested"]:
+                raise StoreError("cannot_resume", "只有带恢复记录的中断或失败任务可以继续", 422)
             if db.execute("SELECT 1 FROM runs WHERE conversation_id=? AND seq>? AND started_at IS NOT NULL", (run["conversation_id"], run["seq"])).fetchone():
                 raise StoreError("context_advanced", "该会话已执行后续任务，请发送新要求核对结果", 409)
-            db.execute("UPDATE runs SET status='queued',phase='recovering',finished_at=NULL,error=NULL,recovery_count=0 WHERE id=?", (run_id,))
+            if run["status"] == "failed":
+                from .recovery import has_run_checkpoint
+
+                if not has_run_checkpoint(self.settings, run):
+                    raise StoreError("cannot_resume", "该失败任务没有可核验的原始恢复记录，请发送新要求核对已有结果", 422)
+                # Older versions deleted terminal model snapshots. Rebuild only
+                # missing snapshots; runtime still rejects changed fingerprints
+                # and permissions before a checkpointed tool can execute.
+                from .catalog import snapshot
+                from .models import model_key
+
+                snapshot(db, run_id, run["model_id"])
+                if not db.execute("SELECT 1 FROM run_agent_assignments WHERE run_id=?", (run_id,)).fetchone():
+                    db.execute("INSERT INTO run_agent_assignments SELECT ?,id,model_id FROM agents", (run_id,))
+                models = self.runtime_settings(db).models
+                for child in db.execute("SELECT DISTINCT model_id FROM run_agent_assignments WHERE run_id=? AND model_id IS NOT NULL", (run_id,)):
+                    if child[0] in models:
+                        config = models[child[0]]
+                        db.execute("INSERT OR IGNORE INTO agent_model_configs VALUES(?,?,?,?)", (run_id, child[0], _json(config.model_dump(mode="json")), model_key(config)))
+            db.execute("UPDATE runs SET status='queued',phase='recovering',finished_at=NULL,error=NULL,result=NULL,recovery_count=0 WHERE id=?", (run_id,))
             # Resuming this exact run also restores its unconsumed instructions.
             # Terminal interruption rejected them for UI clarity; they must not be lost.
             db.execute("UPDATE messages SET status='accepted' WHERE run_id=? AND intent='steer' AND status='rejected'", (run_id,))
