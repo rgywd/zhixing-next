@@ -31,6 +31,15 @@ COMMON_INSTRUCTIONS = (
     "reader yourself. Follow returned continuation cursors for truncated content; do not make "
     "the user translate schemas, provide internal IDs/revisions or resend accessible records. "
     "Do not repeat unchanged invalid calls or mistake one input failure for a missing capability. "
+    "Preserve the limits of the evidence: a warning such as 'cannot guarantee a connection' "
+    "(不能保证转乘) establishes only that uncertainty. It does not establish who bears liability, "
+    "owes compensation or reimbursement, or pays a fee or loss. State those allocations as facts "
+    "only when the original user statement or an identified source explicitly supports them; "
+    "otherwise leave them unknown. Label your own inferences and do not turn another assistant's "
+    "inference into an original user fact. Never invent an exact meal time or serving count "
+    "from a message timestamp, meal name or default. Missing exact clock time and portions stay "
+    "unknown; do not silently use submission time or one serving. A source timestamp may be "
+    "retained as recording metadata, explicitly distinguished from the actual eating time. "
 )
 
 

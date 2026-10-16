@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -13,12 +14,34 @@ from pydantic import SecretStr
 
 from zhixing_next.agent_collaboration import _encode_history
 from zhixing_next.config import ModelConfig, Settings
+from zhixing_next.store import Store
 from zhixing_next.worker import Worker
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "accept_agent_collaboration.py"
 SPEC = importlib.util.spec_from_file_location("accept_agent_collaboration", SCRIPT)
 acceptance = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(acceptance)
+
+
+@pytest.mark.parametrize("text,unsupported", [
+    ("不能保证转乘，误接风险由乘客承担。", True),
+    ("误接风险不由方案方承担。", True),
+    ("把沉默式免责升级为明确政策。", True),
+    ("不能保证转乘；责任归属未知。", False),
+    ("不保证转乘不代表由乘客承担责任。", False),
+])
+def test_semantic_review_catches_unprovided_liability_without_banning_unknowns(text, unsupported):
+    assert acceptance.unprovided_liability_claim(text) is unsupported
+
+
+@pytest.mark.parametrize("text,guessed", [
+    ("米饭半份，豆腐和青菜一份", True),
+    ("豆腐100克，米饭三分之一份", True),
+    ("豆腐、青菜、米饭（米饭吃三分之一份）", False),
+    ("米饭一半，豆腐青菜份量未知", False),
+])
+def test_semantic_review_does_not_let_known_rice_quantity_authorize_other_food(text, guessed):
+    assert acceptance.guessed_other_food_portion(text) is guessed
 
 
 @pytest.fixture
@@ -34,6 +57,25 @@ def isolated(tmp_path):
         roles={"chat": "fixture", "task": "fixture", "memory": "fixture"},
     )
     return settings, directory
+
+
+@pytest.mark.parametrize("change", ["none", "guessed_clock", "missing_note", "reply_as_actual"])
+def test_unknown_time_review_requires_source_recording_time_and_no_actual_clock_claim(isolated, change):
+    settings, directory = isolated
+    store = Store(settings)
+    conversation = store.create_conversation("虚构未知时间验收")
+    receipt = store.submit_message(conversation["id"], id="lunch", content="今天午饭吃了米饭")
+    source_time = receipt["message"]["created_at"]
+    meal = {"occurred_at": source_time, "note": "实际用餐时间未知，使用记录时间。"}
+    reply = "已记录今天的午餐。"
+    if change == "guessed_clock":
+        meal["occurred_at"] = (datetime.fromisoformat(source_time) + timedelta(hours=1)).isoformat()
+    if change == "missing_note":
+        meal["note"] = ""
+    if change == "reply_as_actual":
+        reply = "已记录实际用餐时间12:30。"
+    suite = acceptance.AcceptanceSuite(settings, directory, None, store, None, 1, None)
+    assert suite.unknown_meal_time_preserved(meal, "lunch", reply) is (change == "none")
 
 
 def test_guards_accept_only_new_owned_exact_paths(isolated):

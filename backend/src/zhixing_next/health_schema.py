@@ -6,6 +6,10 @@ from pydantic import Field
 
 from .health_service import EnergyEstimate, Input, MealType, ReminderSlot
 
+MEAL_TIME_DESCRIPTION = "Optional actual user-stated time with UTC offset, or YYYY-MM-DD when only the meal date is known. Omit when unknown. Never infer a clock from breakfast/lunch/dinner; the service uses source-message time only as recording metadata and marks actual meal time unknown."
+ACTUAL_PORTION_DESCRIPTION = "Only quantities explicitly stated by the user, food by food. Keep all other food quantities unknown; never add one serving/bowl/portion or an assumed fraction."
+MEASUREMENT_TIME_DESCRIPTION = "Optional actual user-stated measurement timestamp with UTC offset, or YYYY-MM-DD for only a known date. Omit an unknown measurement time; source-message time is used only as recording metadata, explicitly marked unknown, not as the actual measurement clock."
+
 
 class DietRuleFields(Input):
     content: str = Field(min_length=1, max_length=2000)
@@ -19,10 +23,10 @@ class DietRuleFields(Input):
 
 
 class MealFields(Input):
-    occurred_at: str = Field(description="Actual meal timestamp including UTC offset, for example 2026-10-16T12:30:00+08:00")
+    occurred_at: str | None = Field(default=None, description=MEAL_TIME_DESCRIPTION)
     description: str = Field(default="", max_length=4000)
     meal_type: MealType = "other"
-    portion: str = Field(default="", max_length=2000)
+    portion: str = Field(default="", max_length=2000, description=ACTUAL_PORTION_DESCRIPTION)
     status: Literal["recorded", "skipped"] = "recorded"
     recommendation_id: str | None = None
     note: str = Field(default="", max_length=4000)
@@ -30,10 +34,10 @@ class MealFields(Input):
 
 
 class MealChanges(Input):
-    occurred_at: str | None = None
+    occurred_at: str | None = Field(default=None, description=MEAL_TIME_DESCRIPTION + " For corrections, omit this field to preserve the original date/time.")
     description: str | None = Field(default=None, max_length=4000)
     meal_type: MealType | None = None
-    portion: str | None = Field(default=None, max_length=2000)
+    portion: str | None = Field(default=None, max_length=2000, description=ACTUAL_PORTION_DESCRIPTION)
     status: Literal["recorded", "skipped"] | None = None
     recommendation_id: str | None = None
     note: str | None = Field(default=None, max_length=4000)
@@ -44,7 +48,7 @@ class HealthRecordChanges(MealChanges):
     """Only supplied fields are applied; the selected record kind validates them."""
 
     revision: int | None = Field(default=None, ge=1)
-    measured_at: str | None = None
+    measured_at: str | None = Field(default=None, description=MEASUREMENT_TIME_DESCRIPTION + " Omit during correction to preserve the existing time.")
     value: int | float | None = Field(default=None, ge=0)
     unit: Literal["kg", "lb"] | None = None
     content: str | None = Field(default=None, min_length=1, max_length=2000)

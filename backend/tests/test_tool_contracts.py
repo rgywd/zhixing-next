@@ -217,7 +217,7 @@ async def test_linked_meal_partial_correction_preserves_unmentioned_meal_and_pay
     })
     assert corrected["meal"]["portion"] == "米饭半份"
     assert corrected["meal"]["description"] == recorded["meal"]["description"]
-    assert corrected["meal"]["note"] == "原始备注"
+    assert corrected["meal"]["note"] == recorded["meal"]["note"]
     assert corrected["finance"]["amount"] == "24.60"
     assert corrected["finance"]["revision"] == recorded["finance"]["revision"]
 

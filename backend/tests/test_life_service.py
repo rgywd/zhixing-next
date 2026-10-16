@@ -192,12 +192,14 @@ def test_concurrent_retries_are_atomic_and_deduplicated(store):
 
 
 async def test_composite_tools_use_original_message_and_allow_linked_correction(store):
-    tools = {item.name: item for item in create_life_tools(store.settings, "main", "tool-message")}
+    conversation = store.create_conversation("实际午饭")
+    store.submit_message(conversation["id"], id="tool-message", content="4月9日12:00吃了鸡腿饭，花26元，米饭剩了一半")
+    tools = {item.name: item for item in create_life_tools(store.settings, conversation["id"], "tool-message")}
     args = {"entry_key": "meal-1", "meal": meal(), "amount": "26", "occurred_on": "2026-04-09"}
     first = await tools["record_life_meal"].ainvoke(args)
     assert await tools["record_life_meal"].ainvoke(args) == first
     changed = {
-        item.name: item for item in create_life_tools(store.settings, "main", "correction-message")
+        item.name: item for item in create_life_tools(store.settings, conversation["id"], "correction-message")
     }
     receipt = await changed["correct_life_meal"].ainvoke(
         {

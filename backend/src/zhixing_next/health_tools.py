@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from langchain_core.tools import tool
+from pydantic import Field
 
 from .finance_context import active_finance_input, delegated_finance_input
-from .health_schema import DietRuleFields, HealthRecordChanges, ReminderChanges, supplied
+from .health_schema import (
+    ACTUAL_PORTION_DESCRIPTION,
+    MEAL_TIME_DESCRIPTION,
+    MEASUREMENT_TIME_DESCRIPTION,
+    DietRuleFields,
+    HealthRecordChanges,
+    ReminderChanges,
+    supplied,
+)
 from .health_service import (
     EnergyEstimate,
     HealthService,
@@ -15,6 +24,7 @@ from .health_service import (
     RecommendationOption,
     source_key,
 )
+from .meal_input import normalise_meal_fields, normalise_measurement_fields
 
 if TYPE_CHECKING:
     from .config import Settings
@@ -28,6 +38,7 @@ HEALTH_TOOL_NAMES = [
 
 HEALTH_INSTRUCTIONS = """你是知行的饮食与体重助手，先用query_health_context了解当前资料、约定、近期记录、选择困难和餐费摘要。替用户整理并直接完成清楚的记录，不让用户管理内部ID或版本。资料、提醒和纠正只传要改的字段；程序保留未提及信息并同事务读取revision，显式旧版本仍拒绝冲突。每个操作用不同稳定entry_key，重试沿用，实际消息来源由系统绑定，只有成功回执才能说已保存。
 饮食记录实际吃下或明确跳过的内容，建议和采纳都不是已吃。漏记是未知，不是未吃或不达标；照片不证明精确克数、营养或餐费。体重与数字目标来自用户，不预设固定热量、减重速度或步数；膝盖等活动限制始终保留。AI提出的新规范用assistant_proposal/proposed，用户采纳才激活。规则日期省略则持续有效，暂停用status=paused。
+实际用餐时刻只在用户明确说出时填写；只知日期传YYYY-MM-DD，未知可以省略，程序用原消息时间记录并注明实际时刻未知，回复不能把记录时钟称为实际吃饭时刻。份量逐项只写用户明示内容，其他食物份量保持未知，不给豆腐、青菜等补“一份”或默认比例。
 推荐基于读取的当前context_revision，程序会重查已知禁忌和版本；有变化时重新读取并调整，不要求用户补状态。候选写可照着选择的实际食物、份量与替换，提醒放顶层note，避免把“不要吃某物”放候选列表触发冲突。已知过敏/禁忌不能出现在候选和替换中；存在过敏时提醒核对配料与交叉接触，不承诺安全。商家、价格和库存无来源不编造，日常预算也不能全部视为餐费。没有厨房且加热条件未知时优先即食或商家做好即可吃的组合。
 不知道份量、配料和完整摄入时不诊断蛋白质/能量不足或摄入过量，按用户约定给均衡建议。不要推荐极端限制、禁食、药物、惩罚性运动或诊疗；不适、持续饥饿或难执行时先调整，必要时建议专业帮助。服务已计算的体重变化和财务数字直接引用，不自行改算。
 采纳、替换、放弃用record_recommendation_feedback保存选择与困难，实际饮食另记并关联原recommendation_id。已采纳是历史选择，资料变化不要求重新采纳；回顾结合反馈和实际记录给一项下一步。纠正原记录，不新建冒充纠正，不删真实饮食美化达标。提醒保存仅代表本机排期偏好，手机同步和实际通知另有回执；今天不提醒只追加当地日期到paused_dates。记录和修改回执简短自然，模型不可用时仍可直接记录。"""
@@ -48,6 +59,10 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
         return f"health:{kind}:{source_key(actual_source() or '', entry_key)}"
 
     def creating(kind, record, entry_key):
+        if kind == "meals":
+            record = normalise_meal_fields(store, actual_source(), record)
+        elif kind in {"weights", "steps"}:
+            record = normalise_measurement_fields(store, actual_source(), record)
         key = operation(kind, entry_key)
         payload = provenance({**record, "id": source_key(actual_source() or '', f'{kind}:{entry_key}')})
         return service.create(kind, payload, operation_key=key)
@@ -82,27 +97,31 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
 
     @tool
     async def record_meal(
-        occurred_at: str, description: str, entry_key: str,
+        description: str, entry_key: str,
+        occurred_at: Annotated[str | None, Field(description=MEAL_TIME_DESCRIPTION)] = None,
         meal_type: Literal["breakfast", "lunch", "dinner", "snack", "other"] = "other",
-        portion: str = "", status: Literal["recorded", "skipped"] = "recorded",
+        portion: Annotated[str, Field(description=ACTUAL_PORTION_DESCRIPTION)] = "", status: Literal["recorded", "skipped"] = "recorded",
         recommendation_id: str | None = None, note: str = "",
         estimated_energy: EnergyEstimate | None = None,
     ) -> dict[str, Any]:
-        """Record actual food or an explicitly skipped meal, never a plan. occurred_at must include UTC offset. Unknown portions stay unknown. Energy estimates require minimum, maximum and basis; photos are not exact grams. Link recommendation_id when actual food follows that choice; stable entry_key survives retries."""
+        """Record actual food or an explicitly skipped meal, never a plan. occurred_at is optional: only user-stated actual clocks may be precise timestamps; use YYYY-MM-DD for only a known date, otherwise omit. The service labels a source-message recording clock as actual meal time unknown; never report that clock as when the user ate. portion contains only explicitly stated quantities for those foods, never default servings for other dishes. Energy estimates require minimum, maximum and basis; photos are not exact grams. Link recommendation_id when actual food follows that choice; stable entry_key survives retries."""
         return creating("meals", {"occurred_at": occurred_at, "description": description,
                                   "meal_type": meal_type, "portion": portion, "status": status,
                                   "recommendation_id": recommendation_id, "note": note,
                                   "estimated_energy": supplied(estimated_energy)}, entry_key)
 
     @tool
-    async def record_weight(measured_at: str, value: float, entry_key: str,
+    async def record_weight(value: float, entry_key: str,
+                            measured_at: Annotated[str | None, Field(description=MEASUREMENT_TIME_DESCRIPTION)] = None,
                             unit: Literal["kg", "lb"] = "kg", note: str = "") -> dict[str, Any]:
-        """Record the user's measured weight with original unit and timestamp including offset. Never infer a measurement or replace history with a target. Use the same entry_key on retry."""
+        """Record the user's actual measured weight with original unit. measured_at is optional: omit an unknown clock or use YYYY-MM-DD for only a known date. Source recording time is marked actual measurement time unknown, never reported as a precise measurement clock. Never infer a measurement or replace history with a target. Use the same entry_key on retry."""
         return creating("weights", {"measured_at": measured_at, "value": value, "unit": unit, "note": note}, entry_key)
 
     @tool
-    async def record_steps(measured_at: str, value: int, entry_key: str, note: str = "") -> dict[str, Any]:
-        """Record explicitly provided steps, with timestamp including offset. Steps are an optional record, not an automatically increasing exercise target. Reuse entry_key on retry."""
+    async def record_steps(value: int, entry_key: str,
+                           measured_at: Annotated[str | None, Field(description=MEASUREMENT_TIME_DESCRIPTION)] = None,
+                           note: str = "") -> dict[str, Any]:
+        """Record explicitly provided steps. measured_at is optional: omit an unknown clock or use YYYY-MM-DD for only a known date. Source recording time is marked actual measurement time unknown. Steps never imply an automatically increasing exercise target. Reuse entry_key on retry."""
         return creating("steps", {"measured_at": measured_at, "value": value, "note": note}, entry_key)
 
     @tool
@@ -134,7 +153,14 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
         record: HealthRecordChanges, entry_key: str,
     ) -> dict[str, Any]:
         """Patch an existing record by its ID: supply only changed editable fields. The service preserves omitted facts/provenance and reads the current revision atomically; optional explicit revision still detects stale edits. Rule pause/resume uses {status:paused|active}. Reuse entry_key on retry."""
-        return service.patch_record(kind, identifier, supplied(record), operation_key=operation("correct", entry_key))
+        fields = supplied(record)
+        time_field = "occurred_at" if kind == "meals" else "measured_at" if kind in {"weights", "steps"} else None
+        if time_field is not None and (time_field in fields or "note" in fields):
+            with store._connection() as db:
+                previous = service._require(db, kind, identifier)
+            normalise = normalise_meal_fields if kind == "meals" else normalise_measurement_fields
+            fields = normalise(store, actual_source(), fields, patch=True, previous=previous)
+        return service.patch_record(kind, identifier, fields, operation_key=operation("correct", entry_key))
 
     @tool
     async def delete_health_record(

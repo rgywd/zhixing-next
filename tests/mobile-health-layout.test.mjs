@@ -11,6 +11,12 @@ const localTime = (date) => `${String(date.getHours()).padStart(2, "0")}:${Strin
 const names = ["ServiceToolbar", "ServiceHeading", "ServiceCard", "ServiceSectionHeader", "ServiceMetric", "ServiceChatRow", "ServiceEmpty"];
 function harness({ data = null, loading = false } = {}) {
   const slots = [], calls = [], exports = {}; let cursor = 0;
+  const editor = {
+    visible: false, draft: null, ready: true,
+    open(kind, fields, context) { calls.push(["editor", kind, fields, context]); editor.visible = true; editor.draft = { id: "draft", kind, fields, context }; },
+    set(name, value) { editor.draft.fields[name] = value; },
+    close() { editor.visible = false; },
+  };
   const uiNames = ["ActionLink", "BackLink", "Button", "Field", "PageHeading", "PageScrollView", "StatusPill", "SwitchRow"];
   const dependencies = {
     "react/jsx-runtime": jsxRuntime,
@@ -20,7 +26,7 @@ function harness({ data = null, loading = false } = {}) {
     "./deviceCapabilities": { allowNotifications: async () => {} },
     "./Notice": { useNotice: () => ({ show() {} }) },
     "./serviceApi": { readHealthSummary: async () => data },
-    "./serviceForms": { localDate, localTime, mealLabels: { breakfast: "早餐", lunch: "午餐", dinner: "晚餐", snack: "加餐", other: "其他" }, useServiceSnapshot: () => ({ data, loading, error: "", reload() {} }), useServiceEditor: () => ({ visible: false, draft: null, ready: true, open: (...args) => calls.push(["editor", ...args]) }) },
+    "./serviceForms": { localDate, localTime, mealLabels: { breakfast: "早餐", lunch: "午餐", dinner: "晚餐", snack: "加餐", other: "其他" }, useServiceSnapshot: () => ({ data, loading, error: "", reload() {} }), useServiceEditor: () => editor },
     "./ui": { useUi: () => ({ s: {} }), ...Object.fromEntries(uiNames.map((key) => [key, key])) },
     "./ServicePrimitives": { useServiceStyles: () => ({}), ...Object.fromEntries(names.map((key) => [key, key])) },
   };
@@ -87,3 +93,53 @@ test("health empty records retain manual entry, next meal, and regular health ch
   page.find((node) => node.type === "ServiceChatRow" && node.props.title === "和健康助手聊聊").props.onPress();
   assert.deepEqual(app.calls[3], ["chat", undefined]);
 });
+
+const text = (value) => Array.isArray(value) ? value.map(text).join("") : value && typeof value === "object" ? text(value.props?.children) : value == null ? "" : String(value);
+
+test("unknown event clocks stay unknown in meal, weight and step summaries while dates and notes remain", () => {
+  const data = summary();
+  data.meals = [
+    { id: "unknown-meal", meal_type: "lunch", occurred_at: `${data.date}T20:47:00`, status: "recorded", description: "一碗饭", note: "实际用餐时间未知；这是记录时间" },
+    { id: "known-meal", meal_type: "dinner", occurred_at: `${data.date}T12:12:00`, status: "recorded", description: "已知时间的一餐" },
+  ];
+  data.weights = [
+    { id: "unknown-weight", measured_at: `${data.date}T21:16:00`, value: 70, unit: "kg", note: "实际测量时间未知；早上称过" },
+    { id: "known-weight", measured_at: `${data.date}T07:07:00`, value: 70.2, unit: "kg" },
+  ];
+  data.steps = [
+    { id: "unknown-steps", measured_at: `${data.date}T22:58:00`, value: 6000, note: "实际测量时间未知；当天合计" },
+    { id: "known-steps", measured_at: `${data.date}T15:15:00`, value: 3000 },
+  ];
+  const page = harness({ data }).render();
+  const displayed = page.filter((node) => node.type === "Text").map((node) => text(node.props.children));
+  assert.ok(displayed.includes("用餐时间未提供"));
+  assert.ok(displayed.includes(`${data.date} 测量时间未提供`));
+  assert.ok(displayed.some((value) => value.includes("测量时间未提供 · 6000 步")));
+  for (const clock of ["20:47", "21:16", "22:58"]) assert.equal(displayed.some((value) => value.includes(clock)), false);
+  for (const clock of ["12:12", "07:07", "15:15"]) assert.ok(displayed.some((value) => value.includes(clock)));
+  for (const note of [data.meals[0].note, data.weights[0].note, data.steps[0].note]) assert.ok(displayed.some((value) => value.includes(note)));
+  assert.equal(page.find((node) => node.type === "ServiceMetric" && node.props.label === "当日步数").props.detail, "测量时间未提供");
+});
+
+for (const kind of ["meal", "weight", "steps"]) {
+  for (const unknown of [false, true]) {
+    test(`${kind} editor labels ${unknown ? "unknown event time as a recording clock" : "an explicit event clock normally"}`, () => {
+      const data = summary();
+      const note = unknown ? kind === "meal" ? "实际用餐时间未知；原始备注" : "实际测量时间未知；原始备注" : "明确提供了时间";
+      const at = `${data.date}T20:47:00`;
+      const record = kind === "meal" ? { id: "record", meal_type: "lunch", occurred_at: at, status: "recorded", description: "一碗饭", note }
+        : { id: "record", measured_at: at, value: kind === "weight" ? 70 : 5000, unit: "kg", note };
+      data[kind === "meal" ? "meals" : kind === "weight" ? "weights" : "steps"] = [record];
+      const app = harness({ data });
+      app.render().find((node) => node.type === "ActionLink" && node.props.children === "纠正").props.onPress();
+      const page = app.render();
+      const clock = page.find((node) => node.type === "Field" && node.props.label === (unknown ? "记录时间" : kind === "meal" ? "发生时间" : "测量时间"));
+      assert.equal(clock.props.value, "20:47");
+      assert.equal(page.find((node) => node.type === "Field" && node.props.label === (kind === "meal" ? "发生日期" : "测量日期")).props.value, data.date);
+      assert.equal(page.find((node) => node.type === "Field" && node.props.label === "备注（可选）").props.value, note);
+      const explanations = page.filter((node) => node.type === "Text").map((node) => text(node.props.children)).filter((value) => value.includes("当前回填的是记录时间"));
+      assert.equal(explanations.length, unknown ? 1 : 0);
+      if (unknown) assert.ok(explanations[0].includes(kind === "meal" ? "实际用餐时间未提供" : "实际测量时间未提供"));
+    });
+  }
+}

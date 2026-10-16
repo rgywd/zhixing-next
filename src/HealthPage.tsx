@@ -13,6 +13,8 @@ import { ServiceToolbar, ServiceHeading, ServiceCard, ServiceSectionHeader, Serv
 const ruleKinds = { guideline: "饮食约定", restriction: "必须遵守的限制", preference: "偏好" };
 const ruleStates = { active: "生效", paused: "暂停", proposed: "待采纳" };
 const feedbackLabels = { accepted: "已采纳", replaced: "希望替换", declined: "这次不采用" };
+const unknownMealTime = (note?: string | null) => Boolean(note?.includes("实际用餐时间未知"));
+const unknownMeasurementTime = (note?: string | null) => Boolean(note?.includes("实际测量时间未知"));
 export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }: ServicePageProps) {
   const { s } = useUi();
   const v = useServiceStyles();
@@ -60,6 +62,9 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
   if (editor.visible && editor.draft) {
     const draft = editor.draft;
     const f = draft.fields;
+    const record = draft.context.record as HealthMeal | HealthWeight | HealthSteps | null;
+    const mealTimeUnknown = draft.kind === "meal" && unknownMealTime(record?.note);
+    const measurementTimeUnknown = (draft.kind === "weight" || draft.kind === "steps") && unknownMeasurementTime(record?.note);
     const editable = !editor.locked;
     const input = (name: string, label: string, extra: Partial<ComponentProps<typeof Field>> = {}) => <Field label={label} value={f[name] ?? ""} onChangeText={(value) => editor.set(name, value)} editable={editable} {...extra} />;
     const choices = (name: string, options: Record<string, string>) => <View style={s.wrap}>{Object.entries(options).map(([value, label]) => <Pressable key={value} accessibilityRole="radio" accessibilityState={{ selected: f[name] === value, disabled: !editable }} disabled={!editable} onPress={() => editor.set(name, value)} style={[s.chip, f[name] === value && s.chipActive]}><Text style={[s.chipText, f[name] === value && s.chipActiveText]}>{label}</Text></Pressable>)}</View>;
@@ -71,7 +76,8 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
         <View style={s.form}>
           {draft.kind === "meal" ? <>
             <Text style={s.label}>餐次</Text>{choices("meal_type", mealLabels)}
-            {input("date", "发生日期", { placeholder: "YYYY-MM-DD" })}{input("time", "发生时间", { placeholder: "HH:mm" })}
+            {input("date", "发生日期", { placeholder: "YYYY-MM-DD" })}{input("time", mealTimeUnknown ? "记录时间" : "发生时间", { placeholder: "HH:mm" })}
+            {mealTimeUnknown ? <Text style={s.description}>当前回填的是记录时间，实际用餐时间未提供。</Text> : null}
             <Text style={s.label}>实际情况</Text>{choices("status", { recorded: "吃过，记录内容", skipped: "明确没有吃这顿" })}
             {input("description", f.status === "skipped" ? "情况说明（可选）" : "吃了什么", { multiline: true, placeholder: "食物、做法；不必精确到克" })}
             {input("portion", "实际份量与剩余（可选）", { placeholder: "例如一碗，米饭剩一半" })}
@@ -80,7 +86,8 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
           {draft.kind === "weight" || draft.kind === "steps" ? <>
             {input("value", draft.kind === "weight" ? "测量体重" : "实际步数", { keyboardType: draft.kind === "weight" ? "decimal-pad" : "number-pad", placeholder: "实际测量值" })}
             {draft.kind === "weight" ? choices("unit", { kg: "公斤 kg", lb: "磅 lb" }) : null}
-            {input("date", "测量日期", { placeholder: "YYYY-MM-DD" })}{input("time", "测量时间", { placeholder: "HH:mm" })}
+            {input("date", "测量日期", { placeholder: "YYYY-MM-DD" })}{input("time", measurementTimeUnknown ? "记录时间" : "测量时间", { placeholder: "HH:mm" })}
+            {measurementTimeUnknown ? <Text style={s.description}>当前回填的是记录时间，实际测量时间未提供。</Text> : null}
             {input("note", "备注（可选）", { placeholder: "例如晨起、饭后或不同设备" })}
           </> : null}
           {draft.kind === "profile" ? <>
@@ -151,7 +158,7 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
         <View style={v.grid}>
           <ServiceMetric label="有效饮食约定" value={data ? `${data.rules.length} 条` : unknown} detail={data?.rules.length ? "按当前约定安排饮食" : "可直接添加或聊着整理"} />
           <ServiceMetric label="最近体重" value={trend?.latest_kg != null ? `${trend.latest_kg} kg` : data ? "等待测量" : unknown} detail={trend?.last_date ?? "按实际测量记录"} />
-          <ServiceMetric label="当日步数" value={latestSteps ? `${latestSteps.value} 步` : data ? "尚未记录" : unknown} detail={latestSteps ? `${localTime(new Date(latestSteps.measured_at))} 的记录` : "按身体限制安排活动"} />
+          <ServiceMetric label="当日步数" value={latestSteps ? `${latestSteps.value} 步` : data ? "尚未记录" : unknown} detail={latestSteps ? unknownMeasurementTime(latestSteps.note) ? "测量时间未提供" : `${localTime(new Date(latestSteps.measured_at))} 的记录` : "按身体限制安排活动"} />
           <ServiceMetric label="可用饮食建议" value={availableRecommendations ? `${availableRecommendations.length} 份` : unknown} detail={availableRecommendations?.length ? "看看方案，再决定怎么吃" : "一起想想下一餐"} tone="gold" />
         </View>
         <Button style={v.primaryButton} icon="sparkles-outline" onPress={nextMeal}>聊聊下一餐</Button>
@@ -184,7 +191,7 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
       <ServiceCard>
         <ServiceSectionHeader icon="nutrition-outline" title="饮食记录" subtitle={data ? `${date} · ${data.meals.length} 条记录` : date} action={<ActionLink disabled={!editor.ready} onPress={() => openMeal()}>补记</ActionLink>} />
         {data?.meals.length ? data.meals.map((item) => <View key={item.id} style={v.stack}>
-          <View style={v.spread}><Text style={v.title}>{mealLabels[item.meal_type]}{item.status === "skipped" ? " · 明确未吃" : ""}</Text><Text style={v.tiny}>{localTime(new Date(item.occurred_at))}</Text></View>
+          <View style={v.spread}><Text style={v.title}>{mealLabels[item.meal_type]}{item.status === "skipped" ? " · 明确未吃" : ""}</Text><Text style={v.tiny}>{unknownMealTime(item.note) ? "用餐时间未提供" : localTime(new Date(item.occurred_at))}</Text></View>
           {item.description ? <Text style={v.body}>{item.description}</Text> : null}{item.estimated_energy ? <Text style={v.tiny}>估计 {item.estimated_energy.minimum}–{item.estimated_energy.maximum} kcal；依据：{item.estimated_energy.basis}</Text> : null}{item.portion ? <Text style={v.muted}>{item.portion}</Text> : null}{item.note ? <Text style={v.tiny}>{item.note}</Text> : null}
           <View style={v.emptyActions}><ActionLink tone="neutral" onPress={() => openMeal(item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink disabled={!editor.ready} onPress={() => openDelete("meal", item, item.description || `${mealLabels[item.meal_type]}未吃记录`)}>删除</ActionLink></View><View style={v.divider} />
         </View>) : !data ? <Text style={v.muted}>{snapshot.loading ? "正在读取这一天的记录…" : "暂时无法读取这一天的记录。"}</Text> : <ServiceEmpty icon="create-outline" title="还没有这一天的饮食记录" description="没记录只表示未知；随手补一顿就能开始。">
@@ -201,14 +208,14 @@ export function HealthPage({ connection, onBack, onChat, onChanged, refreshKey }
         {trend && trend.count >= 2 && trend.change_kg != null ? <Text style={v.muted}>{trend.first_date} 至 {trend.last_date}，{trend.count} 次测量变化 {trend.change_kg > 0 ? "+" : ""}{trend.change_kg} kg。</Text> : <Text style={v.tiny}>积累更多同口径测量后再观察变化；不把单次波动当作趋势。</Text>}
         <View style={v.divider} />
         {(showAllWeights ? data?.weights : data?.weights.slice(0, 5))?.map((item) => <View key={item.id} style={v.stack}>
-          <View style={v.spread}><Text style={v.body}>{localDate(new Date(item.measured_at))} {localTime(new Date(item.measured_at))}</Text><Text style={v.title}>{item.value} {item.unit}</Text></View>
+          <View style={v.spread}><Text style={v.body}>{localDate(new Date(item.measured_at))} {unknownMeasurementTime(item.note) ? "测量时间未提供" : localTime(new Date(item.measured_at))}</Text><Text style={v.title}>{item.value} {item.unit}</Text></View>
           {item.note ? <Text style={v.tiny}>{item.note}</Text> : null}
           <View style={v.emptyActions}><ActionLink tone="neutral" onPress={() => openMeasure("weight", item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink onPress={() => openDelete("weight", item, `${item.value} ${item.unit}`)} disabled={!editor.ready}>删除</ActionLink></View>
         </View>)}
         {data && data.weights.length > 5 ? <ActionLink tone="neutral" onPress={() => setShowAllWeights(!showAllWeights)}>{showAllWeights ? "收起测量记录" : "展开近期测量记录"}</ActionLink> : null}
         <View style={v.inset}>
           <View style={v.spread}><Text style={v.muted}>当日步数</Text><Text style={v.amountSmall}>{latestSteps ? `${latestSteps.value} 步` : data ? "尚未记录" : unknown}</Text></View>
-          {data?.steps.map((item) => <View key={item.id} style={v.stack}><Text style={v.tiny}>{localTime(new Date(item.measured_at))} · {item.value} 步{item.note ? ` · ${item.note}` : ""}</Text><View style={v.emptyActions}><ActionLink tone="neutral" onPress={() => openMeasure("steps", item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink onPress={() => openDelete("steps", item, `${item.value} 步`)} disabled={!editor.ready}>删除</ActionLink></View></View>)}
+          {data?.steps.map((item) => <View key={item.id} style={v.stack}><Text style={v.tiny}>{unknownMeasurementTime(item.note) ? "测量时间未提供" : localTime(new Date(item.measured_at))} · {item.value} 步{item.note ? ` · ${item.note}` : ""}</Text><View style={v.emptyActions}><ActionLink tone="neutral" onPress={() => openMeasure("steps", item)} disabled={!editor.ready}>纠正</ActionLink><ActionLink onPress={() => openDelete("steps", item, `${item.value} 步`)} disabled={!editor.ready}>删除</ActionLink></View></View>)}
           <ActionLink disabled={!editor.ready} onPress={() => openMeasure("steps")}>记录步数</ActionLink>
         </View>
         <Text style={v.tiny}>活动按身体限制安排，记录步数不会自动增加运动要求。</Text>

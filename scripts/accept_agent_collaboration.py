@@ -185,6 +185,28 @@ def orchestration_usability(evidence, expected_first):
             "first_orchestration_choice_correct": bool(choices) and choices[0] == expected_first if coverage == "events" else None}
 
 
+def unprovided_liability_claim(text):
+    """Catch unsupported additions in these fictional fixtures, not general NLI."""
+    for clause in re.split(r"[。；;\n]", text):
+        if any(phrase in clause for phrase in ("不能推断", "不代表", "不等于", "没有说明", "未说明", "未提供", "未知", "无法判断")):
+            continue
+        if re.search(r"免责|(?:由|归)(?:乘客|用户|方案方|承运方)[^，,。；;]{0,12}(?:承担|负责|负担)|(?:风险|责任)[^，,。；;]{0,12}不由", clause):
+            return True
+    return False
+
+
+def guessed_other_food_portion(text):
+    # Only rice has a quantity in the unchanged natural meal fixture. Remove
+    # its clause before checking whether quantities were invented for the sides.
+    for clause in re.split(r"[，,。；;\n]", text):
+        clause = re.sub(r"米饭.*", "", clause)
+        if any(word in clause for word in ("未知", "未提供", "未说明", "不详")):
+            continue
+        if re.search(r"(?:豆腐|青菜).*?(?:[一二三四五六七八九十两\d]+(?:份|碗|克|g)|各一)", clause):
+            return True
+    return False
+
+
 class AcceptanceSuite:
     def __init__(self, settings, directory, client, store, worker_task, timeout, tick_gate):
         self.settings, self.directory, self.client, self.store = settings, directory, client, store
@@ -303,6 +325,17 @@ class AcceptanceSuite:
             self.case_results[key]["tool_usability"] = evidence["collaboration_tool_usability"]
         require(passed, f"{key}_business_assertion_failed")
 
+    def unknown_meal_time_preserved(self, meal, message_id, reply):
+        with self.store._connection() as db:
+            source = db.execute("SELECT created_at FROM messages WHERE id=?", (message_id,)).fetchone()
+        if not source or "实际用餐时间未知" not in meal.get("note", ""):
+            return False
+        # HealthService persists seconds. Compare at that existing precision;
+        # the semantic requirement is source recording time, never a guessed clock.
+        same_instant = datetime.fromisoformat(meal["occurred_at"].replace("Z", "+00:00")).replace(microsecond=0) == datetime.fromisoformat(source[0].replace("Z", "+00:00")).replace(microsecond=0)
+        mentions_clock = re.search(r"(?<!\d)\d{1,2}:\d{2}(?!\d)|\d{1,2}点\d{1,2}分", reply)
+        return same_instant and (not mentions_clock or "记录时间" in reply or "实际用餐时间未知" in reply)
+
     async def health(self):
         conversation = await self.conversation("虚构健康协作验收", "health")
         profile = await self.request("GET", "/v1/health/profile")
@@ -316,6 +349,8 @@ class AcceptanceSuite:
         self.checked("health_weight", {
             "one_actual_weight": len(rows) == 1,
             "actual_value_and_unit": len(rows) == 1 and rows[0]["value"] == 70.9 and rows[0]["unit"] == "kg",
+            "explicit_measurement_clock_preserved": len(rows) == 1 and datetime.fromisoformat(
+                rows[0]["measured_at"].replace("Z", "+00:00")).astimezone(ZoneInfo("Asia/Shanghai")).isoformat().startswith(self.today + "T08:00:00"),
             "real_tool_receipt": self.succeeded(weight, "record_weight"),
         }, duplicate_write=len(rows) > 1)
         changed = await self.turn("health_profile_patch", conversation,
@@ -339,6 +374,9 @@ class AcceptanceSuite:
             "one_payment_and_one_meal": len(tx) == len(meals) == 1,
             "explicit_payment": len(tx) == 1 and tx[0]["amount"] == "24.60",
             "actual_food": len(meals) == 1 and "豆腐" in meals[0]["description"],
+            "unknown_clock_preserved": len(meals) == 1 and self.unknown_meal_time_preserved(meals[0], source, recorded["run"]["result"]),
+            "no_invented_other_food_portion": len(meals) == 1 and not guessed_other_food_portion(
+                f"{meals[0]['description']}\n{meals[0]['portion']}\n{recorded['run']['result']}"),
             "atomic_receipt": self.succeeded(recorded, "record_life_meal"),
         }, duplicate_write=len(tx) > 1 or len(meals) > 1)
         corrected = await self.turn("linked_meal_correction", conversation,
@@ -352,6 +390,9 @@ class AcceptanceSuite:
             "food_preserved": len(new_meals) == 1 and all(
                 food in f"{new_meals[0]['description']} {new_meals[0]['portion']}"
                 for food in ("豆腐", "青菜", "米饭")),
+            "unknown_clock_unchanged": len(new_meals) == 1 and self.unknown_meal_time_preserved(new_meals[0], source, corrected["run"]["result"]),
+            "no_invented_other_food_portion": len(new_meals) == 1 and not guessed_other_food_portion(
+                f"{new_meals[0]['description']}\n{new_meals[0]['portion']}\n{corrected['run']['result']}"),
             "no_extra_records": len(corrected["snapshot"]["meals"]) == len(snapshot["meals"])
             and len(corrected["snapshot"]["transactions"]) == len(snapshot["transactions"]),
             "atomic_correction_receipt": self.succeeded(corrected, "correct_life_meal"),
@@ -421,6 +462,7 @@ class AcceptanceSuite:
             "both_fixture_codes_in_results": all(any(code in (row["result"] or "") for row in rows)
                                                   for code in ("PINE-17", "MAPLE-29")),
             "both_fixture_codes_in_final": all(code in text for code in ("PINE-17", "MAPLE-29")),
+            "no_unprovided_liability_claim": not unprovided_liability_claim(text),
             "followup_reused_original_children": bool(followup) and set(row["id"] for row in rows) == initial_ids,
             "followup_actually_applied": any(row["status"] == "applied" and row["child_id"] in initial_ids for row in inputs),
             "supplement_in_child_and_final": all(word in text for word in ("偏远", "周二")) and any(
@@ -442,6 +484,7 @@ class AcceptanceSuite:
             "real_initial_checkpoint": checkpointed,
             "provided_facts_in_reply": "HARBOR-42" in initial["run"]["result"]
             and "停航" in initial["run"]["result"],
+            "no_unprovided_liability_claim": not unprovided_liability_claim(initial["run"]["result"]),
         })
         source = await self.conversation("虚构跨对话咨询")
         conversations_before = {row["id"] for row in (await self.request("GET", "/v1/conversations", params={"limit": 100}))["items"]}
@@ -484,6 +527,8 @@ class AcceptanceSuite:
             and "周三" in receipt.get("result", "") and "停航" in receipt.get("result", ""),
             "actual_reply_in_source_summary": "HARBOR-42" in result["run"]["result"]
             and "停航" in result["run"]["result"],
+            "no_unprovided_liability_claim": not unprovided_liability_claim(result["run"]["result"])
+            and not unprovided_liability_claim(receipt.get("result", "")),
             "business_state_unchanged": result["before_snapshot"] == result["snapshot"],
         }, duplicate_write=False)
 
