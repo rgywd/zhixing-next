@@ -6,6 +6,7 @@ import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 from test_runtime import ScriptedModel, ignore, make_settings, no_controls
 
+from zhixing_next.finance_dates import normalize_history_range
 from zhixing_next.finance_service import FinanceService
 from zhixing_next.finance_tools import create_finance_service_tools
 from zhixing_next.runtime import run_agent
@@ -490,6 +491,72 @@ async def test_unsupported_exact_date_gives_known_range_without_dating_purchase(
         fields(category="手机", amount="1200", **suggestion)
     )
     assert result["date_precision"] == "range"
+
+
+def test_history_range_keeps_real_span_instead_of_deriving_months_from_counts(setup):
+    store, conversation = setup
+    source = user(store, conversation,
+                  "8月5日资产6000，到现在发了两个月工资加公积金提取，各自两笔。九月到11月房租5100。",
+                  created_at="2026-10-15T07:00:00Z")
+    original = {"kind": "transfer", "category": "公积金提取", "amount": "200",
+                "date_precision": "range", "date_start": "2026-09-01", "date_end": "2026-10-15",
+                "occurred_on": "2026-10-15", "note": "9月至今提取两次"}
+    normalized = normalize_history_range(store, source_id=source, fields=original)
+    assert normalized == {**original, "date_start": "2026-08-05", "occurred_on": None}
+    assert original["date_start"] == "2026-09-01"
+    # A later request may select a real historical source; no copied quote or
+    # model-authored note can grant another narrower period.
+    current = user(store, conversation, "请整理之前的记录")
+    assert normalize_history_range(store, source_id=current, fields=original,
+                                   evidence_source_id=source) == normalized
+
+
+@pytest.mark.parametrize("statement,end", [
+    ("9月10日提取公积金200元", "2026-10-15"),
+    ("9月1日到9月20日期间提取公积金200元", "2026-09-20"),
+    ("9月提取公积金200元", "2026-09-30"),
+    ("9月1日至今提取公积金200元", "2026-10-15"),
+])
+def test_history_range_preserves_source_bound_actual_event_periods(setup, statement, end):
+    store, conversation = setup
+    source = user(store, conversation, f"8月5日资产6000，到现在资产7000。{statement}。",
+                  created_at="2026-10-15T07:00:00Z")
+    original = {"category": "公积金提取", "amount": "200", "date_precision": "range",
+                "date_start": "2026-09-01", "date_end": end}
+    assert normalize_history_range(store, source_id=source, fields=original) == original
+
+
+@pytest.mark.parametrize("statement", [
+    "公积金提取两次。9月10日付房租200元",
+    "9月到11月覆盖的公积金提取金额200元",
+    "公积金每月9月10日提取200元",
+    "9月至今提取公积金200元",
+])
+def test_history_range_does_not_borrow_coverage_rules_or_truncate_until_now(setup, statement):
+    store, conversation = setup
+    source = user(store, conversation, f"8月5日资产6000，到现在资产7000。{statement}。",
+                  created_at="2026-10-15T07:00:00Z")
+    original = {"category": "公积金提取", "amount": "200", "date_precision": "range",
+                "date_start": "2026-09-01", "date_end": "2026-09-30"}
+    normalized = normalize_history_range(store, source_id=source, fields=original)
+    assert (normalized["date_start"], normalized["date_end"]) == ("2026-08-05", "2026-10-15")
+
+
+def test_history_range_normalization_requires_real_source_and_explicit_whole_span(setup):
+    store, conversation = setup
+    original = {"category": "公积金提取", "amount": "200", "date_precision": "range",
+                "date_start": "2026-09-01", "date_end": "2026-10-15"}
+    no_span = user(store, conversation, "之前提取过两次公积金", created_at="2026-10-15T07:00:00Z")
+    assistant = user(store, conversation, "8月5日到现在提取了公积金", role="assistant",
+                     created_at="2026-10-15T07:00:00Z")
+    for source in (None, "missing", no_span, assistant):
+        assert normalize_history_range(store, source_id=source, fields=original) is original
+    valid = user(store, conversation, "8月5日资产6000，到现在提取过公积金",
+                 created_at="2026-10-15T07:00:00Z")
+    for change in ({"date_precision": "day"}, {"date_precision": "month"},
+                   {"date_end": "2026-09-01"}, {"date_start": None}):
+        unchanged = {**original, **change}
+        assert normalize_history_range(store, source_id=valid, fields=unchanged) is unchanged
 
 
 @pytest.mark.parametrize("agent_id", [None, "finance"])

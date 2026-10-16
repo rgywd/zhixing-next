@@ -53,6 +53,30 @@ async def test_monthly_cost_is_derived_instead_of_requiring_model_arithmetic(tmp
     assert commitment["monthly_cost"] == "1333.33"
 
 
+async def test_history_range_is_canonical_for_record_correct_and_atomic_batch(tmp_path):
+    store, available = tools(tmp_path, "8月5日到10月15日期间回顾，公积金提取两次合计4000元，房租覆盖九月到十一月")
+    args = {"entry_key": "withdrawals", "kind": "transfer", "amount": "4000",
+            "category": "公积金提取", "date_precision": "range",
+            "date_start": "2026-09-01", "date_end": "2026-10-15"}
+    first = await available["record_finance_transaction"].ainvoke(args)
+    assert first["date_start"] == "2026-08-05"
+    args["date_start"] = "2026-08-05"
+    assert await available["record_finance_transaction"].ainvoke(args) == first
+    corrected = await available["correct_finance_transaction"].ainvoke({
+        "transaction_id": first["id"], "entry_key": "keep-real-period",
+        "changes": {"date_precision": "range", "date_start": "2026-09-01", "date_end": "2026-10-15"},
+    })
+    assert corrected["date_start"] == "2026-08-05"
+    await available["apply_finance_transaction_batch"].ainvoke({
+        "entry_key": "keep-real-period-batch", "operations": [{
+            "operation": "update", "transaction_id": first["id"],
+            "fields": {"date_precision": "range", "date_start": "2026-09-01", "date_end": "2026-10-15"},
+        }],
+    })
+    rows = FinanceService(store).list_transactions(month="2026-10")["items"]
+    assert len(rows) == 1 and rows[0]["date_start"] == "2026-08-05"
+
+
 async def test_report_accepts_redundant_entry_labels_without_duplicating_artifacts(tmp_path):
     settings, store, _, run, args = fixture(tmp_path)
     events = []

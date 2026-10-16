@@ -7,6 +7,7 @@ stays a range, without asking the user to fill a date field.
 
 import json
 import re
+from calendar import monthrange
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from zoneinfo import ZoneInfo
@@ -170,6 +171,101 @@ def _range_suggestion(current, text, reference):
         return {"date_precision": "range", "date_start": min(dates).isoformat(),
                 "date_end": max(dates).isoformat(), "occurred_on": None}
     return None
+
+
+def normalize_history_range(store, *, source_id, fields, evidence_source_id=None):
+    """Keep the real retrospective span when a model invents a narrower range.
+
+    This is only an AI input normalization. A source-bound actual event can
+    still establish a smaller period; counts, coverage and recurring rules
+    cannot. No source, no explicit overall span or an invalid range leaves the
+    input alone for the normal validators. Never turn uncertainty into a day.
+    """
+    if fields.get("date_precision") != "range":
+        return fields
+    try:
+        begin, end = (date.fromisoformat(fields[key]) for key in ("date_start", "date_end"))
+    except (KeyError, TypeError, ValueError):
+        return fields
+    if begin >= end or not (evidence_source_id or source_id):
+        return fields
+    with store._connection() as db:
+        row = db.execute(
+            "SELECT role,status,content,created_at FROM messages WHERE id=?",
+            (evidence_source_id or source_id,),
+        ).fetchone()
+    if row is None or row["role"] != "user" or row["status"] not in {"accepted", "applied"}:
+        return fields
+    try:
+        reference = _business_date(row["created_at"])
+    except StoreError:
+        return fields
+    overall = _range_suggestion(None, row["content"], reference)
+    if overall is None:
+        return fields
+    first, last = (date.fromisoformat(overall[key]) for key in ("date_start", "date_end"))
+    if not (first <= begin <= end <= last) or (begin, end) == (first, last):
+        return fields
+
+    subject = re.sub(r"\s", "", str(fields.get("category") or "")).casefold()
+    target_subjects = {
+        index for index, aliases in enumerate(_SUBJECTS)
+        if any(re.sub(r"\s", "", alias).casefold() in subject for alias in aliases)
+    }
+    candidates = []
+    for match in re.finditer(r"[^，,。；;、\n]+", row["content"]):
+        # "9月1日至今提取…" is an actual event span. Removing only its
+        # retrospective endpoint does not remove observations/plans/negation.
+        clause = re.sub(r"到现在|至今|到今天|截至今天|截止今天", "", match.group())
+        if _NON_EVENT.search(clause) or not _event_clause(clause, fields):
+            continue
+        clause_subjects = {
+            index for index, aliases in enumerate(_SUBJECTS)
+            if any(alias.casefold() in clause.casefold() for alias in aliases)
+        }
+        if target_subjects and clause_subjects and not target_subjects & clause_subjects:
+            continue
+        bound = ((len(subject) > 1 and subject in re.sub(r"\s", "", clause).casefold())
+                 or bool(target_subjects & clause_subjects))
+        candidates.append((match.group(), clause, bound))
+    bound = [item for item in candidates if item[2]]
+    if not bound:
+        # A single amount occurrence is another bounded event identity. Equal
+        # amounts elsewhere cannot lend a date to this event, even via a quote.
+        amount_matches = [item for item in candidates if _same_amount(item[1], fields.get("amount"))]
+        if len(amount_matches) == 1 and _amount_count(amount_matches[0][1], fields.get("amount")) == 1:
+            bound = amount_matches
+
+    def contains_event_period(item):
+        original, clause, _ = item
+        if _amount_count(clause, fields.get("amount")) > 1:
+            return False
+        dates = _dates(clause, reference)
+        if dates:
+            if re.search(r"到现在|至今|到今天|截至今天|截止今天", original):
+                dates.add(reference)
+            return begin <= min(dates) and max(dates) <= end
+        # Month evidence has to describe an actual event. A covered rent month
+        # with only an amount is not an occurrence month. Payment counts such
+        # as "两个月工资" do not match this calendar-month syntax.
+        if not _EVENT.search(clause):
+            return False
+        months = []
+        for year_text, month_text in re.findall(r"(?:(\d{4})年)?(?<!\d)(\d{1,2}|[一二三四五六七八九十]{1,3})月", clause):
+            month = _number(month_text)
+            if not 1 <= month <= 12:
+                continue
+            year = int(year_text) if year_text else reference.year - (1 if "去年" in clause else 0)
+            if not year_text and "今年" not in clause and "去年" not in clause and month > reference.month:
+                year -= 1
+            months.append((date(year, month, 1), min(reference, date(year, month, monthrange(year, month)[1]))))
+        if months and re.search(r"到现在|至今|到今天|截至今天|截止今天", original):
+            months.append((reference, reference))
+        return bool(months) and begin <= min(item[0] for item in months) and max(item[1] for item in months) <= end
+
+    if bound and all(contains_event_period(item) for item in bound):
+        return fields
+    return {**fields, **overall}
 
 
 def verify_date_evidence(
