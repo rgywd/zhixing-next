@@ -187,7 +187,7 @@ export function ChatPanel({
     if (!draftReady || draft.pending || busy) return;
     const addition = message.role === "user" ? message.content : `关于这条回复：\n${message.content}\n\n`;
     try {
-      const text = [draft.text.trim(), addition].filter(Boolean).join("\n\n");
+      const text = [draft.text, addition].filter(Boolean).join("\n\n");
       if (text.length > 20000) { notice.show({ message: "内容超过草稿长度，可先复制并选取需要的部分", tone: "warning" }); return; }
       await updateDraft({ ...draft, text, pending: null });
       setMessageMenu(null); notice.show({ message: "已放入草稿，可修改后发送" });

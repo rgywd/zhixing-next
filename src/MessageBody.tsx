@@ -12,6 +12,10 @@ function StreamingText(props: TextProps) {
   return <Text {...props} selectable={false} />;
 }
 const markdownParser = createMarkdownIt();
+const tableColumnWidth = 160;
+const tableWidth = (node: ASTNode) => Math.max(1, ...node.children.flatMap((part) => part.children)
+  .filter((part) => part.type === "tr").map((part) => part.children.length)) * tableColumnWidth;
+const cellStyle = { width: tableColumnWidth, minWidth: tableColumnWidth, maxWidth: tableColumnWidth, flex: 0, flexGrow: 0, flexShrink: 0 };
 
 const createMarkdownRules = (colors: ThemeColors) => ({
   image: (node: ASTNode) => (
@@ -20,12 +24,18 @@ const createMarkdownRules = (colors: ThemeColors) => ({
     </Text>
   ),
   table: (node: ASTNode, children: ReactNode[], _parents: ASTNode[], styles: MarkdownStyleMap) => {
-    const rows = node.children.flatMap((part) => part.children).filter((part) => part.type === "tr");
-    const columns = Math.max(1, ...rows.map((part) => part.children.length));
     return <ScrollView key={node.key} horizontal nestedScrollEnabled showsHorizontalScrollIndicator contentContainerStyle={{ flexGrow: 1 }}>
-      <View style={[styles._VIEW_SAFE_table, { minWidth: Math.min(columns, 32) * 120 }]}>{children}</View>
+      <View style={[styles._VIEW_SAFE_table, { width: tableWidth(node) + 2 }]}>{children}</View>
     </ScrollView>;
   },
+  tr: (node: ASTNode, children: ReactNode[], parents: ASTNode[], styles: MarkdownStyleMap) => {
+    const table = parents.find((part) => part.type === "table");
+    return <View key={node.key} style={[styles._VIEW_SAFE_tr, { width: table ? tableWidth(table) : node.children.length * tableColumnWidth, flexDirection: "row", flexWrap: "nowrap" }]}>{children}</View>;
+  },
+  th: (node: ASTNode, children: ReactNode[], _parents: ASTNode[], styles: MarkdownStyleMap) =>
+    <View key={node.key} style={[styles._VIEW_SAFE_th, cellStyle]}>{children}</View>,
+  td: (node: ASTNode, children: ReactNode[], _parents: ASTNode[], styles: MarkdownStyleMap) =>
+    <View key={node.key} style={[styles._VIEW_SAFE_td, cellStyle]}>{children}</View>,
 });
 
 const openWebLink = (url: string) => /^https?:\/\//i.test(url);

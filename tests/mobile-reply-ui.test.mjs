@@ -160,3 +160,41 @@ test("MessageBody renders the complete final source immediately and disables sel
   const same = { ...final.props, node: { ...final.props.node, key: "new-random-key" } };
   assert.equal(blockComparisons[0](final.props, same), true);
 });
+
+test("Markdown tables share fixed column boundaries across unequal headers, rows and incomplete cells", () => {
+  const { MessageBody } = load("MessageBody.tsx", { react: { memo: (fn) => fn, useDeferredValue: (value) => value, useMemo: (fn) => fn() },
+    "react/jsx-runtime": jsx, "react-native": { Text: "Text", View: "View", ScrollView: "ScrollView" },
+    "@ronradtke/react-native-markdown-display": { __esModule: true, default: "Markdown", createMarkdownIt, parser, sealIncompleteMarkdown },
+    "./ThemeProvider": { useTheme: () => ({ mode: "dark" }), useThemedStyles: (factory) => factory({ ink: "#fff", muted: "#aaa", line: "#333" }) },
+    "./messageMarkdown": { markdownBlockSignature } });
+  const sources = [
+    "| 事项 | 现在可以做 |\n| --- | --- |\n| 开销 | 记下一笔，看看本月余量 |\n| 饮食 | 记录这一餐，给下一餐留余地 |",
+    "| A | Much longer heading | Third |\n| --- | --- | --- |\n| A very long first cell | 1 | [Link](https://fixture.test) |\n| B | Incomplete |",
+  ];
+  const flatten = (style) => Object.assign({}, ...style.filter(Boolean));
+  for (const source of sources) {
+    const block = MessageBody({ children: source, streaming: true }).props.children[0];
+    const markdown = block.type(block.props), rules = markdown.props.rules, table = markdown.props.children[0];
+    const rows = table.children.flatMap((section) => section.children).filter((node) => node.type === "tr");
+    const renderedTable = rules.table(table, ["semantic table children"], [], {});
+    assert.equal(renderedTable.type, "ScrollView"); assert.equal(renderedTable.props.horizontal, true);
+    assert.equal(renderedTable.props.children.props.children[0], "semantic table children");
+    const gridWidth = flatten(renderedTable.props.children.props.style).width - 2;
+    const columnCount = rows[0].children.length;
+    assert.equal(gridWidth, columnCount * 160);
+    const boundaries = rows.map((row) => {
+      const renderedRow = rules.tr(row, [], [table], {});
+      assert.equal(flatten(renderedRow.props.style).width, gridWidth);
+      let offset = 0;
+      return row.children.map((cell) => {
+        const renderedCell = rules[cell.type](cell, [cell.children], [row, table], {}), style = flatten(renderedCell.props.style);
+        assert.equal(style.flexGrow, 0); assert.equal(style.flexShrink, 0); assert.equal(style.width, 160);
+        assert.equal(style.minWidth, style.maxWidth); assert.equal(renderedCell.props.children[0], cell.children);
+        const boundary = offset; offset += style.width; return boundary;
+      });
+    });
+    for (const row of boundaries) assert.deepEqual(row, boundaries[0], "every row uses exactly the header's column positions");
+    assert.ok(gridWidth > 284, "a 320dp screen scrolls the grid locally instead of shrinking cells per row");
+    assert.ok(JSON.stringify(table).includes(source.includes("事项") ? "给下一餐留余地" : "https://fixture.test"), "complete semantic content survives the layout rule");
+  }
+});
