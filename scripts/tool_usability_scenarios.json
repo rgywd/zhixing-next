@@ -1,0 +1,98 @@
+{
+  "schema": 1,
+  "description": "Fictional natural-language cases. Repeat the same case/variant at applicable main, direct and delegated entries; do not add tool names to prompts. Each online case gets a separate conversation, while shared service data remains visible. Compare entry groups only for the same scenario and variant. Success-claim truthfulness still requires independent review.",
+  "cases": [
+    {
+      "id": "expense", "agent_id": "finance",
+      "prompts": ["今天是{today}，我今天买文具花了18.50元，帮我记下来。", "{today}买笔和本子付了18.50元，记一笔文具支出。"],
+      "expected_first_tools": ["get_finance_summary", "list_finance_transactions", "record_finance_transaction"],
+      "expected_success_tools": ["record_finance_transaction"],
+      "expected_records": [{"collection": "transactions", "count": 1, "fields": {"kind": "expense", "amount": "18.50"}}]
+    },
+    {
+      "id": "salary", "agent_id": "finance",
+      "prompts": ["今天是{today}，今天新发的工资9800元已经到账了，请记录这笔收入。", "{today}收到本月新工资9800元，帮我记收入。"],
+      "expected_first_tools": ["get_finance_summary", "list_finance_transactions", "record_finance_transaction"],
+      "expected_success_tools": ["record_finance_transaction"],
+      "expected_records": [{"collection": "transactions", "count": 1, "fields": {"kind": "income", "amount": "9800.00"}}]
+    },
+    {
+      "id": "transfer", "agent_id": "finance",
+      "prompts": ["今天是{today}，我今天把自己原有的公积金提取了2000元到银行卡，帮我记一下。", "{today}有2000元公积金本金从我原来的公积金账户转到了银行卡，记录这次转移。"],
+      "expected_first_tools": ["get_finance_summary", "list_finance_transactions", "record_finance_transaction"],
+      "expected_success_tools": ["record_finance_transaction"],
+      "expected_records": [{"collection": "transactions", "count": 1, "fields": {"kind": "transfer", "amount": "2000.00"}}]
+    },
+    {
+      "id": "budget", "agent_id": "finance",
+      "prompts": ["从{month}开始，把我的日常开销预算改成每月1800元，其他预算安排保留。", "{month}起每月日常预算设为1800元，别动我其他的预算项目。"],
+      "expected_first_tools": ["get_finance_summary", "update_finance_budget"],
+      "expected_success_tools": ["update_finance_budget"],
+      "preserved_paths": ["budget.expected_income", "budget.savings_target", "budget.commitments"],
+      "snapshot_checks": [{"path": "budget.daily_budget", "equals": "1800.00"}]
+    },
+    {
+      "id": "meal", "agent_id": "health",
+      "prompts": ["今天是{today}，今天午饭实际吃了豆腐、青菜和米饭，米饭剩下一半，帮我记下来。", "{today}的午餐我吃的是豆腐、青菜，米饭只吃了一半，记录实际吃的这些。"],
+      "expected_first_tools": ["query_health_context", "record_meal", "record_life_meal"],
+      "expected_success_tools": ["record_meal", "record_life_meal"],
+      "expected_records": [{"collection": "meals", "count": 1, "fields": {"status": "recorded", "meal_type": "lunch"}, "contains": {"description": "豆腐"}}],
+      "unchanged_collections": ["transactions"]
+    },
+    {
+      "id": "skipped_meal", "agent_id": "health",
+      "prompts": ["今天是{today}，我今天明确没有吃早餐，帮我记为跳过早餐。", "{today}早餐这顿确实没吃，请记录这一次跳过。"],
+      "expected_first_tools": ["query_health_context", "record_meal", "record_life_meal"],
+      "expected_success_tools": ["record_meal", "record_life_meal"],
+      "expected_records": [{"collection": "meals", "count": 1, "fields": {"status": "skipped", "meal_type": "breakfast"}}],
+      "unchanged_collections": ["transactions"]
+    },
+    {
+      "id": "weight", "agent_id": "health",
+      "prompts": ["今天是{today}，今天早上八点称重70.9公斤，帮我记下来。", "{today}上午8点体重秤显示70.9千克，记录这次测量。"],
+      "expected_first_tools": ["query_health_context", "record_weight"],
+      "expected_success_tools": ["record_weight"],
+      "expected_records": [{"collection": "health.weights", "count": 1, "fields": {"unit": "kg", "value": 70.9}}]
+    },
+    {
+      "id": "steps", "agent_id": "health",
+      "prompts": ["今天是{today}，今天晚上八点手机显示走了4200步，帮我记下来。", "{today}20点看到的步数是4200，记录这个实际步数。"],
+      "expected_first_tools": ["query_health_context", "record_steps"],
+      "expected_success_tools": ["record_steps"],
+      "expected_records": [{"collection": "health.steps", "count": 1, "fields": {"value": 4200}}]
+    },
+    {
+      "id": "profile_exclusion", "agent_id": "health",
+      "prompts": ["把我的饮食档案里的不吃食物增加香菜，原来其他信息都保留。", "我不吃香菜，补充到饮食档案的不吃清单里，别删掉已有信息。"],
+      "expected_first_tools": ["query_health_context", "save_health_profile"],
+      "expected_success_tools": ["save_health_profile"],
+      "preserved_paths": ["health.profile.activity_limitations", "health.profile.food_allergies", "health.profile.preferences", "health.profile.goals"],
+      "snapshot_checks": [{"path": "health.profile.food_exclusions", "contains": "香菜"}]
+    },
+    {
+      "id": "diet_rule", "agent_id": "health",
+      "prompts": ["帮我保存一条我已决定采用的饮食约定：晚餐搭配蔬菜、蛋白质和适量主食。", "我决定以后晚餐蔬菜、蛋白质、主食都搭配一点，把这条约定记下来。"],
+      "expected_first_tools": ["query_health_context", "save_diet_rule"],
+      "expected_success_tools": ["save_diet_rule"],
+      "expected_records": [{"collection": "health.all_rules", "count": 1, "fields": {"status": "active", "origin": "user"}}]
+    },
+    {
+      "id": "linked_meal",
+      "prompts": ["今天是{today}，今天午饭实际花了24.60元，吃了豆腐、青菜和米饭，米饭剩了一半。帮我把这同一顿饭和餐费一起记下来。", "{today}午餐付了24.60元，实际吃的是豆腐青菜和半份米饭，同一顿的花费和饮食都记录一下。"],
+      "expected_first_tools": ["query_life_events", "record_life_meal"],
+      "expected_success_tools": ["record_life_meal"],
+      "expected_records": [
+        {"collection": "transactions", "count": 1, "fields": {"kind": "expense", "amount": "24.60"}},
+        {"collection": "meals", "count": 1, "fields": {"status": "recorded"}, "contains": {"description": "豆腐"}}
+      ]
+    },
+    {
+      "id": "recommendation", "agent_id": "health",
+      "prompts": ["今天是{today}，我没有厨房，也没法加热，给我两个送到就能吃的晚餐搭配，先保存成建议，我还没有吃。", "{today}晚饭还没吃，想看看两个不用厨房和加热的搭配，帮我保存备选建议。"],
+      "expected_first_tools": ["query_health_context"],
+      "expected_success_tools": ["save_meal_recommendation"],
+      "expected_records": [{"collection": "health.recommendations", "count": 1, "fields": {"meal_type": "dinner"}}],
+      "unchanged_collections": ["transactions", "meals"]
+    }
+  ]
+}

@@ -92,7 +92,8 @@ export type Run = {
   seq?: number;
   started_at?: string | null;
   attachments?: Resource[];
-  phase?: "normal" | "approval" | "input" | "recovering";
+  phase?: "normal" | "approval" | "input" | "recovering" | "agent_wait";
+  origin?: "agent_message" | null;
   recovery_enabled?: number;
   recovery_count?: number;
   id: string;
@@ -113,7 +114,9 @@ export type Message = {
   id: string;
   conversation_id: string;
   role: "user" | "assistant";
-  origin?: "assistant_task";
+  origin?: "assistant_task" | "agent_message";
+  source_conversation_id?: string;
+  delivery_id?: string;
   content: string;
   attachments?: Resource[];
   intent: "queue" | "steer";

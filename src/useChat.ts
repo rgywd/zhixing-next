@@ -25,6 +25,7 @@ import {
 } from "./storage";
 import { useSyncStatus } from "./ConnectionStatus";
 import { humanError } from "./ui";
+import { isSteerableUserRun } from "./steerableRun";
 
 export function useChat({
   connection,
@@ -96,7 +97,7 @@ export function useChat({
   const [liveEvents, setLiveEvents] = useState<{ scope: string; buffer: LiveRunBuffer } | null>(null);
   const retainedLive = useRef<{ scope: string; buffer: LiveRunBuffer } | null>(null);
   const scopedRuns = runScope === streamScope ? runs.filter((run) => run.conversation_id === conversation.id) : [];
-  const currentRunning = runScope === streamScope && running?.conversation_id === conversation.id ? running : null;
+  const currentRunning = runScope === streamScope && running?.conversation_id === conversation.id && isSteerableUserRun(running) ? running : null;
   const trackedRun = currentRunning
     ?? scopedRuns.find((run) => run.status === "queued") ?? scopedRuns.at(-1) ?? null;
   const trackedRunId = trackedRun?.id ?? null;
@@ -237,7 +238,7 @@ export function useChat({
         setRuns(tasks.items);
         loadedScope.current = streamScope; setRunScope(streamScope);
         setRunning(
-          activeRuns.items.find((run) => run.status === "running") ?? null,
+          [...activeRuns.items, ...tasks.items].find((run) => run.conversation_id === conversation.id && isSteerableUserRun(run)) ?? null,
         );
         if (initial) {
           setPrevious(history.previous_cursor ?? null);

@@ -9,6 +9,7 @@ import { ResourceImage } from "./ResourcePreview";
 import { useThemedStyles } from "./ThemeProvider";
 import { layout, radius, space, typography, type ThemeColors } from "./theme";
 import { ActionLink, Button, timeLabel, useUi } from "./ui";
+import { isSteerableUserRun } from "./steerableRun";
 
 type Props = {
   connection: Connection;
@@ -34,7 +35,7 @@ export function QueuedMessages({ connection, items, running, busyId, error, onWi
   if (!items.length) return null;
   const first = items[0];
   const thumbnail = first.attachments.find((item) => item.mime_type.startsWith("image/"));
-  const canSteer = running?.status === "running" && !running.cancel_requested && !busyId;
+  const canSteer = isSteerableUserRun(running) && !busyId;
   const act = (action: Props["onWithdraw"], item: QueuedMessageItem) => { void action(item).catch(() => undefined); };
   const openRun = (id: string) => { setView(null); onOpenRun(id); };
   return <>
@@ -69,7 +70,7 @@ export function QueuedMessages({ connection, items, running, busyId, error, onWi
           <Attachments connection={connection} items={selected.attachments} />
           <ActionLink icon="receipt-outline" tone="neutral" onPress={() => openRun(selected.run.id)}>查看处理记录</ActionLink>
           <Button secondary disabled={!canSteer} icon="return-down-forward-outline" onPress={() => act(onSteer, selected)}>引导到当前回复</Button>
-          {!running || running.cancel_requested ? <Text style={s.muted}>当前没有可补充的回复，会按顺序接着处理。</Text> : null}
+          {!isSteerableUserRun(running) ? <Text style={s.muted}>当前没有可补充的回复，会按顺序接着处理。</Text> : null}
           <Button secondary disabled={!!busyId} icon="trash-outline" onPress={() => act(onWithdraw, selected)}>撤回这条消息</Button>
         </> : items.map((item) => <View key={item.run.id} style={styles.listItem}>
           <Pressable accessibilityRole="button" accessibilityLabel={`查看待发送消息：${preview(item)}`} onPress={() => setView(item.run.id)} style={styles.listSummary}>

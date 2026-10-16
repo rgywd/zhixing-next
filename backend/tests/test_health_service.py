@@ -147,7 +147,11 @@ def test_record_patch_keeps_omitted_facts_provenance_and_explicit_revision_guard
 async def test_health_tools_patch_only_changed_fields_and_bind_actual_seen_inputs(settings):
     from zhixing_next.finance_context import active_finance_input, delegated_finance_input
 
-    service = HealthService(Store(settings))
+    store = Store(settings)
+    conversation = store.create_conversation("健康")
+    store.submit_message(conversation["id"], id="first-input", content="4月5日12:30吃的午饭")
+    store.submit_message(conversation["id"], id="second-input", content="另一顿在4月5日12:30吃的")
+    service = HealthService(store)
     service.patch_profile({"food_allergies": ["花生"], "activity_limitations": ["不能跑步"]})
     available = {item.name: item for item in create_health_tools(settings, "health-chat", "first-input")}
     profile = await available["save_health_profile"].ainvoke({"profile": {"preferences": ["清淡"]}, "entry_key": "profile"})
@@ -351,6 +355,7 @@ def test_model_independent_api_records_and_corrections_require_auth_and_preserve
 def test_agent_tools_retry_across_routing_and_only_receive_narrow_finance_context(settings):
     store = Store(settings)
     conversation = store.create_conversation("健康")
+    store.submit_message(conversation["id"], id="original-message", content="4月5日12:30吃了米饭和青菜")
     tools = {item.name: item for item in create_health_tools(settings, conversation["id"], "original-message")}
     assert set(tools) == set(HEALTH_TOOL_NAMES)
     args = {"occurred_at": "2026-04-05T12:30:00+08:00", "description": "米饭和青菜", "entry_key": "meal:lunch:1"}

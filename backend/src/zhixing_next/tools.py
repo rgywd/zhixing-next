@@ -240,7 +240,8 @@ class FileAccess:
 
     def read_text(self, supplied: str) -> dict[str, Any]:
         path, data = self.read_bytes(supplied, limit=MAX_FILE_BYTES)
-        return {"path": str(path), "content": data.decode("utf-8"), "bytes": len(data)}
+        return {"path": str(path), "content": data.decode("utf-8"), "bytes": len(data),
+                "complete": True, "truncated": False, "next_start": None}
 
     def write_text(self, supplied: str, content: str, *, overwrite: bool = False) -> dict[str, Any]:
         return self.write_bytes(
@@ -438,7 +439,7 @@ def create_file_tools(settings: Settings, workspace: Path) -> list[Any]:
 
     @tool
     def read_text_file(path: str) -> dict[str, Any]:
-        """Read a UTF-8 physical file up to 256 KiB in an authorized directory."""
+        """Read the complete UTF-8 physical file up to 256 KiB in an authorized directory. Success returns all content with complete=true, truncated=false and next_start=null; there are no pages or continuation arguments. Oversized files fail without returning a partial file. Do not reread an unchanged complete file to look for more text."""
         return access.read_text(path)
 
     @tool
