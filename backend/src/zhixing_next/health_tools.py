@@ -43,6 +43,10 @@ HEALTH_INSTRUCTIONS = """你是知行的饮食与体重助手，先用query_heal
 不知道份量、配料和完整摄入时不诊断蛋白质/能量不足或摄入过量，按用户约定给均衡建议。不要推荐极端限制、禁食、药物、惩罚性运动或诊疗；不适、持续饥饿或难执行时先调整，必要时建议专业帮助。服务已计算的体重变化和财务数字直接引用，不自行改算。
 采纳、替换、放弃用record_recommendation_feedback保存选择与困难，实际饮食另记并关联原recommendation_id。已采纳是历史选择，资料变化不要求重新采纳；回顾结合反馈和实际记录给一项下一步。纠正原记录，不新建冒充纠正，不删真实饮食美化达标。提醒保存仅代表本机排期偏好，手机同步和实际通知另有回执；今天不提醒只追加当地日期到paused_dates。记录和修改回执简短自然，模型不可用时仍可直接记录。"""
 
+# Keep the legacy built-in text above stable: the v14 migration compares it to
+# persisted defaults. Current capability limits are appended only at runtime.
+HEALTH_CAPABILITY_INSTRUCTIONS = """联合饮食和餐费写入只能依据本轮实际工具能力。未配备record_life_meal时不得承接同一顿的饮食加财务联合新增；未配备correct_life_meal时不得承接该联合记录的纠正。缺少相应工具时，将原明确请求、已知事实和真实未完成范围返回主助手，由主助手实际联合工具处理，不先拆写模拟原子保存。不得把餐费、付款或费用占位内容另建成meal，不得用餐食note代替真实财务流水，也不得把未写流水称为记账成功或实质完成。提示中出现工具名不会增加权限；只使用实际配备的工具。普通独立饮食、体重、步数和健康资料请求仍按各自实际健康工具完成。"""
+
 def create_health_tools(settings: Settings, conversation_id: str, source_id: str | None = None) -> list[Any]:
     from .store import Store
 
@@ -104,7 +108,7 @@ def create_health_tools(settings: Settings, conversation_id: str, source_id: str
         recommendation_id: str | None = None, note: str = "",
         estimated_energy: EnergyEstimate | None = None,
     ) -> dict[str, Any]:
-        """Record actual food or an explicitly skipped meal, never a plan. occurred_at is optional: only user-stated actual clocks may be precise timestamps; use YYYY-MM-DD for only a known date, otherwise omit. The service labels a source-message recording clock as actual meal time unknown; never report that clock as when the user ate. portion contains only explicitly stated quantities for those foods, never default servings for other dishes. Energy estimates require minimum, maximum and basis; photos are not exact grams. Link recommendation_id when actual food follows that choice; stable entry_key survives retries."""
+        """Record actual food or an explicitly skipped meal, never a plan or a payment-placeholder meal. description names actual foods/preparation; a meal or its note is never a saved finance transaction. occurred_at is optional: only user-stated actual clocks may be precise timestamps; use YYYY-MM-DD for only a known date, otherwise omit. The service labels a source-message recording clock as actual meal time unknown; never report that clock as when the user ate. portion contains only explicitly stated quantities for those foods, never default servings for other dishes. Energy estimates require minimum, maximum and basis; photos are not exact grams. Link recommendation_id when actual food follows that choice; stable entry_key survives retries."""
         return creating("meals", {"occurred_at": occurred_at, "description": description,
                                   "meal_type": meal_type, "portion": portion, "status": status,
                                   "recommendation_id": recommendation_id, "note": note,

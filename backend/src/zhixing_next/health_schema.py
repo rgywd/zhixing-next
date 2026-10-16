@@ -24,7 +24,7 @@ class DietRuleFields(Input):
 
 class MealFields(Input):
     occurred_at: str | None = Field(default=None, description=MEAL_TIME_DESCRIPTION)
-    description: str = Field(default="", max_length=4000, description="Actual food names and preparation. Prefer keeping explicitly stated quantities in portion rather than repeating them in the description.")
+    description: str = Field(default="", max_length=4000, description="Actual food names and preparation, never a payment/fee placeholder or a substitute finance record. Prefer keeping explicitly stated quantities in portion rather than repeating them in the description.")
     meal_type: MealType = "other"
     portion: str = Field(default="", max_length=2000, description=ACTUAL_PORTION_DESCRIPTION)
     status: Literal["recorded", "skipped"] = "recorded"

@@ -416,12 +416,18 @@ class RunControls(AgentMiddleware):
         schema = create_schema_model("WaitForCurrentResearch", **{name: (field.annotation, field) for name, field in tool.args_schema.model_fields.items() if name != "result_offset"})
         return tool.model_copy(update={"args_schema": schema})
 
-    def named_task_contract(self, tool):
+    def named_task_contract(self, tool, available_tools=()):
         """Replace the SDK's generic delegation menu with this run's actual agents."""
         names = sorted(self.allowed_subagents)
+        joint_tools = {"record_life_meal", "correct_life_meal"} & set(available_tools)
+        joint_route = (
+            "Joint meal-and-expense operations stay in the main assistant: "
+            + ("use record_life_meal for creation and correct_life_meal for correction. " if len(joint_tools) == 2 else "use its available " + ", ".join(sorted(joint_tools)) + " tool for the supported operation. ")
+            + "Do not delegate a linked meal-and-payment operation to health or finance through task.\n"
+        ) if joint_tools else "Task does not provide atomic joint meal-and-expense operations; do not split a linked request across specialist agents or report unsupported completion.\n"
         description = (
-            "Delegate a specific request to one of these configured specialist agents:\n"
-            + "\n".join(f"- {name}: {self.subagent_descriptions.get(name, 'Configured specialist')}" for name in names)
+            joint_route + "Delegate an independent domain request to one of these configured specialist agents:\n"
+            + "\n".join(f"- {name}: " + ("Independent health requests only; not the route for joint meal-and-expense writes or financial-ledger recording. " if name == "agent_health" else "") + self.subagent_descriptions.get(name, "Configured specialist") for name in names)
             + "\nSet subagent_type to exactly one listed name and put the complete relevant context in description. The call returns that specialist's final report."
         )
         if self.collaboration is not None:
@@ -506,7 +512,8 @@ class RunControls(AgentMiddleware):
                 hidden.update({"read_conversation_reply", "wait_conversation_replies"})
         tools = [item for item in tools if (item.get("name") if isinstance(item, dict) else item.name) not in hidden]
         if self.named_task_schema is not None:
-            tools = [self.named_task_contract(item) if (item.get("name") if isinstance(item, dict) else item.name) == "task" else item for item in tools]
+            available_tools = {(item.get("name") if isinstance(item, dict) else item.name) for item in tools}
+            tools = [self.named_task_contract(item, available_tools) if (item.get("name") if isinstance(item, dict) else item.name) == "task" else item for item in tools]
         if self.internal_files_only and internal_paths:
             tools = [self.internal_read_contract(item, internal_paths) if (item.get("name") if isinstance(item, dict) else item.name) == "read_file" else item for item in tools]
         if self.collaboration is not None:
@@ -970,9 +977,13 @@ async def _run_agent(
     agents = [item for item in agents if not item.get("model_id") or item["model_id"] in settings.models]
     finance_tools = create_finance_tools(settings, run["conversation_id"]) if (direct_agent and direct_agent["id"] == "finance") or any(item["id"] == "finance" for item in agents) else []
     from .finance_tools import FINANCE_INSTRUCTIONS, create_finance_service_tools
-    from .health_tools import HEALTH_INSTRUCTIONS, create_health_tools
+    from .health_tools import (
+        HEALTH_CAPABILITY_INSTRUCTIONS,
+        HEALTH_INSTRUCTIONS,
+        create_health_tools,
+    )
 
-    service_instructions = {"finance": FINANCE_INSTRUCTIONS, "health": HEALTH_INSTRUCTIONS}
+    service_instructions = {"finance": FINANCE_INSTRUCTIONS, "health": HEALTH_INSTRUCTIONS + "\n" + HEALTH_CAPABILITY_INSTRUCTIONS}
 
     source_id = run.get("message_id") or run["id"]
     from .life_tools import LIFE_INSTRUCTIONS, create_life_tools
@@ -1058,13 +1069,20 @@ async def _run_agent(
     if not direct_agent and not forgetting and not read_only_consultation:
         routes = []
         if "finance" in subagent_names:
-            routes.append("For expense/budget service requests delegate to finance.")
+            routes.append("For independent expense/budget service requests delegate to finance.")
         if "agent_health" in subagent_names:
-            routes.append("For food, diet agreements, weight, meal recommendations or follow-up delegate to agent_health.")
+            routes.append("For independent health-only requests about food, diet agreements, weight, meal recommendations or follow-up delegate to agent_health; this route excludes joint meal-and-expense creation or correction.")
+        life_tools_available = {tool.name for tool in assigned_tools} & {"record_life_meal", "correct_life_meal"}
+        if len(life_tools_available) == 2:
+            joint_instructions = "Joint meal-and-expense creation or correction must use record_life_meal or correct_life_meal directly in the main assistant. Never delegate this linked operation to health or finance through task, and do not split it into separate health and finance writes. " + LIFE_INSTRUCTIONS
+        elif life_tools_available:
+            joint_instructions = "For the supported joint meal-and-expense operation use the main assistant's available " + ", ".join(sorted(life_tools_available)) + " tool. Other joint operations are unavailable; do not split an atomic request through task."
+        else:
+            joint_instructions = "No joint meal-and-expense write tool is available here. Specialist delegation cannot make a linked operation atomic; preserve the unsupported part rather than claiming completion."
         system_prompt += (
             "\n" + " ".join(routes)
-            + (" A single message may need multiple available services: pass the full relevant explicit facts to each, retain the original source, and report their actual receipts separately. " if routes else " ")
-            + LIFE_INSTRUCTIONS + " "
+            + (" Separate independent service requests may use different agents; retain their original source and actual receipts. " if routes else " ")
+            + joint_instructions + " "
             "Never invent a payment amount, food portion or completed action. Clear requests can be saved immediately; ask only when an ambiguity changes the action. "
             "Service records override old memories. Budgets and diet agreements are editable data, not permanent instructions. "
             "Quote service amounts, dates, measurements and computed totals with their original units. Do not invent derived health or financial metrics absent from the service result. "
@@ -1079,6 +1097,8 @@ async def _run_agent(
         )
         if direct_agent["id"] in service_instructions and not read_only_consultation:
             system_prompt += "\n" + service_instructions[direct_agent["id"]]
+        elif direct_agent["id"] == "health" and read_only_consultation:
+            system_prompt += "\nOnly answer from permitted read capabilities. An out-of-scope health/financial operation must return to the main assistant; a meal or note is not a financial-ledger write and cannot establish linked-operation success."
     else:
         system_prompt += (
             "\n\nThe physical file tools access only authorized host directories. "
