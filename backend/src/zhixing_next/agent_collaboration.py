@@ -385,11 +385,11 @@ class AgentCollaboration:
 def create_agent_tools(collaboration):
     @tool
     async def start_agent(
-        task: Annotated[str, Field(min_length=1, max_length=12000)],
+        task: Annotated[str, Field(min_length=1, max_length=12000, description="The original research question, only necessary context and source locations, and the desired concise findings. Preserve the original scope and unknowns; do not expand unasked dimensions, infer missing facts, or ask for a full report repeating the whole prompt.")],
         tool_call_id: Annotated[str, InjectedToolCallId],
         name: Annotated[str, Field(min_length=1, max_length=80)] = "Research",
     ) -> dict:
-        """Start a bounded read-only research agent; return its stable agent_id immediately. Give the question, relevant context and expected result. It can read authorized history/resources and search when enabled; it cannot record service data, publish files, execute code or delegate. Use the named finance/health task tool for service operations. Wait for or close every child before your final answer."""
+        """Start a bounded read-only research agent; return its stable agent_id immediately. Pass the original question, only necessary source/context details, and ask for concise evidence findings with known limits. Do not expand unknown dimensions, request unsupported inferences, or ask the child to reproduce a full report or the whole prompt. It can read authorized history/resources and search when enabled; it cannot record service data, publish files, execute code or delegate. Use the named finance/health task tool for service operations. Receive the needed results with wait_agents before your final answer; an already-read terminal result needs no close_agent cleanup. Close only work you are abandoning."""
         return await collaboration.start(task, name, tool_call_id)
 
     @tool
@@ -406,14 +406,14 @@ def create_agent_tools(collaboration):
         agent_ids: Annotated[list[str] | None, Field(max_length=4)] = None,
         after: Annotated[int, Field(ge=0)] = 0,
         timeout_ms: Annotated[int, Field(ge=0, le=30000)] = 10000,
-        result_offset: Annotated[int, Field(ge=0)] = 0,
+        result_offset: Annotated[int, Field(ge=0, description="Leave at zero for the first result read. Continue only when that agent's result_truncated=true and next_result_offset is not null: select that one agent and copy its exact next_result_offset here. If result_truncated=false or next_result_offset=null, all available result text has been returned; never guess an offset or reread the same version.")] = 0,
     ) -> dict:
-        """Read research-agent status/results; wait for new results (default up to 10 seconds). Omit agent_ids for all agents. Reuse the returned cursor as after while agents are queued/running; timeout is not completion. Results include result_version, stopped, can_send, result_length, result_truncated and next_result_offset. A failed research_limit_with_summary result is partial; when can_send=true, send_agent can continue the same agent with its saved context. The first result window contains up to 16000 characters; select one agent_id and pass its next_result_offset as result_offset to read more immediately. Check result_version across pages; restart at offset zero if a follow-up produced a new version."""
+        """Read research-agent status/results; wait for new results (default up to 10 seconds). Omit agent_ids for all agents. Reuse the returned cursor as after while agents are queued/running; timeout is not completion. Results include result_version, stopped, can_send, result_length, result_truncated and next_result_offset. Continue a result only when result_truncated=true AND next_result_offset is not null: select that one agent_id and pass the exact returned next_result_offset as result_offset. If result_truncated=false or next_result_offset=null, all available result text is already in the receipt; never invent an offset or reread the same result_version. Check result_version across pages; restart at zero only if a follow-up produced a new version. An already-read terminal result needs no close_agent cleanup; use it and finish once all needed results are collected. A failed research_limit_with_summary result is partial; when can_send=true, send_agent can continue the same agent with its saved context."""
         return await collaboration.wait(agent_ids, after=after, timeout_ms=timeout_ms, result_offset=result_offset)
 
     @tool
     async def close_agent(agent_id: str) -> dict:
-        """Stop a research agent or close a completed one. Waits for in-flight model/read-tool work to actually stop before returning stopped=true. Keeps its existing result; interrupted reports a previous owner stopped it."""
+        """Abandon research work that is no longer needed. Already-read terminal results need no cleanup call. Waits for in-flight model/read-tool work to actually stop before returning stopped=true. Keeps its existing result; interrupted reports a previous owner stopped it."""
         return await collaboration.close(agent_id)
 
     return [start_agent, send_agent, wait_agents, close_agent]

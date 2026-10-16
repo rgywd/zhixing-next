@@ -367,3 +367,15 @@ async def test_timeout_retains_incomplete_run_instead_of_fabricating_success(iso
     evidence = json.loads((directory / "turn-timeout_case.json").read_text())
     assert evidence["run"]["status"] != "completed"
     assert not evidence.get("business_verification", {}).get("passed")
+
+
+@pytest.mark.parametrize(("clock", "expected"), [
+    ("2026-10-17T00:30:00+08:00", "2026-10-16"),
+    ("2026-10-17T07:59:59+08:00", "2026-10-16"),
+    ("2026-10-17T08:00:00+08:00", "2026-10-17"),
+    ("2026-10-16T23:59:59-04:00", "2026-10-17"),
+])
+def test_explicit_measurement_fixture_never_uses_a_future_morning(clock, expected):
+    from datetime import datetime
+
+    assert acceptance.completed_morning_date(datetime.fromisoformat(clock)) == expected

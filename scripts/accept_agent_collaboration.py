@@ -32,7 +32,7 @@ import stat
 import sys
 import tempfile
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from uuid import uuid4, uuid5
 from zoneinfo import ZoneInfo
@@ -68,6 +68,12 @@ class AcceptanceError(Exception):
 def require(condition, code):
     if not condition:
         raise AcceptanceError(code)
+
+
+def completed_morning_date(now):
+    """Keep the explicit 08:00 measurement in the past, including midnight runs."""
+    local = now.astimezone(ZoneInfo("Asia/Shanghai"))
+    return (local if local.hour >= 8 else local - timedelta(days=1)).date().isoformat()
 
 
 def linked_meal_old_rice_fact_in_description(description):
@@ -376,15 +382,16 @@ class AcceptanceSuite:
             **profile, "height_cm": 172, "activity_limitations": ["避免跑跳"],
             "food_allergies": ["花生"], "preferences": ["清淡"], "goals": ["规律进食"],
         })
+        measurement_date = completed_morning_date(datetime.now(ZoneInfo("Asia/Shanghai")))
         weight = await self.turn("health_weight", conversation,
-                                 f"今天是{self.today}，今天上午八点实际称重70.9公斤，帮我记录这次测量。", "direct")
+                                 f"{measurement_date}上午八点实际称重70.9公斤，帮我记录这次测量。", "direct")
         rows = [row for row in weight["snapshot"]["health"]["weights"] if row.get("source_id") == weight["message_id"]]
         self.semantic_review(weight)
         self.checked("health_weight", {
             "one_actual_weight": len(rows) == 1,
             "actual_value_and_unit": len(rows) == 1 and rows[0]["value"] == 70.9 and rows[0]["unit"] == "kg",
             "explicit_measurement_clock_preserved": len(rows) == 1 and datetime.fromisoformat(
-                rows[0]["measured_at"].replace("Z", "+00:00")).astimezone(ZoneInfo("Asia/Shanghai")).isoformat().startswith(self.today + "T08:00:00"),
+                rows[0]["measured_at"].replace("Z", "+00:00")).astimezone(ZoneInfo("Asia/Shanghai")).isoformat().startswith(measurement_date + "T08:00:00"),
             "real_tool_receipt": self.succeeded(weight, "record_weight"),
         }, duplicate_write=len(rows) > 1)
         changed = await self.turn("health_profile_patch", conversation,
