@@ -1016,9 +1016,10 @@ async def _run_agent(
     from .agent_collaboration import READ_ONLY_TOOLS, AgentCollaboration, create_agent_tools
 
     collaboration = None
-    business_time_prompt = _business_time_prompt(store, run["message_id"])
+    business_clock = datetime.now(ZoneInfo("Asia/Shanghai"))
+    business_time_prompt = _business_time_prompt(store, run["message_id"], now=business_clock)
     if not direct_agent and not forgetting and not read_only_consultation:
-        research_time_prompt = _business_time_prompt(store, run["message_id"], include_record_workflow=False)
+        research_time_prompt = _business_time_prompt(store, run["message_id"], now=business_clock, include_record_workflow=False)
         async def research_runner(child, history, child_controls, child_emit, save_snapshot):
             from langchain.agents import create_agent
 
