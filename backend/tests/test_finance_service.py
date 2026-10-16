@@ -324,6 +324,7 @@ def test_router_direct_record_and_correction_work_without_model(store):
 
 async def test_tool_original_message_scope_survives_routes_and_budget_retry(store):
     conversation = store.create_conversation("财务")
+    store.submit_message(conversation["id"], id="message-1", content="2026年4月9日午饭17元")
     tools = {
         item.name: item
         for item in create_finance_service_tools(store.settings, conversation["id"], "message-1")
@@ -333,6 +334,7 @@ async def test_tool_original_message_scope_survives_routes_and_budget_retry(stor
         "kind": "expense",
         "amount": "17",
         "occurred_on": "2026-04-09",
+        "date_evidence": "2026年4月9日午饭17元",
     }
     first = await tools["record_finance_transaction"].ainvoke(args)
     repeated = {

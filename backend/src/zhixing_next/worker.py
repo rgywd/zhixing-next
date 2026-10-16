@@ -94,12 +94,17 @@ class Worker:
         except Exception as exc:
             # Vendor exception strings can contain request payloads and credentials.
             # Keep user-facing diagnostics bounded to known configuration errors.
+            from langgraph.errors import GraphRecursionError
+
             from .resilience import RunLimitError
             from .runtime import RuntimeConfigurationError
 
-            message = str(exc) if isinstance(exc, (RuntimeConfigurationError, RunLimitError)) else (
-                f"运行失败（{type(exc).__name__}）。请检查模型配置或服务连接后继续。"
-            )
+            if isinstance(exc, GraphRecursionError):
+                message = "这次回复未完成，已保存的记录会保留，可以重试继续。"
+            elif isinstance(exc, (RuntimeConfigurationError, RunLimitError)):
+                message = str(exc)
+            else:
+                message = f"运行失败（{type(exc).__name__}）。请检查模型配置或服务连接后继续。"
             logger.warning("run %s failed (%s)", run_id, type(exc).__name__)
             self.store.finish_run(run_id, "failed", error=message)
 

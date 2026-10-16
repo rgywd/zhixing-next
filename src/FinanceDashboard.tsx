@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, BackHandler, Pressable, Text, View } from "react-native";
 import type { Connection } from "./api";
 import { useNotice } from "./Notice";
-import { readFinanceDashboard, type FinanceBudget, type FinanceCommitment, type FinanceTransaction, type FinanceDashboardSummary, type ServiceMutation } from "./serviceApi";
+import { financeDateLabel, readFinanceDashboard, type FinanceBudget, type FinanceCommitment, type FinanceTransaction, type FinanceDashboardSummary, type ServiceMutation } from "./serviceApi";
 import { localDate, moneyInput, moneyLabel, parseCommitments, requireDate, useServiceEditor, useServiceSnapshot, type ServiceDraft } from "./serviceForms";
 import { ActionLink, BackLink, Button, Field, PageHeading, PageScrollView, StatusPill, SwitchRow, useUi } from "./ui";
 
@@ -82,7 +82,7 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
           </> : null}
           {f.kind === "refund" ? <>
             <Text style={s.label}>退回哪笔消费</Text>
-            {choices("related", (data?.records.items ?? []).filter((item) => item.kind === "expense").reduce((all, item) => ({ ...all, [item.id]: `${item.occurred_on} ${item.category} ${moneyLabel(item.amount)}` }), {}))}
+            {choices("related", (data?.records.items ?? []).filter((item) => item.kind === "expense").reduce((all, item) => ({ ...all, [item.id]: `${financeDateLabel(item)} ${item.category} ${moneyLabel(item.amount)}` }), {}))}
             {f.related && !(data?.records.items ?? []).some((item) => item.id === f.related) ? <Text style={s.muted}>保留此前关联的原消费。</Text> : null}
             <Text style={s.muted}>需要退回更早的消费时，先回到对应月份，在原消费旁选择“退款”；也可以和财务助手说明。</Text>
           </> : null}
@@ -141,20 +141,35 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
         {summary?.daily_average.amount != null ? <Text style={styles.muted}>日常日均 {moneyLabel(summary.daily_average.amount)} · {summary.daily_average.from} 至 {summary.daily_average.through}</Text> : <Text style={styles.muted}>日常日均待确认完整覆盖期后计算。</Text>}
         <View style={styles.inset}>
           <View style={styles.spread}><Text style={styles.muted}>已收收入</Text><Text style={styles.body}>{moneyLabel(summary?.totals.income)}</Text></View>
+          {summary?.commitments ? <>
+            <View style={styles.spread}><Text style={styles.muted}>安排月度成本</Text><Text style={styles.body}>{moneyLabel(summary.commitments.monthly_cost)}</Text></View>
+            <View style={styles.spread}><Text style={styles.muted}>本月到期应付</Text><Text style={styles.body}>{moneyLabel(summary.commitments.cash_due)}</Text></View>
+          </> : null}
           <View style={styles.spread}><Text style={styles.muted}>待发生安排</Text><Text style={[styles.body, styles.gold]}>{moneyLabel(summary?.reservations.total)}</Text></View>
         </View>
         <View style={styles.spread}><Text style={styles.tiny}>{summary?.coverage.complete ? summary.coverage.from && summary.coverage.through ? `已确认 ${summary.coverage.from} 至 ${summary.coverage.through}` : "已确认当前覆盖期。" : "仅统计已记内容；漏记不代表没有消费。"}</Text><Text style={styles.tiny}>{summary ? `记录覆盖 ${summary.coverage.recorded_days} 天` : "覆盖待确认"}</Text></View>
+        {summary?.projection.assumptions.includes("totals_include_potential_overlap_not_exact") ? <Text style={styles.tiny}>部分日期范围与累计记录可能重叠，当前合计仍待核实；可直接和知行说明。</Text> : null}
         {summary?.projection.assumptions.includes("cumulative_total_includes_details_in_its_range") ? <Text style={styles.tiny}>{assumptionLabels.cumulative_total_includes_details_in_its_range}</Text> : null}
         <View style={styles.divider} />
         <View style={styles.footerAction}><ActionLink icon="arrow-forward" onPress={() => onChat("请根据已记的消费、当前预算及记录覆盖情况，回顾本月开销变化，并给一项可执行的调整建议。")}>回顾消费与下一步</ActionLink></View>
       </ServiceCard>
 
+      {summary?.unallocated?.count ? <ServiceCard>
+        <ServiceSectionHeader icon="calendar-outline" title="日期待明确的记录" subtitle={`${summary.unallocated.count} 笔`} />
+        <Text style={styles.muted}>已保留原始金额和日期范围，暂不计入任何单月。可以直接聊天补充，现有记录会随之更新。</Text>
+        {summary.unallocated.items.map((item) => <View key={item.id} style={styles.stack}>
+          <View style={styles.recordRow}><View style={styles.recordMain}><Text style={s.itemTitle}>{item.category || kindLabels[item.kind]}</Text><Text style={styles.tiny}>{financeDateLabel(item)} · {kindLabels[item.kind]}</Text></View><Text style={styles.recordAmount}>{moneyLabel(item.amount)}</Text></View>
+          {item.note ? <Text style={styles.muted}>{item.note}</Text> : null}
+        </View>)}
+        <ActionLink onPress={() => onChat("请根据已有对话和记录整理日期待明确的收支，保留不能确定的部分，不要猜日期。")}>和知行一起整理</ActionLink>
+      </ServiceCard> : null}
+
       <ServiceCard>
         <ServiceSectionHeader icon="document-text-outline" title="本月记录" subtitle={data ? `${data.records.total} 笔` : "记录尚未读取"} />
         {data?.records.items.length ? data.records.items.map((item) => <View key={item.id} style={styles.stack}>
-          <View style={styles.recordRow}><View style={styles.recordMain}><Text style={s.itemTitle}>{item.category || kindLabels[item.kind]}</Text><Text style={styles.tiny}>{item.occurred_on} · {kindLabels[item.kind]} · {bucketLabels[item.bucket]}</Text></View><Text style={styles.recordAmount}>{item.kind === "expense" ? "−" : item.kind === "income" || item.kind === "refund" ? "+" : ""}{moneyLabel(item.amount)}</Text></View>
+          <View style={styles.recordRow}><View style={styles.recordMain}><Text style={s.itemTitle}>{item.category || kindLabels[item.kind]}</Text><Text style={styles.tiny}>{financeDateLabel(item)} · {kindLabels[item.kind]} · {bucketLabels[item.bucket]}</Text></View><Text style={styles.recordAmount}>{item.kind === "expense" ? "−" : item.kind === "income" || item.kind === "refund" ? "+" : ""}{moneyLabel(item.amount)}</Text></View>
           {item.note ? <Text style={styles.muted}>{item.note}</Text> : null}
-          <View style={s.wrap}><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => openTransaction(item)}>纠正</ActionLink>{item.kind === "expense" ? <ActionLink tone="neutral" disabled={!editor.ready} onPress={() => editor.open("transaction", { kind: "refund", amount: "", date: localDate(), bucket: item.bucket, category: item.category, note: "", related: item.id, commitment: "" }, { record: null, commitments: budget?.commitments ?? [] })}>退款</ActionLink> : null}<ActionLink disabled={!editor.ready} onPress={() => editor.open("delete", { description: `${item.occurred_on} ${item.category} ${moneyLabel(item.amount)}` }, { record: item })}>删除</ActionLink></View><View style={styles.divider} />
+          <View style={s.wrap}><ActionLink tone="neutral" disabled={!editor.ready} onPress={() => item.date_precision && item.date_precision !== "day" ? onChat(`请帮我纠正这笔记录：${financeDateLabel(item)}，${item.category}，${moneyLabel(item.amount)}。`) : openTransaction(item)}>纠正</ActionLink>{item.kind === "expense" ? <ActionLink tone="neutral" disabled={!editor.ready} onPress={() => editor.open("transaction", { kind: "refund", amount: "", date: localDate(), bucket: item.bucket, category: item.category, note: "", related: item.id, commitment: "" }, { record: null, commitments: budget?.commitments ?? [] })}>退款</ActionLink> : null}<ActionLink disabled={!editor.ready} onPress={() => editor.open("delete", { description: `${financeDateLabel(item)} ${item.category} ${moneyLabel(item.amount)}` }, { record: item })}>删除</ActionLink></View><View style={styles.divider} />
         </View>) : <ServiceEmpty icon="chatbubble-ellipses-outline" title={data ? "这个月还没有记录" : "记录尚未读取"} description="说一笔收支或发账单截图，知行会帮你整理。">
           <Button small secondary onPress={() => onChat()}>和知行记一笔</Button>
         </ServiceEmpty>}
@@ -179,11 +194,11 @@ export function buildFinanceMutation(draft: ServiceDraft): ServiceMutation {
     const previous = draft.context.budget as FinanceBudget | null;
     if (f.from) requireDate(f.from, "起始日期"); if (f.through) requireDate(f.through, "截至日期");
     if (f.from && f.through && f.from > f.through) throw new Error("截至日期不能早于起始日期。");
-    return { method: "PUT", path: "/finance/budget", body: { month: f.month, recurring: f.recurring === "yes", idempotency_key: draft.id, expected_revision: previous?.revision ?? 0, expected_source_month: previous?.source_month ?? null, expected_income: moneyInput(f.income, "预计收入", true), savings_target: moneyInput(f.savings, "目标结余", true), daily_budget: moneyInput(f.daily, "日常上限", true), commitments: parseCommitments(f.commitments, previous?.commitments ?? []), coverage_start: f.from || null, coverage_through: f.through || null } };
+    return { method: "PUT", path: "/finance/budget", body: { month: f.month, recurring: f.recurring === "yes", idempotency_key: draft.id, expected_revision: previous?.revision ?? 0, expected_source_month: previous?.source_month ?? null, expected_income: moneyInput(f.income, "预计收入", true), savings_target: moneyInput(f.savings, "目标结余", true), daily_budget: moneyInput(f.daily, "日常上限", true), commitments: parseCommitments(f.commitments, previous?.commitments ?? []), coverage_start: f.from || null, coverage_through: f.through || null, ...(previous?.income_schedule ? { income_schedule: previous.income_schedule } : {}) } };
   }
   const amount = moneyInput(f.amount, "金额"); if (Number(amount) <= 0) throw new Error("金额应大于零。");
   if (f.kind === "refund" && !f.related) throw new Error("请关联原消费，确保退款进入正确统计口径。");
-  const body = { idempotency_key: draft.id, kind: f.kind, amount, occurred_on: requireDate(f.date), bucket: f.bucket, category: f.category.trim() || "其他", note: f.note.trim(), commitment_key: f.kind === "expense" && f.bucket !== "daily" ? f.commitment || null : null, related_transaction_id: f.kind === "refund" ? f.related : null, ...(record ? { expected_revision: record.revision } : {}) };
+  const body = { idempotency_key: draft.id, kind: f.kind, amount, occurred_on: requireDate(f.date), bucket: f.bucket, category: f.category.trim() || "其他", note: f.note.trim(), commitment_key: f.kind === "expense" && f.bucket !== "daily" ? f.commitment || null : null, related_transaction_id: f.kind === "refund" ? f.related : null, ...(record ? { expected_revision: record.revision, ...(record.occurred_on === f.date ? { date_precision: record.date_precision ?? "day", date_start: record.date_start, date_end: record.date_end, coverage_start: record.coverage_start, coverage_end: record.coverage_end } : { date_precision: "day", date_start: f.date, date_end: f.date }) } : {}) };
   return record ? { method: "PATCH", path: `/finance/transactions/${encodeURIComponent(record.id)}`, body } : { method: "POST", path: "/finance/transactions", body };
 }
 

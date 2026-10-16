@@ -37,6 +37,7 @@ function mount(module, name, props, extra = {}) {
     "./ui": { useUi: () => ({ s: {}, colors: lightColors }), humanError: (error) => error.message,
       ...Object.fromEntries(["ActionLink", "Empty", "IconAction", "PageHeading", "PageScrollView", "SheetHeader"].map((key) => [key, key])) },
     "./api": { mergeById, request: (_connection, path, options) => { const task = deferred(); calls.push({ path, options, ...task }); return task.promise; } },
+    "./MessageBody": { MessageBody: "MessageBody" },
     "./resources": { shareResource: async (...args) => { downloads.push(args); } },
     "./ResourcePreview": { ResourceImage: "ResourceImage", ResourcePreview: "ResourcePreview", resourceDetail: (item) => `${item.size} B` },
     ...extra,
@@ -142,4 +143,47 @@ test("resource images expose failed or timed-out loading and retry without dropp
   stalled.fireTimers();
   assert.ok(find(stalled, label("重试加载图片 screen.png")));
   stalled.unmount();
+});
+
+test("report preview reads authenticated text, cancels stale results and retries failures", async () => {
+  const props = { connection, resource: file("first", "report.md") };
+  const page = mount("ResourcePreview.tsx", "TextResourcePreview", props);
+  assert.equal(page.calls[0].path, "/resources/first/text");
+  assert.ok(find(page, label("正在打开报告")));
+  props.resource = file("second", "latest.md"); page.render();
+  assert.equal(page.calls[0].options.signal.aborted, true);
+  page.calls[0].resolve({ content: "stale private contents", format: "markdown", truncated: false });
+  page.calls[1].reject(new Error("报告暂未读取")); await settle();
+  assert.ok(find(page, text("报告暂未读取")));
+  assert.ok(!find(page, (node) => node.type === "MessageBody"));
+  find(page, text("重新打开")).props.onPress(); page.render();
+  page.calls[2].resolve({ resource_id: "second", content: "# 正确报告\n\n金额与日期已核对。", format: "markdown", truncated: false }); await settle();
+  assert.match(find(page, (node) => node.type === "MessageBody").props.children, /正确报告/);
+  assert.ok(find(page, label("报告内容 latest.md")));
+  props.connection = { ...connection, token: "other-account" }; page.render();
+  assert.ok(!find(page, (node) => node.type === "MessageBody"));
+  page.unmount();
+  assert.equal(page.calls[3].options.signal.aborted, true);
+});
+
+test("CSV and HTML report contents are selectable plain text and truncated text is labelled", async () => {
+  const page = mount("ResourcePreview.tsx", "TextResourcePreview", { connection, resource: file("csv", "ledger.csv") });
+  page.calls[0].resolve({ content: "<script>not executed</script>,42", format: "text", truncated: true }); await settle();
+  assert.equal(find(page, text("<script>not executed</script>,42")).props.selectable, true);
+  assert.ok(find(page, text("文件较长，当前显示前半部分；下载可查看全文。")));
+  assert.ok(!find(page, (node) => node.type === "MessageBody"));
+  page.unmount();
+});
+
+test("tapping a delivered report opens its in-app preview while keeping download available", () => {
+  const report = file("delivered", "finance-report.md");
+  const page = mount("Attachments.tsx", "Attachments", { connection, items: [report] });
+  assert.equal(find(page, (node) => node.type === "ResourcePreview").props.resource, null);
+  find(page, label("打开文件 finance-report.md")).props.onPress();
+  assert.equal(find(page, (node) => node.type === "ResourcePreview").props.resource.id, "delivered");
+  find(page, (node) => node.type === "ResourcePreview").props.onClose(); page.render();
+  find(page, label("查看附件 finance-report.md")).props.onPress();
+  assert.equal(find(page, (node) => node.type === "ResourcePreview").props.resource.name, report.name);
+  assert.ok(find(page, text("下载分享")));
+  page.unmount();
 });

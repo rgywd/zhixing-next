@@ -39,13 +39,16 @@ EFFECT_TOOLS = {
 }
 READ_TOOLS = {"fetch_public_page", "search_web", "read_document", "read_text_file", "search_history", "read_history", "read_history_message", "find_resources", "read_saved_resource", "gitlab_projects", "gitlab_issues", "gitlab_read_issue"}
 IDEMPOTENT_SERVICE_TOOLS = {
-    "record_finance_transaction", "correct_finance_transaction", "delete_finance_transaction", "update_finance_budget",
+    "record_finance_transaction", "correct_finance_transaction", "delete_finance_transaction", "update_finance_budget", "apply_finance_transaction_batch",
     "save_health_profile", "save_diet_rule", "record_meal", "record_weight", "record_steps",
     "save_meal_recommendation", "record_recommendation_feedback", "correct_health_record", "delete_health_record", "save_health_reminders",
     "record_life_meal", "correct_life_meal",
 }
 EFFECT_TOOLS.update(IDEMPOTENT_SERVICE_TOOLS)
 READ_TOOLS.update({"get_finance_summary", "list_finance_transactions", "query_health_context", "query_life_events"})
+READ_TOOLS.update({"calculate", "date_info", "browse_personal_memories", "reconcile_finance_assets"})
+IDEMPOTENT_SERVICE_TOOLS.update({"publish_report", "publish_finance_report"})
+EFFECT_TOOLS.update({"publish_report", "publish_finance_report"})
 LIMIT = 20 * 1024 * 1024
 
 

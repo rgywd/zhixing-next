@@ -445,12 +445,12 @@ def create_finance_tools(settings: Settings, conversation_id: str) -> list[Any]:
 
     @tool
     async def record_finance_observation(
-        kind: Literal["balance", "income", "expense"],
+        kind: Literal["balance"],
         platform: str,
         amount: str,
         note: str = "",
     ) -> dict[str, Any]:
-        """Save one explicit user-provided CNY amount. Never infer an account balance from purchases or double-count a transfer. Use a decimal string such as '12.50'."""
+        """Save only an explicit user-provided CNY balance observation. For income or expenses use record_finance_transaction. Never infer a balance from purchases or count a transfer as income. Use a decimal string such as '12.50'."""
         return store.record_finance_observation(
             kind=kind, platform=platform, amount=amount, note=note,
             conversation_id=conversation_id,

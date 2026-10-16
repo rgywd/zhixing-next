@@ -1,4 +1,4 @@
-"""Single-user main-agent history and immutable uploaded-resource retrieval."""
+"""Single-user history and immutable resource retrieval shared by all agents."""
 
 from pathlib import Path
 from typing import Annotated
@@ -61,7 +61,7 @@ def create_retrieval_tools(store):
 
     @tool
     def read_saved_resource(resource_id: str, start: Annotated[int, Field(ge=1)] = 1) -> dict:
-        """Read a hash-checked saved upload/deliverable. PDF pages and DOCX paragraphs are extracted as text; UTF-8 files use lines. This does not perform OCR or claim to read images. Main assistant only, across this single user's resource library."""
+        """Read a hash-checked saved upload/deliverable across this single user's resource library. PDF pages and DOCX paragraphs are extracted as text; UTF-8 files use lines. This does not perform OCR or claim to read images."""
         resource = store.get_resource(resource_id)
         data = resource_bytes(store.settings, resource)
         suffix = Path(resource["name"]).suffix.lower()

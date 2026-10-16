@@ -109,7 +109,8 @@ async def test_finance_shared_chat_reads_upload_searches_and_keeps_tool_scope(tm
             assert searches == [("brave", "account fees")]
             assert "test-only-secret" not in str(model.seen)
             assert {"read_document", "list_directory", "record_finance_observation"} <= set(model.bound_names)
-            assert not {"write_text_file", "execute", "task", "browse_personal_memories"} & set(model.bound_names)
+            assert {"browse_personal_memories", "search_history", "read_history", "calculate", "date_info", "publish_report"} <= set(model.bound_names)
+            assert not {"write_text_file", "execute", "task"} & set(model.bound_names)
             retry = (await client.post(f"{prefix}/messages", json=body)).json()
             assert retry["run"]["id"] == receipt["run"]["id"]
             next_receipt = (await client.post(f"{prefix}/messages", json={"id": "finance-off", "content": "继续"})).json()

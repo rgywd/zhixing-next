@@ -464,6 +464,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def resource(resource_id: UUID):
         return store.get_resource(str(resource_id))
 
+    @router.get("/resources/{resource_id}/text")
+    def resource_text(resource_id: UUID):
+        item = store.get_resource(str(resource_id))
+        return JSONResponse(resources.resource_text(settings, item), headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
     @router.get("/resources/{resource_id}/content")
     def resource_content(resource_id: UUID, preview: bool = False):
         item = store.get_resource(str(resource_id))

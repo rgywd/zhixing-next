@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View, type StyleProp, type ViewStyle } from "react-native";
+import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View, ScrollView, type StyleProp, type ViewStyle } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Connection, Resource } from "./api";
+import { request } from "./api";
+import { MessageBody } from "./MessageBody";
 import { shareResource } from "./resources";
 import { useThemedStyles } from "./ThemeProvider";
 import { layout, radius, space, type ThemeColors } from "./theme";
@@ -47,6 +49,36 @@ export function ResourceImage({ connection, resource, style, contain = false }: 
   </View>;
 }
 
+export const canPreviewText = (resource: Resource) => resource.mime_type.startsWith("text/") || /\.(md|markdown|txt|csv|json|log)$/i.test(resource.name);
+type TextPreview = { resource_id: string; content: string; format: "markdown" | "text"; truncated: boolean };
+
+export function TextResourcePreview({ connection, resource }: { connection: Connection; resource: Resource }) {
+  const { s, colors } = useUi();
+  const [attempt, setAttempt] = useState(0);
+  const scope = `${connection.url}\n${connection.token}\n${resource.id}`;
+  const [state, setState] = useState<{ scope: string; result?: TextPreview; error?: string } | null>(null);
+  useEffect(() => {
+    let active = true;
+    const controller = new AbortController();
+    void request<TextPreview>(connection, `/resources/${encodeURIComponent(resource.id)}/text`, { signal: controller.signal })
+      .then((result) => { if (active && !controller.signal.aborted) setState({ scope, result }); })
+      .catch((e) => { if (active && !controller.signal.aborted) setState({ scope, error: humanError(e) }); });
+    return () => { active = false; controller.abort(); };
+  }, [connection, resource.id, scope, attempt]);
+  const visible = state?.scope === scope ? state : null;
+  if (!visible) return <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }} accessibilityLabel="正在打开报告"><ActivityIndicator color={colors.blue} /></View>;
+  if (visible.error) return <View style={[s.content, { flex: 1, justifyContent: "center" }]}>
+    <Text accessibilityRole="alert" style={s.error}>{visible.error}</Text>
+    <ActionLink icon="refresh-outline" tone="blue" onPress={() => { setState(null); setAttempt((value) => value + 1); }}>重新打开</ActionLink>
+    <Text style={s.description}>也可以下载分享，在手机其他应用中打开。</Text>
+  </View>;
+  return <ScrollView accessibilityLabel={`报告内容 ${resource.name}`} contentContainerStyle={{ padding: 20, paddingBottom: 32 }}>
+    {visible.result?.truncated ? <Text style={[s.muted, { marginBottom: 12 }]}>文件较长，当前显示前半部分；下载可查看全文。</Text> : null}
+    {visible.result?.format === "markdown" ? <MessageBody>{visible.result.content}</MessageBody>
+      : <Text selectable style={[s.text, { fontFamily: "monospace" }]}>{visible.result?.content}</Text>}
+  </ScrollView>;
+}
+
 export function ResourcePreview({ connection, resource, onClose }: {
   connection: Connection; resource: Resource | null; onClose: () => void;
 }) {
@@ -60,6 +92,7 @@ export function ResourcePreview({ connection, resource, onClose }: {
       {resource ? <>
         {resource.mime_type.startsWith("image/")
           ? <ResourceImage key={resource.id} connection={connection} resource={resource} contain style={styles.preview} />
+          : canPreviewText(resource) ? <TextResourcePreview key={resource.id} connection={connection} resource={resource} />
           : <View style={styles.document}><Ionicons name="document-text-outline" size={48} color={colors.blue} /><Text style={s.title}>{resource.name}</Text><Text style={s.muted}>{resourceDetail(resource)}</Text><Text style={s.description}>下载后，可在手机中的应用打开。</Text></View>}
         <View style={styles.footer}>
           {error?.resourceId === resource.id ? <Text accessibilityRole="alert" style={s.error}>{error.message}</Text> : null}

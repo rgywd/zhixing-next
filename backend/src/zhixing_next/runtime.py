@@ -8,6 +8,7 @@ import json
 import sqlite3
 import time
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
@@ -19,18 +20,26 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, StateBackend
 from deepagents.graph import DeepAgentState
 from langchain.agents.middleware import AgentMiddleware, hook_config
+from langchain.agents.middleware.types import ExtendedModelResponse, ModelResponse
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessage,
+    HumanMessage,
+    RemoveMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
-from langgraph.errors import GraphInterrupt
+from langgraph.errors import GraphInterrupt, NodeCancelledError
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
+from pydantic import ValidationError
 
+from .common_tools import COMMON_INSTRUCTIONS, assign_common_tools, create_common_tools
 from .config import Settings
-from .memory import create_memory_lookup_tool, forget_memory_request, relevant_memories
+from .memory import forget_memory_request, relevant_memories
 from .models import ModelConfigurationError, configured_model, create_model
-from .resources import create_image_tool, hydrate_messages, input_message
-from .search import create_search_tool
+from .resources import hydrate_messages, input_message
 from .sqlite_policy import safe_journal_mode
 from .store import Store, StoreError
 from .tools import create_file_tools, create_finance_tools
@@ -40,6 +49,12 @@ RuntimeConfigurationError = ModelConfigurationError
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
 Controls = Callable[[], Awaitable[dict[str, Any]]]
 Acknowledge = Callable[[list[str]], Awaitable[None]]
+FINANCE_REPORT_WRITES = {
+    "record_finance_transaction", "correct_finance_transaction", "delete_finance_transaction",
+    "update_finance_budget", "apply_finance_transaction_batch", "record_finance_observation",
+    "remove_finance_observation", "record_life_meal", "correct_life_meal",
+}
+FINANCE_MUTATION_TOOLS = FINANCE_REPORT_WRITES - {"record_life_meal", "correct_life_meal"}
 
 
 class RuntimeState(DeepAgentState):
@@ -75,6 +90,30 @@ def _text(message: Any) -> str:
         block.get("text", "")
         for block in content
         if isinstance(block, dict) and block.get("type") == "text"
+    )
+
+
+def _business_time_prompt(store: Store, message_id: str, *, now: datetime | None = None) -> str:
+    from datetime import datetime as MessageDatetime
+
+    zone = ZoneInfo("Asia/Shanghai")
+    current = (now or datetime.now(zone)).astimezone(zone)
+    with store._connection() as db:
+        row = db.execute("SELECT created_at FROM messages WHERE id=? AND role='user'", (message_id,)).fetchone()
+    source = None
+    if row:
+        try:
+            source = MessageDatetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+            source = source.replace(tzinfo=zone) if source.tzinfo is None else source.astimezone(zone)
+        except ValueError:
+            pass
+    return (
+        f"Current service time: {current.isoformat()}. "
+        "Resolve relative dates from the user's stated context; ask only for an ambiguity that changes a record. "
+        + (f"This user's source message was sent at: {source.isoformat()} (Asia/Shanghai). " if source else "The source message time is unavailable. ")
+        + "For relative dates such as today, now, this month and yesterday, use the user's source message time, "
+        "not a later queue execution time. The user's explicitly stated date/context takes precedence. "
+        "Do not invent an unavailable date; ask only for an ambiguity that changes a record. "
     )
 
 
@@ -145,12 +184,181 @@ def _portable_history(messages: list[Any]) -> list[Any]:
     return result
 
 
+def _seen_finance_input(store, run_id, messages):
+    from .finance_context import delegated_finance_input
+
+    with store._connection() as db:
+        for message in reversed(messages):
+            if isinstance(message, HumanMessage) and message.id and db.execute("SELECT 1 FROM messages WHERE id=? AND run_id=? AND role='user' AND status IN ('accepted','applied')", (message.id, run_id)).fetchone():
+                return message.id
+        inherited = delegated_finance_input.get()
+        if inherited and db.execute("SELECT 1 FROM messages WHERE id=? AND run_id=? AND role='user' AND status IN ('accepted','applied')", (inherited, run_id)).fetchone():
+            return inherited
+    return None
+
+
+def _original_tool_reply(result, tool_call_id):
+    return result.model_copy(update={"tool_call_id": tool_call_id}) if isinstance(result, ToolMessage) and result.tool_call_id != tool_call_id else result
+
+
+def _verified_finance_completion(settings, run_id, messages):
+    """End only the finance graph's settled publication, using its durable receipt."""
+    if not settings or not run_id:
+        return None
+    batch = None
+    replies = []
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            return None
+        if isinstance(message, AIMessage):
+            if not message.tool_calls:
+                return None
+            batch = message.tool_calls
+            break
+        if isinstance(message, ToolMessage):
+            replies.append(message)
+    if not batch or len({call["id"] for call in batch}) != len(batch):
+        return None
+    by_id = {reply.tool_call_id: reply for reply in reversed(replies)}
+    if any(call["id"] not in by_id or by_id[call["id"]].status != "success" for call in batch):
+        return None
+    publication = next((call for call in reversed(batch) if call["name"] == "publish_finance_report"), None)
+    if not publication:
+        return None
+    try:
+        returned = json.loads(by_id[publication["id"]].content)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(returned, dict):
+        return None
+    if any(not isinstance(returned.get(key), dict) for key in ("resource", "verification", "finance")):
+        return None
+    resource_id = returned["resource"].get("id")
+    report_key = returned["verification"].get("finance_report_key")
+    if not resource_id or not report_key:
+        return None
+    store = Store(settings)
+    with store._connection() as db:
+        run = db.execute("SELECT conversation_id,message_id,status FROM runs WHERE id=?", (run_id,)).fetchone()
+        rows = db.execute("SELECT data FROM events WHERE run_id=? AND type='artifact' ORDER BY seq DESC", (run_id,)).fetchall()
+    if not run or run["status"] != "running":
+        return None
+    current_input = _seen_finance_input(store, run_id, messages) or run["message_id"]
+    for row in rows:
+        receipt = json.loads(row["data"])
+        resource, verification, finance = (receipt.get(key, {}) for key in ("resource", "verification", "finance"))
+        if resource.get("id") != resource_id or verification.get("finance_report_key") != report_key:
+            continue
+        if verification.get("finance_input_id", run["message_id"]) != current_input:
+            return None
+        if not (finance.get("program_generated") is True and finance.get("model_supplied_content") is False and finance.get("single_ledger_snapshot") is True):
+            return None
+        from .finance_report import format_finance_completion
+        from .resources import resource_bytes
+
+        completion = finance.get("completion") or format_finance_completion(finance["facts"])
+        if not isinstance(completion, str) or not completion or returned.get("finance", {}).get("completion") != completion:
+            return None
+        saved = store.get_resource(resource_id, run["conversation_id"])
+        actual = hashlib.sha256(resource_bytes(settings, saved)).hexdigest()
+        if actual != verification.get("sha256") or actual != returned.get("verification", {}).get("sha256"):
+            raise StoreError("resource_changed", "Published finance report failed its integrity check", 409)
+        identifier = hashlib.sha256(f"{run_id}:{publication['id']}:{resource_id}".encode()).hexdigest()[:32]
+        return AIMessage(content=completion, id="finance-report-completion-" + identifier)
+    return None
+
+
+def _successful_finance_writes(settings, run_id, messages):
+    """Only actual successful calls since this graph's latest user instruction."""
+    from .operations import decode_result
+
+    calls = {}
+    replies = {}
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            break
+        if isinstance(message, ToolMessage):
+            replies.setdefault(message.tool_call_id, message)
+        if isinstance(message, AIMessage):
+            for call in message.tool_calls:
+                if call["name"] in FINANCE_REPORT_WRITES:
+                    calls[call["id"]] = call["name"]
+    if not calls:
+        return []
+    store = Store(settings)
+    source_id = _seen_finance_input(store, run_id, messages)
+    with store._connection() as db:
+        run = db.execute("SELECT message_id FROM runs WHERE id=?", (run_id,)).fetchone()
+        rows = db.execute("SELECT id,call_id,tool,result_json FROM operations WHERE run_id=? AND state='succeeded' ORDER BY created_at,id", (run_id,)).fetchall()
+    scoped = {call_id + ":" + source_id if source_id and run and source_id != run["message_id"] and name in FINANCE_MUTATION_TOOLS else call_id: call_id for call_id, name in calls.items()}
+    result = []
+    for row in rows:
+        call_id = scoped.get(row["call_id"])
+        if call_id is None or calls.get(call_id) != row["tool"] or not row["result_json"]:
+            continue
+        message = decode_result(json.loads(row["result_json"]))
+        if not isinstance(message, ToolMessage) or message.status != "success":
+            continue
+        actual = replies.get(call_id)
+        if actual is None or actual.status != "success" or actual.content != message.content:
+            continue
+        try:
+            receipt = json.loads(message.content)
+        except (TypeError, ValueError):
+            continue
+        if isinstance(receipt, dict) and "error" not in receipt:
+            result.append({"id": row["id"], "tool": row["tool"], "receipt": receipt})
+    return result
+
+
+def _finance_source(settings, run_id, messages):
+    store = Store(settings)
+    with store._connection() as db:
+        run = db.execute("SELECT message_id FROM runs WHERE id=?", (run_id,)).fetchone()
+        if run is None:
+            return None
+        source_id = _seen_finance_input(store, run_id, messages) or run["message_id"]
+        source = db.execute("SELECT id,created_at,content FROM messages WHERE id=? AND role='user'", (source_id,)).fetchone()
+        return dict(source) if source else None
+
+
+def _finance_write_completion(settings, run_id, messages, operations):
+    from datetime import datetime as MessageDatetime
+
+    from .finance_report import format_finance_write_completion
+    from .finance_service import FinanceService
+
+    store = Store(settings)
+    source = _finance_source(settings, run_id, messages)
+    zone = ZoneInfo("Asia/Shanghai")
+    sent = MessageDatetime.fromisoformat(source["created_at"].replace("Z", "+00:00"))
+    sent = sent.replace(tzinfo=zone) if sent.tzinfo is None else sent.astimezone(zone)
+    as_of = sent.date().isoformat()
+    month = next((item["receipt"]["month"] for item in reversed(operations) if item["tool"] == "update_finance_budget" and item["receipt"].get("month")), as_of[:7])
+    summary = FinanceService(store).summary(month=month, as_of=as_of)
+    values = [{"tool": item["tool"], "receipt": item["receipt"]} for item in operations]
+    since = next((index + 1 for index in range(len(messages) - 1, -1, -1) if isinstance(messages[index], HumanMessage)), 0)
+    tools, failed = {}, set()
+    for message in messages[since:]:
+        if isinstance(message, AIMessage):
+            tools.update({call["id"]: call["name"] for call in message.tool_calls})
+        elif isinstance(message, ToolMessage) and (name := tools.get(message.tool_call_id)):
+            if message.status == "error":
+                failed.add(name)
+            else:
+                failed.discard(name)
+    if failed:
+        summary["write_completion_partial"] = True
+    completion = format_finance_write_completion(summary, values)
+    return {"input_message_id": source["id"], "operation_ids": [item["id"] for item in operations], "operations": values, "summary": summary, "completion": completion}
+
+
 class RunControls(AgentMiddleware):
     """The runner is the only checkpoint writer for a conversation."""
 
     def __init__(self, controls: Controls, emit: Emit, allowed_subagents: set[str] | None = None,
                  settings: Settings | None = None, image_input: bool = False,
-                 execution_enabled: bool = False, restricted_files: bool = False, operations=None, budget=None, task_flow=None, run_id=None):
+                 execution_enabled: bool = False, restricted_files: bool = False, operations=None, budget=None, task_flow=None, run_id=None, finance_completion=False):
         self.controls = controls
         self.emit = emit
         self.allowed_subagents = allowed_subagents or set()
@@ -161,6 +369,7 @@ class RunControls(AgentMiddleware):
         self.operations = operations
         self.budget = budget
         self.task_flow, self.run_id = task_flow, run_id
+        self.finance_completion = finance_completion
         self.blocked_tools = (set() if execution_enabled else {"execute"}) | (set() if self.allowed_subagents else {"task"})
         if restricted_files:
             self.blocked_tools |= {"ls", "read_file", "write_file", "edit_file", "delete", "glob", "grep"}
@@ -201,6 +410,15 @@ class RunControls(AgentMiddleware):
         return {"messages": [RemoveMessage(id=latest.id), *pending], "jump_to": "model"}
 
     async def awrap_model_call(self, request, handler):
+        from .finance_reply import requested_analysis, requests_analysis
+
+        analysis_requested, report_completion = False, None
+        if self.finance_completion and not await self.pending(request.state):
+            source = await asyncio.to_thread(_finance_source, self.settings, self.run_id, request.messages)
+            analysis_requested = bool(source and requests_analysis(source["content"]))
+            report_completion = await asyncio.to_thread(_verified_finance_completion, self.settings, self.run_id, request.messages)
+            if report_completion is not None and not analysis_requested and not await self.pending(request.state):
+                return ModelResponse(result=[report_completion])
         # Only the task sandbox and explicitly configured agents may execute.
         tools = [
             item
@@ -211,17 +429,69 @@ class RunControls(AgentMiddleware):
         await self.emit("progress", {"stage": "model"})
         messages = hydrate_messages(self.settings, request.messages, image_input=self.image_input) if self.settings else request.messages
         prepared = request.override(tools=tools, messages=messages)
-        if self.budget:
-            return await self.budget.invoke_model(handler, prepared, self.controls, self.emit)
-        return await handler(prepared)
+        if report_completion is not None:
+            # Publishing is the last business tool for this actual input. The
+            # requested explanation uses its real receipt, not new hypothetical
+            # calculations. A newly seen steer cannot match this old receipt.
+            prepared = prepared.override(tools=[], tool_choice=None)
+        writes = await asyncio.to_thread(_successful_finance_writes, self.settings, self.run_id, request.messages) if self.finance_completion else []
+        if analysis_requested and (writes or report_completion):
+            policy = (
+                "The user also explicitly requested advice, explanation or comparison. "
+                + ("The verified report has already been delivered. Give the requested final analysis now using its actual receipt. No further tools are available or needed. Do not invent percentage coefficients or continue calculations. " if report_completion else "Finish their requested analysis after all necessary tools. ")
+                +
+                "A separate program paragraph will confirm actual saved results. Your prose should answer the requested analysis, "
+                "not repeat completed-write claims or invent ledger facts. Suggested amounts are recommendations, not actual expenses. "
+                "Do not ask for old transaction lists, deposits or missing purchase dates; preserve known uncertainty."
+            )
+            prepared = prepared.override(system_message=SystemMessage(content=(_text(request.system_message) if request.system_message else "") + "\n" + policy))
+        from .finance_context import finance_write_model
+
+        token = finance_write_model.set(bool(writes or report_completion))
+        try:
+            response = await self.budget.invoke_model(handler, prepared, self.controls, self.emit) if self.budget else await handler(prepared)
+        finally:
+            finance_write_model.reset(token)
+        envelope = response.model_response if isinstance(response, ExtendedModelResponse) else response
+        results = envelope.result if isinstance(envelope, ModelResponse) else [envelope]
+        final = next((message for message in reversed(results) if isinstance(message, AIMessage)), None)
+        if (writes or report_completion) and final is not None and (not final.tool_calls or report_completion is not None) and not await self.pending(request.state):
+            if report_completion is not None:
+                for call in final.tool_calls:
+                    await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed", "error": "tools_closed_after_finance_report"})
+            receipt = await asyncio.to_thread(_finance_write_completion, self.settings, self.run_id, request.messages, writes) if writes else {"input_message_id": source["id"], "operation_ids": [], "completion": report_completion.content}
+            confirmation = report_completion.content if report_completion else receipt["completion"]
+            analysis = requested_analysis(_text(final)) if analysis_requested else ""
+            if report_completion is not None and final.tool_calls and not analysis:
+                analysis = "报告已交付，这次未形成额外建议。"
+            answer = analysis + "\n\n---\n\n" + confirmation if analysis else confirmation
+            if analysis:
+                receipt.update({"analysis": analysis, "response": answer})
+            if not await self.pending(request.state):
+                if writes:
+                    await self.emit("finance.write_completion", receipt)
+                identity = hashlib.sha256(json.dumps([self.run_id, receipt["input_message_id"], receipt["operation_ids"], answer]).encode()).hexdigest()[:32]
+                replacement = final.model_copy(update={"content": answer, "id": "finance-write-completion-" + identity, "tool_calls": [], "invalid_tool_calls": [], "additional_kwargs": {**{key: value for key, value in final.additional_kwargs.items() if key not in {"reasoning_content", "tool_calls", "function_call"}}, "zhixing_program_finance_write": True}})
+                updated = replace(envelope, result=[replacement if message is final else message for message in results]) if isinstance(envelope, ModelResponse) else replacement
+                return replace(response, model_response=updated) if isinstance(response, ExtendedModelResponse) else updated
+        return response
 
     async def awrap_tool_call(self, request, handler):
+        from .finance_tools import FINANCE_TOOL_NAMES
+
         call = request.tool_call
+        journal_call = call
+        source_id = None
+        finance_tool = call["name"] in FINANCE_TOOL_NAMES or call["name"] in FINANCE_MUTATION_TOOLS
+        if (finance_tool or call["name"] == "task") and self.operations:
+            source_id = _seen_finance_input(self.operations.journal.store, self.run_id, request.state.get("messages", []))
+            if call["name"] in FINANCE_MUTATION_TOOLS | {"publish_finance_report", "task"} and source_id and source_id != self.operations.run.get("message_id"):
+                journal_call = {**call, "id": call["id"] + ":" + source_id}
         if await self.pending(request.state):
             if self.operations:
-                receipt = self.operations.defer_for_steer(call)
+                receipt = self.operations.defer_for_steer(journal_call)
                 if receipt is not None:
-                    return receipt
+                    return _original_tool_reply(receipt, call["id"])
             return ToolMessage(
                 content="This tool did not start because a new user instruction arrived. Reconsider it using the new instruction.",
                 tool_call_id=call["id"],
@@ -233,11 +503,28 @@ class RunControls(AgentMiddleware):
                 tool_call_id=call["id"],
                 status="error",
             )
+        if call["name"] == "publish_finance_report":
+            batch = next((message.tool_calls for message in reversed(request.state.get("messages", [])) if isinstance(message, AIMessage) and any(item["id"] == call["id"] for item in message.tool_calls)), [])
+            if any(item["name"] in FINANCE_REPORT_WRITES for item in batch):
+                await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed"})
+                return ToolMessage(
+                    content=json.dumps({"error": {"code": "report_after_finance_writes", "message": "Complete finance writes first, then invoke publish_finance_report in a separate tool batch. No report was published."}}),
+                    tool_call_id=call["id"], name=call["name"], status="error",
+                )
         if self.budget:
             self.budget.reserve("tool_calls")
             self.budget.check_loop(call, request.state)
         if self.operations:
-            result = await self.operations.invoke(call, lambda: self._invoke_tool(request, handler))
+            from .finance_context import active_finance_input, delegated_finance_input
+
+            context = active_finance_input if finance_tool else delegated_finance_input if call["name"] == "task" else None
+            context_token = context.set(source_id) if context is not None else None
+            try:
+                result = await self.operations.invoke(journal_call, lambda: self._invoke_tool(request, handler))
+            finally:
+                if context_token is not None:
+                    context.reset(context_token)
+            result = _original_tool_reply(result, call["id"])
             if call["name"] in {"write_text_file", "copy_file"}:
                 await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed" if result.status == "error" else "completed"})
             if self.execution_enabled:
@@ -259,8 +546,21 @@ class RunControls(AgentMiddleware):
             "read_document",
             "view_image",
             "copy_file",
+            "publish_report",
+            "publish_finance_report",
         }
-        tool_task = asyncio.create_task(handler(request))
+        async def checked_handler():
+            from .finance_tools import FINANCE_TOOL_NAMES
+
+            schema = getattr(getattr(request, "tool", None), "args_schema", None)
+            if call["name"] in FINANCE_TOOL_NAMES and hasattr(schema, "model_validate"):
+                # ToolNode otherwise formats validation failures with all supplied
+                # kwargs before returning them to middleware. Validate here so only
+                # bounded field errors reach the model, never raw input values.
+                schema.model_validate(call["args"])
+            return await handler(request)
+
+        tool_task = asyncio.create_task(checked_handler())
         try:
             result = await asyncio.shield(tool_task) if thread_tool else await tool_task
         except asyncio.CancelledError:
@@ -300,23 +600,42 @@ class RunControls(AgentMiddleware):
                     "error": type(exc).__name__,
                 },
             )
+            from .finance_tools import FINANCE_TOOL_NAMES
             from .operations import IDEMPOTENT_SERVICE_TOOLS
 
             service_tools = IDEMPOTENT_SERVICE_TOOLS | {
                 "get_finance_summary", "list_finance_transactions",
                 "query_health_context", "query_life_events",
             }
+            service_tools |= set(FINANCE_TOOL_NAMES)
             if isinstance(exc, StoreError) and call["name"] in service_tools:
                 # Service errors are curated business feedback, not arbitrary tool
                 # output. Preserve conflicts so the agent can read and retry safely.
+                message = exc.message[:1800]
+                content = json.dumps({"error": {"code": exc.code, "message": message}}, ensure_ascii=False)
+                while len(content) > 2000:
+                    message = message[:len(message) // 2]
+                    content = json.dumps({"error": {"code": exc.code, "message": message}}, ensure_ascii=False)
                 return ToolMessage(
-                    content=json.dumps({"error": {"code": exc.code, "message": exc.message}}, ensure_ascii=False),
+                    content=content,
                     tool_call_id=call["id"],
                     status="error",
                 )
+            if isinstance(exc, ValidationError) and call["name"] in FINANCE_TOOL_NAMES:
+                fields = [{"field": ".".join(str(part) for part in item["loc"])[:100],
+                           "type": item["type"][:60], "message": item["msg"][:160]}
+                          for item in exc.errors(include_url=False, include_context=False, include_input=False)[:4]]
+                content = json.dumps({"error": {"code": "invalid_finance_parameters", "message": "Correct the listed fields and retry; no write was applied.", "fields": fields}}, ensure_ascii=False)
+                while len(content) > 2000:
+                    fields.pop()
+                    content = json.dumps({"error": {"code": "invalid_finance_parameters", "message": "Correct the listed fields and retry; no write was applied.", "fields": fields}}, ensure_ascii=False)
+                return ToolMessage(
+                    content=content,
+                    tool_call_id=call["id"], status="error",
+                )
             # Sandbox diagnostics contain task-local outputs, like execute itself. Give
             # the model enough information to repair selectors and invalid artifacts.
-            detail = str(exc)[-2000:] if call["name"] in {"browser_action", "publish_artifact", "start_background_task", "schedule_task"} else "Check the tool's permitted inputs, capability and size limits before retrying."
+            detail = str(exc)[-2000:] if call["name"] in {"browser_action", "publish_artifact", "publish_report", "calculate", "date_info", "start_background_task", "schedule_task"} else "Check the tool's permitted inputs, capability and size limits before retrying."
             return ToolMessage(
                 content=f"The tool operation failed ({type(exc).__name__}). {detail}",
                 tool_call_id=call["id"],
@@ -365,6 +684,12 @@ async def run_agent(
             if not timeout.expired():
                 raise
             raise RunLimitError("任务已达到累计执行时间预算，执行已停止，已有结果保留。") from exc
+        except NodeCancelledError as exc:
+            # LangGraph wraps node-raised CancelledError; preserve the user's actual
+            # cancellation receipt rather than classifying it as a failed run.
+            if (await kwargs["controls"]()).get("cancel_requested"):
+                raise asyncio.CancelledError("Run cancellation requested") from exc
+            raise
     finally:
         budget.elapsed(time.monotonic() - started)
         if sandbox is not None:
@@ -433,19 +758,14 @@ async def _run_agent(
     images_enabled = model_override is not None or model_config.image_input
     if not images_enabled and any(item["mime_type"].startswith("image/") for item in run.get("attachments", [])):
         raise RuntimeConfigurationError("当前执行模型不支持本次图片输入，请启用已验证的视觉模型后重新发送。")
-    if images_enabled:
-        physical_tools.append(create_image_tool(file_settings, workspace, run["conversation_id"]))
+    common_tools = create_common_tools(settings, run, workspace, emit, image_input=images_enabled, forgetting=forgetting)
     if not direct_agent and not forgetting:
         from .gitlab import create_gitlab_tools
-        from .retrieval import create_retrieval_tools
 
-        physical_tools.extend(create_retrieval_tools(store))
         if settings.gitlab.projects:
             physical_tools.extend(create_gitlab_tools(settings.gitlab))
         physical_tools.extend(create_taskflow_tools(store, run, sandbox))
-        physical_tools.append(create_memory_lookup_tool(store, run["conversation_id"]))
-    if search_enabled:
-        physical_tools.append(create_search_tool(run["search_provider"]))
+    physical_tools = list({item.name: item for item in [*common_tools, *physical_tools]}.values())
     agents = run.get("agents", []) if not direct_agent else []
     unavailable_agents = [item["name"] for item in agents if item.get("model_id") and item["model_id"] not in settings.models]
     agents = [item for item in agents if not item.get("model_id") or item["model_id"] in settings.models]
@@ -461,27 +781,18 @@ async def _run_agent(
     if not direct_agent and not forgetting:
         physical_tools.extend(create_life_tools(settings, run["conversation_id"], source_id))
     if finance_tools:
-        finance_tools.extend(create_finance_service_tools(settings, run["conversation_id"], source_id))
+        finance_tools.extend(create_finance_service_tools(settings, run["conversation_id"], source_id, run=run, emit=emit))
+    if not direct_agent and not forgetting:
+        physical_tools.extend(tool for tool in finance_tools if tool.name == "reconcile_finance_assets")
     health_tools = create_health_tools(settings, run["conversation_id"], source_id) if (direct_agent and direct_agent["id"] == "health") or any(item["id"] == "health" for item in agents) else []
     by_name = {tool.name: tool for tool in [*physical_tools, *finance_tools, *health_tools]}
     subagent_names = {"finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}" for item in agents}
     from .operations import OperationRunner, RunPaused
 
     operations = OperationRunner(settings, {**run, "workspace_path": str(workspace)}, sandbox)
-    middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"])
-    assigned_tools = [by_name[name] for name in direct_agent["tools"] if name in by_name] if direct_agent else physical_tools
-    if direct_agent and direct_agent["id"] in {"finance", "health"}:
-        # Finance attachments are readable only inside this conversation's workspace.
-        assigned_tools.extend(
-            tool for tool in physical_tools
-            if tool.name in {"list_directory", "read_text_file", "read_document"}
-        )
-    if direct_agent and search_enabled:
-        assigned_tools.append(by_name["search_web"])
-    business_time_prompt = (
-        f"Current service time: {datetime.now(ZoneInfo('Asia/Shanghai')).isoformat()}. "
-        "Resolve relative dates from the user's stated context; ask only for an ambiguity that changes a record. "
-    )
+    middleware = RunControls(controls, emit, subagent_names, settings, images_enabled, sandbox is not None, restricted_files=direct_agent is not None, operations=operations, budget=budget, task_flow=task_flow if run["kind"] == "task" else None, run_id=run["id"], finance_completion=bool(direct_agent and direct_agent["id"] == "finance"))
+    assigned_tools = assign_common_tools(common_tools, direct_agent["tools"], by_name) if direct_agent else physical_tools
+    business_time_prompt = _business_time_prompt(store, run["message_id"])
     system_prompt = (
         "You are the user's personal assistant. Be truthful about tool results and capability limits. "
         + business_time_prompt
@@ -495,6 +806,7 @@ async def _run_agent(
         f"Assistant persona:\n{persona}"
     )
     system_prompt += "\nCompleted operations can be returned from durable receipts without replay. Read actual outputs when needed. After a pause or restart the container and browser session are recreated: never assume earlier navigation or background processes still exist. Never repeat an unconfirmed external operation without the user's decision."
+    system_prompt += "\n" + COMMON_INSTRUCTIONS
     if unavailable_agents:
         system_prompt += "\nThese assistants are currently unavailable because their selected models are disabled or missing: " + ", ".join(unavailable_agents)
     if run["kind"] == "task" and not direct_agent:
@@ -539,10 +851,13 @@ async def _run_agent(
         {
             "name": "finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}",
             "description": f"{item['name']}: {item['description']}",
-            "system_prompt": (business_time_prompt if item["id"] in service_instructions else "") + f"You are {item['name']}. {item['description']}\n{item['instructions']}\n{service_instructions.get(item['id'], '')}\nOnly use the explicitly assigned physical tools. Do not guess missing service facts or claim unavailable capabilities.",
-            "tools": [by_name[name] for name in item["tools"] if name in by_name],
+            "system_prompt": business_time_prompt + f"You are {item['name']}. {item['description']}\n{item['instructions']}\n{service_instructions.get(item['id'], '')}\n" + COMMON_INSTRUCTIONS + "\nOnly use the explicitly assigned physical tools. Do not guess missing service facts or claim unavailable capabilities.",
+            "tools": assign_common_tools(
+                create_common_tools(settings, run, workspace, emit, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, forgetting=forgetting),
+                item["tools"], by_name,
+            ),
             **({"model": create_model(settings, run["kind"], item["model_id"])} if item.get("model_id") else {}),
-            "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=sandbox is not None, operations=operations, budget=budget)],
+            "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=True, operations=operations, budget=budget, run_id=run["id"], finance_completion=item["id"] == "finance")],
         }
         for item in agents
     ]
@@ -565,7 +880,7 @@ async def _run_agent(
         from .skills import skill_bundle
 
         _, skill_digest = skill_bundle(settings) if sandbox else (None, None)
-        fingerprint = hashlib.sha256(json.dumps({"recovery_protocol": 2, "gitlab": settings.gitlab.model_dump(), "limits": settings.limits.model_dump(), "sdk": {package: version(package) for package in ("deepagents", "langgraph", "langchain")}, "model": identity, "images": images_enabled, "execution": settings.execution.model_dump(mode="json"), "skills": skill_digest, "child_models": {item.get("model_id"): settings.models[item["model_id"]].model_dump(mode="json") for item in agents if item.get("model_id")}, "grants": [grant.model_dump(mode="json") for grant in settings.grants], "agent": direct_agent, "agents": agents}, sort_keys=True).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps({"recovery_protocol": 4, "gitlab": settings.gitlab.model_dump(), "limits": settings.limits.model_dump(), "sdk": {package: version(package) for package in ("deepagents", "langgraph", "langchain")}, "model": identity, "images": images_enabled, "execution": settings.execution.model_dump(mode="json"), "skills": skill_digest, "child_models": {item.get("model_id"): settings.models[item["model_id"]].model_dump(mode="json") for item in agents if item.get("model_id")}, "grants": [grant.model_dump(mode="json") for grant in settings.grants], "agent": direct_agent, "agents": agents}, sort_keys=True).encode()).hexdigest()
         resuming = old.values.get("active_run_id") == run["id"]
         if resuming and (old.values.get("recovery_fingerprint") != fingerprint or old.values.get("memory_reset_revision", 0) != reset_revision):
             raise RuntimeConfigurationError("恢复期间模型、权限、助手、记忆或运行时版本配置发生变化。请发送新要求核对已有结果，不能直接重放旧步骤。")

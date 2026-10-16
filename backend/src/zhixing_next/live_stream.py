@@ -17,6 +17,7 @@ FINAL_RESERVE = 1024 * 1024
 MAX_CAPTURE_UNITS = 128 * 1024
 MAX_EVENTS = 512
 _IDENTITY = "zhixing_live_model_id"
+_QUIET_FINANCE_TEXT = "zhixing_finance_write_text"
 
 
 class ModelStreamIdentity(BaseCallbackHandler):
@@ -36,6 +37,10 @@ class ModelStreamIdentity(BaseCallbackHandler):
     def on_chat_model_start(self, serialized, messages, *, run_id, metadata=None, **kwargs):
         if metadata is not None:
             metadata[_IDENTITY] = str(run_id)
+            from .finance_context import finance_write_model
+
+            if finance_write_model.get():
+                metadata[_QUIET_FINANCE_TEXT] = True
 
 
 def visible_parts(message):
@@ -94,6 +99,8 @@ class LiveModelStream:
             self.messages[identifier] = {"text": "", "reasoning": "", "sent": {}, "at": {}, "truncated": {}, "sent_truncated": {}, "final_sent": set()}
         state = self.messages[identifier]
         text, reasoning = visible_parts(message)
+        if metadata.get(_QUIET_FINANCE_TEXT) and not message.additional_kwargs.get("zhixing_program_finance_write"):
+            text = ""
         for field, value in (("reasoning", reasoning), ("text", text)):
             if not value:
                 continue

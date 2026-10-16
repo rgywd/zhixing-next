@@ -10,6 +10,8 @@ import { layout } from "./theme";
 import { useUi } from "./ui";
 
 const toolLabels: Record<string, string> = {
+  search_history: "查找历史对话", read_history: "读取历史对话", read_history_message: "读取历史消息", browse_personal_memories: "查阅记忆", find_resources: "查找资料", read_saved_resource: "读取保存的资料", search_web: "搜索网页",
+  calculate: "计算", date_info: "查询日期", publish_report: "生成报告", apply_finance_transaction_batch: "整理收支",
   list_directory: "查看文件目录", read_text_file: "读取文件", read_document: "读取资料", view_image: "查看图片",
   write_text_file: "保存文件", fetch_public_page: "读取网页", web_search: "搜索网页", search: "搜索网页",
   record_finance_entry: "记录收支", query_finance: "查看财务记录", record_health_entry: "记录健康信息",

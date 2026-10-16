@@ -89,6 +89,7 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 - `POST /v1/approvals/{UUID}/decision {decision}`：返回 Approval。overwrite/network 支持 `approve|deny`，uncertain 支持 `retry|skip`；同决定重试幂等，冲突或已撤销返回 409，不适用的决定返回 422。全部待决定项处理后继续原任务。
 - `GET /v1/approvals/{UUID}/file?version=before|after`：overwrite 的原件或完整拟写入文件，默认 after；最大 20 MiB，SHA-256 校验、nosniff、private/no-store。没有文件预览返回 422。
 - `GET /v1/runs/{id}/operations`：`{items:Operation[],next_cursor:null}`，用于核查操作状态；不返回完整工具结果编码。
+- `POST /v1/runs/{id}/resume`：继续同一条带恢复记录的中断或失败回复。失败回复还需核验真实 checkpoint 属于该 run；已取消、没有 checkpoint 或会话已执行后续回复时拒绝。沿用原输入和步骤回执，旧版本缺失的模型快照仅补缺，运行前仍核对配置指纹与现有权限；无法确认副作用时继续走原批准流程，不自动重复写入。
 
 `Approval={id,run_id,operation_id:string|null,kind:overwrite|network|uncertain,details,state:pending|approve|deny|retry|skip|cancelled,created_at,decided_at}`。
 details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes、backup、最多 4000 字符 preview；network 含 description、task、network；uncertain 含 description、tool、arguments。
@@ -107,11 +108,14 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
 - `GET /v1/resources?conversation_id=&query=&cursor=&limit=`：认证后按序号升序返回 `{items:Resource[],next_cursor}`；可选会话参数按其工作目录筛选，同项目会话共享资源。`query` 为最多 200 字符的名称子串，去除首尾空格并忽略 ASCII 大小写，`%`、`_` 按字面匹配。先在全部符合范围的资源中过滤，再分页；切换搜索词时从空游标开始，后续页沿用同一搜索词。也支持 `latest=true` 取最近窗口、`before=<previous_cursor>` 继续取更早资源，此时返回 `previous_cursor`、`next_cursor:null`，窗口内仍按序号升序；`cursor`、`before`、`latest` 不可混用。
 - `GET /v1/resources/{UUID}/content?preview=false`：认证下载不可变原件；`preview=true` 返回最长边 2048 的 JPEG 图片预览，非图片返回 422。原件下载验证 SHA-256；设置 `nosniff`、私有且不缓存。此接口无资源删除功能。
 
+- `GET /v1/resources/{UUID}/text`：认证读取校验过 SHA-256 的 UTF-8 文本原件，返回 `{resource_id,name,content,format:markdown|text,truncated,sha256}`；展示最多 128 Ki 字符。Markdown 在 App 内复用消息正文渲染，CSV/HTML 等作为可选择文本，拒绝不支持的二进制或编码；完整原件仍从 content 接口下载。
+- 通用 `publish_report(filename,content)` 将 `.md/.txt/.csv` 保存为真实工作文件和不可变资源，并向当前根运行发出 artifact 回执；完成的助手消息携带该附件。单文件 UTF-8 最大 256 KiB，重复相同内容复用资源；虚拟 `write_file` 不代表已交付。
+
 `Resource` 为 `{id,conversation_id,path,name,mime_type,size,sha256,created_at}`（列表另含 `seq`）。原件保存在服务数据目录，工作副本可以修改；消息和运行保存资源元数据快照。模型请求临时填充图片 base64，用户附件的 base64 不写入 checkpoint；`view_image` 的工具返回图片属于实际工具历史。
 
 文件接口均需要服务令牌，拒绝目录穿越、链接和受保护文件；额外执行目录授权不扩大手机文件下载范围。
 
-## 财务服务（v12）
+## 财务服务（v13）
 
 金额使用非负 CNY 十进制字符串，统计由程序计算。以下接口均继承 `/v1` 认证，不依赖模型即可保存。
 
@@ -119,18 +123,40 @@ details 包含 title；overwrite 含 path、before_sha256、after_sha256、bytes
 | --- | --- |
 | `GET /v1/finance/budget?month=YYYY-MM` | 有效预算；含 `month,source_month,recurring,revision,expected_income,savings_target,daily_budget,commitments,coverage_start,coverage_through` |
 | `PUT /v1/finance/budget` | 完整设置：`month,idempotency_key,recurring`，可空的收入／结余／日常上限、承诺列表与覆盖期；可传 `expected_revision,expected_source_month` 防止覆盖刚发生的修改 |
+| `PATCH /v1/finance/budget` | `month,idempotency_key,recurring,changes,expected_revision?,expected_source_month?`；按字段与承诺 key 更新，清空显式声明 |
 | `DELETE /v1/finance/budget?month=&idempotency_key=&recurring=false` | 删除指定月份及沿用类型的配置，保留实际流水；返回 `{deleted:true}` |
 | `GET /v1/finance/transactions?month=&limit=50&offset=0` | `{items:Transaction[],total}`，最大 100；按业务日期分页 |
 | `POST /v1/finance/transactions` | `idempotency_key,kind,amount,occurred_on`，以及可选分类、关联、来源与覆盖字段；返回 Transaction |
+| `POST /v1/finance/transactions/batch` | `idempotency_key,operations,conserve_total,reason`；同事务创建／纠正／删除并返回守恒校验，失败全部回滚 |
 | `PATCH /v1/finance/transactions/{id}` | `idempotency_key,expected_revision?` 加待修改字段；原地纠正并推进 revision |
 | `DELETE /v1/finance/transactions/{id}?idempotency_key=` | 软删除；存在关联退款时先处理退款，返回 `{deleted:true,id}` |
 | `GET /v1/finance/summary?month=&as_of=YYYY-MM-DD` | `{month,budget,totals,reservations,remaining,projection,coverage,daily_average,record_count}` |
 
-`commitments` 每项为 `{key,label,amount,kind:fixed|one_time}`。`recurring=true` 自该月沿用最近设置；单月配置优先。沿用时只保留固定承诺，不把某月大件继续预留到以后。`coverage_start/coverage_through` 必须同时提供且位于当月，只在用户确知记录覆盖时填写。PUT 是完整配置；模型更新工具先读后合并未修改字段，不把省略字段误清空。
+模型工具采用严格参数 schema，未知字段报错。已确认的既有资产提取不能记成新增收入；同用途预留的新 key 会返回已有项目供复用或显式替换，明确独立的项目可声明 `separate_from_keys`。这些有限语义检查不能取代核验原文与写后回读。AI 工具将历史记录收窄到日／月时还需 `date_evidence`（真实用户短引文）与可选 `date_source_message_id`；同日起止的 range 同样校验。余额时点、覆盖月份或发薪规则不能证明消费日。不明历史保留范围，由助手查原文与处理，不新增用户填表步骤；手工 HTTP 的明确日期输入保持原样。
+
+AI 新增或改变承诺的付款日同样需要真实用户付款规则依据，不能借用其他费用的日期；实际某次付款日、余额观察日和覆盖月份不能自动推成固定日期，未知日保留 null。已确认的同项目原付款日可继续沿用，手工 HTTP 不变。财务 Agent 在本次成功写入后仍由模型完成工具规划，纯记录和规则修改使用已核验保存值生成回执；当前真实用户同时要求建议、解释或比较时保留 AI 分析，并附独立的核验结果，不能用固定回执吞掉分析。报告和修改后的分析正文先缓冲，再随最终消息投影，思考与工具过程继续保留；未写入的普通分析对话继续使用原有流式正文。
+
+处理中补充指令被图实际接收后，财务委派、默认日期依据、写入防重复键和报告交付统一继承该真实用户消息；尚未接收的排队指令和模型改写的委派描述不能替代它。同一消息的恢复仍重放原回执，新消息可继续使用同一业务 entry key。
+
+原用户文字已明确已有资产提取时，AI 新建或改成收入还需对应的真实新增收入条款与金额，不能用模型备注中的“用户确认”代替事实，也不能靠删备注或改分类绕过。当前原文自动核验，可选 `fact_evidence`／`fact_source_message_id` 引用已读历史；批量操作放在每项顶层，不写入业务字段。该有限保护不把附件自动当作新缴存，也不为无文字提取矛盾的图片输入增加必填表单；手工 HTTP 仍沿用原服务校验。
+
+纠正使用 `changes` 对象（兼容旧 `changes_json`，两者不能同时传）；放在顶层的 `amount` 不再被静默忽略。预算更新是字段 patch，省略保持现状，清空需 `clear_fields`；`commitments_upsert` 按 key 更新项目，`commitment_keys_remove` 显式移除。单月 patch 按字段继承后续沿用预算的修改。
+
+`reconcile_finance_assets(start_date,end_date,opening_assets,closing_assets,approximate=true)` 只读已落账的已知流水，按相同资产范围计算期初加收入减净支出、预计期末及未解释差额。转账单列排除；部分相交的日期区间不猜分摊，累计和明细避免重复，近似余额与记录缺口随回执返回。报告引用程序公式，差额不自动变成消费或收入。
+
+财务助手使用 `publish_finance_report(start_date?,end_date?,opening_assets?,closing_assets?,approximate=true,filename="财务回顾.md",period_evidence?)` 交付账本、预算及资产回顾。同一数据库快照生成事实正文和公式，再复用通用报告的文件、不可变资源、artifact 与手机预览链路；不接受模型自行拼写的数值正文。继续报告时，默认沿用同会话上一份已核验报告的范围和资产口径；只有实际当前用户明确指定新范围或更新余额才调整，模型参数不能自行缩成当月。无旧报告且省略日期时使用已知账本范围，期初、期末资产可成对省略，不要求用户补表。报告分别列月成本、到期现金与剩余预留，不推断未知消费或历史付款日；重复调用先校验并复用原交付回执，不修改财务记录。纯报告交付回复由核验事实生成；用户同时要求分析时，报告发布后只进行一次无工具的分析，保留建议和核验回执，避免继续循环计算。新指令、取消和未完成的操作仍按原流程处理。
+
+`apply_finance_transaction_batch` 可将创建／纠正／删除作为同一事务执行；任一 revision 冲突或校验失败全部回滚。拆分需声明总额守恒，结果包含最终记录与校验信息，重试复用原回执。
+
+`commitments` 每项为 `{key,label,amount,kind:fixed|one_time,every_months?,anchor_month?,due_day?,monthly_cost?,paid_through?,purpose?,separate_from_keys?}`。`amount` 是每次付款金额，周期按 `anchor_month` 和 `every_months` 推进；`monthly_cost` 是月度成本，默认用付款金额除以周期，`paid_through` 是已覆盖的最后月份。`recurring=true` 自该月沿用最近设置；单月配置优先。沿用时只保留固定承诺，不把某月大件继续预留到以后。`coverage_start/coverage_through` 必须同时提供且位于当月，只在用户确知记录覆盖时填写。PUT 是手动编辑的完整配置；模型使用上述 patch 工具，不把省略字段误清空。`income_schedule` 保存 `last_business_day` 或 `day_of_month` 规则，支持工作日和日期例外；仅周一到周五日历不代表法定调休或真实工资到账。
+
+Transaction 另含 `date_precision:day|month|range,date_start,date_end,coverage_start,coverage_end`。未知具体日可给月份或日期范围，不默认写成今天；跨月区间在 `summary.unallocated.items` 中返回，不分配到某个单月。`coverage_start/coverage_end` 为此笔付款覆盖的 YYYY-MM 范围，与实际支付日期独立。
 
 Transaction 包含 `id,revision,kind:expense|income|transfer|refund,amount,occurred_on,bucket:daily|fixed|one_time,category,note,commitment_key,related_transaction_id,entry_type:detail|aggregate,period_start,conversation_id,source_id,created_at,updated_at`。退款引用原消费并冲减其口径，不能超出原消费；转账与还款不再当消费。固定／大件付款以 `commitment_key` 抵扣对应预留。累计项给出同月 `period_start` 至 `occurred_on` 范围，与其覆盖明细衔接；累计范围不允许重叠。
 
-`totals` 分列收入、净支出、日常／固定／一次性、退款与转账；`reservations` 为未付承诺。`remaining.daily_budget` 同时受整体结余底线与独立日常上限约束，未知时为 null。`projection` 含预计与已收收入、剩余预计收入、费用／结余、`daily_basis,assumptions,reliable`；预计收入包含实收，不相加两次。`daily_average` 含 `amount,days,from,through,basis`，覆盖未知时不制造日均。`coverage.gaps` 与预测假设必须随结果解释，不把缺记录当零消费。
+`totals` 分列收入、净支出、日常／固定／一次性、退款与转账；`reservations` 为本月到期仍未付的承诺。`commitments.monthly_cost` 与 `cash_due` 分别列月成本和本月应付现金，不双重相加；历史付款覆盖期抵扣后续预留。`remaining.daily_budget` 同时受整体结余底线与独立日常上限约束，未知时为 null。`projection` 含预计与已收收入、剩余预计收入、费用／结余、`daily_basis,assumptions,reliable`；预计收入包含实收，不相加两次。`daily_average` 含 `amount,days,from,through,basis`，覆盖未知时不制造日均。`coverage.gaps` 与预测假设必须随结果解释，不把缺记录当零消费。
+
+`commitments.items` 另含 `next_due_month:YYYY-MM,next_due_precision:day|month,next_due_on:string|null`。仅当承诺明确提供付款日时返回具体日期；未知日的付款保留月份，`next_due_on=null`，不以每月 1 日代替真实付款日。月内已归属收入不包含跨月未分配区间，不能据此断言实际没有到账。
 
 ## 健康服务（v12）
 
@@ -192,7 +218,7 @@ Store(settings) 的 worker 接口（同步短事务，每次调用独立连接�
 运行时接口 `async run_agent(settings, run, *, persona, emit, controls, acknowledge) -> str`：
 emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可通过 asyncio task cancellation 打断，
 模型与工具步边界检查 controls；steer 使用稳定消息 ID 注入真实模型上下文，checkpoint 落盘后才 acknowledge。
-模型 ID、思考档位和搜索服务 ID 在消息入队时写入运行记录，worker 按快照调用；LangGraph thread 以 conversation_id 标识，checkpoint 使用 data_dir 下独立 SQLite。worker 在运行开始时读取子智能体配置快照；主知行只委派已配置命名助手，直接子智能体会话只获得自己的工具。搜索密钥只存服务端 SQLite，不进入消息、运行记录或 API 回执；联网结果是外部资料，回答应引用来源链接。
+模型 ID、思考档位和搜索服务 ID 在消息入队时写入运行记录，worker 按快照调用；LangGraph thread 以 conversation_id 标识，checkpoint 使用 data_dir 下独立 SQLite。worker 在运行开始时读取子智能体配置快照；主知行只委派已配置命名助手，主知行、直接子智能体和受委派助手复用同一通用工具装配：历史、个人记忆、资源库、当前附件、公开网页、计算、日期和报告交付；业务写工具仍按身份白名单提供。图片工具仍受模型 image_input 声明约束，搜索仅在本次选择服务时开放。搜索密钥只存服务端 SQLite，不进入消息、运行记录或 API 回执；联网结果是外部资料，回答应引用来源链接。
 运行时发现原生 interrupt 后抛出 RunPaused，由 worker 保存等待状态并释放执行槽。恢复时复用同一 checkpoint 和步骤回执；模型/权限/助手/记忆重置/SDK 版本变化会拒绝旧恢复。旧版无恢复标记的运行仍保留 interrupted 行为，不宣称任意工具能自动安全续跑。
 
 历史运行底座包含 `start_background_task`、`list_scheduled_tasks`、`schedule_task`、`set_schedule_enabled` 的实现；当前产品不向主知行提供这些创建／管理工具，旧计划在 v12 迁移中停用。它们不是手机远程通知接口。执行任务通过 DockerSandbox 接入 Deep Agents 的 execute/文件工具；`browser_action` 操作任务内 Chromium，`view_image` 查看实际图片，`publish_artifact` 校验并发布产物。主知行的 `copy_file` 在已授权文件目录间搬运最多 20 MiB 二进制文件。子智能体不自动获得 Shell、浏览器、调度或宿主目录挂载权限。
@@ -214,7 +240,7 @@ emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可�
 
 ModelInput 为 `{model,display_name?,enabled?,image_input?,reasoning_levels?,reasoning_effort?,temperature?,timeout?}`；默认启用、文本输入、模型默认温度、60 秒超时。已识别模型按实际 ID 自动匹配思考档位，未知模型使用显式 `reasoning_levels`；空列表表示不可调整。温度 0–2，超时大于 0 且不超过 300 秒；默认思考值必须可用（省略支持列表时由服务端匹配）。已识别的 Gemini 可设置默认思考，2.5 Flash 可关闭，Pro 与 3 系列不能关闭；未知 Gemini 不接受默认思考及 none/xhigh/max。`reasoning_kind` 和 `reasoning_labels` 是可选展示元数据，开关模型的 `high` 显示“开启”。规则与请求转换见[模型思考适配](MODEL-THINKING.md)。ManagedModel 在原 ModelInfo 上增加 `enabled,temperature,timeout`。
 
-配置和凭据保存在服务端 `app.sqlite`；API 与 worker 按操作读取新配置。私有运行快照独立于公开运行记录，完成、失败、取消后清除；可恢复中断任务保留。v9 现有 TOML 条目仅在迁移时导入一次，详见[升级说明](PROVIDER-MANAGEMENT.md)。
+配置和凭据保存在服务端 `app.sqlite`；API 与 worker 按操作读取新配置。私有运行快照独立于公开运行记录，完成、取消及不可恢复失败后清除；带真实 checkpoint 的可恢复失败和中断任务保留。v9 现有 TOML 条目仅在迁移时导入一次，详见[升级说明](PROVIDER-MANAGEMENT.md)。
 
 ## 执行闭环与必要问答（v11）
 
