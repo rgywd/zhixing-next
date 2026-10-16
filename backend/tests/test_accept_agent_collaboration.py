@@ -61,23 +61,49 @@ def isolated(tmp_path):
     return settings, directory
 
 
-@pytest.mark.parametrize("change", ["none", "guessed_clock", "missing_note", "reply_as_actual"])
-def test_unknown_time_review_requires_source_recording_time_and_no_actual_clock_claim(isolated, change):
+@pytest.mark.parametrize("change", ["none", "guessed_clock", "missing_note"])
+def test_unknown_time_assertion_checks_saved_source_recording_time_not_reply_wording(isolated, change):
     settings, directory = isolated
     store = Store(settings)
     conversation = store.create_conversation("虚构未知时间验收")
     receipt = store.submit_message(conversation["id"], id="lunch", content="今天午饭吃了米饭")
     source_time = receipt["message"]["created_at"]
     meal = {"occurred_at": source_time, "note": "实际用餐时间未知，使用记录时间。"}
-    reply = "已记录今天的午餐。"
     if change == "guessed_clock":
         meal["occurred_at"] = (datetime.fromisoformat(source_time) + timedelta(hours=1)).isoformat()
     if change == "missing_note":
         meal["note"] = ""
-    if change == "reply_as_actual":
-        reply = "已记录实际用餐时间12:30。"
     suite = acceptance.AcceptanceSuite(settings, directory, None, store, None, 1, None)
-    assert suite.unknown_meal_time_preserved(meal, "lunch", reply) is (change == "none")
+    assert suite.unknown_meal_time_preserved(meal, "lunch") is (change == "none")
+
+
+@pytest.mark.parametrize("reply", [
+    "实际用餐时刻：未知，18:37只是消息发送时间，不代表吃饭时间。",
+    "实际用餐时间是18:37。",  # Incorrect: independent review must reject it.
+    "风险由乘客承担。",  # A heuristic flag is not a completed semantic review.
+    "风险责任未知。",
+])
+def test_all_natural_replies_require_independent_review_even_without_flags(reply):
+    evidence = {"run": {"result": reply}}
+    acceptance.AcceptanceSuite.semantic_review(evidence)
+    assert evidence["semantic_review"]["status"] == "required"
+    assert evidence["semantic_review"]["review_all_replies_even_without_flags"] is True
+    assert "passed" not in evidence["semantic_review"]
+
+
+async def test_programmatic_completion_never_self_approves_semantics(isolated, monkeypatch):
+    settings, directory = isolated
+    suite = acceptance.AcceptanceSuite(settings, directory, None, None, None, 1, None)
+
+    async def completed_programmatic_case():
+        pass
+
+    for name in ("health", "linked_meal", "research", "consultation"):
+        monkeypatch.setattr(suite, name, completed_programmatic_case)
+    result = await suite.run()
+    assert result["status"] == "review_pending"
+    assert result["programmatic_checks_passed"] is True
+    assert result["manual_review_required"] is True and result["semantic_review_status"] == "required"
 
 
 def test_guards_accept_only_new_owned_exact_paths(isolated):

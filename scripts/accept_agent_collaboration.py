@@ -11,8 +11,11 @@ config_file must be None. No production database or credential discovery occurs.
 
 Default CLI only prints help. Explicit CLI: --run --evidence-dir /private/path.
 If ZHIXING_CONFIG is used it must point INSIDE that directory, and configure the
-same isolated paths and models via environment references. Model-selection and
-semantic success are established only by a real run; mocked tests do not count.
+same isolated paths and models via environment references. A successful real run
+finishes review_pending (CLI exit 3): programmatic checks alone cannot establish
+semantic success. Bind a separate independent review to source/model/evidence
+hashes; no second cloud run is needed just to read that evidence. Mocked tests
+do not count as real-model acceptance.
 """
 
 from __future__ import annotations
@@ -326,9 +329,11 @@ class AcceptanceSuite:
         self.case_results[key] = {"passed": passed, "checks": assertions}
         if "collaboration_tool_usability" in evidence:
             self.case_results[key]["tool_usability"] = evidence["collaboration_tool_usability"]
+        if "semantic_review" in evidence:
+            self.case_results[key]["semantic_review"] = evidence["semantic_review"]
         require(passed, f"{key}_business_assertion_failed")
 
-    def unknown_meal_time_preserved(self, meal, message_id, reply):
+    def unknown_meal_time_preserved(self, meal, message_id):
         with self.store._connection() as db:
             source = db.execute("SELECT created_at FROM messages WHERE id=?", (message_id,)).fetchone()
         if not source or "实际用餐时间未知" not in meal.get("note", ""):
@@ -336,8 +341,24 @@ class AcceptanceSuite:
         # HealthService persists seconds. Compare at that existing precision;
         # the semantic requirement is source recording time, never a guessed clock.
         same_instant = datetime.fromisoformat(meal["occurred_at"].replace("Z", "+00:00")).replace(microsecond=0) == datetime.fromisoformat(source[0].replace("Z", "+00:00")).replace(microsecond=0)
-        mentions_clock = re.search(r"(?<!\d)\d{1,2}:\d{2}(?!\d)|\d{1,2}点\d{1,2}分", reply)
-        return same_instant and (not mentions_clock or "记录时间" in reply or "实际用餐时间未知" in reply)
+        return same_instant
+
+    @staticmethod
+    def semantic_review(evidence, *, meal=None, additional_reply=""):
+        """Hints for independent reading, never proof or automatic rejection.
+
+        Natural-language negatives and paraphrases cannot be judged reliably by
+        these fixture-specific expressions. The reviewer must read the entire
+        source, reply and saved state, including cases with no heuristic flags.
+        """
+        text = evidence["run"]["result"] + "\n" + additional_reply
+        evidence["semantic_review"] = {
+            "status": "required", "review_all_replies_even_without_flags": True,
+            "liability_wording_flag": unprovided_liability_claim(text),
+            "reply_contains_clock": bool(re.search(r"(?<!\d)\d{1,2}:\d{2}(?!\d)|\d{1,2}点\d{1,2}分", text)),
+            "other_food_quantity_flag": guessed_other_food_portion(
+                text + (f"\n{meal['description']}\n{meal['portion']}" if meal else "")),
+        }
 
     async def health(self):
         conversation = await self.conversation("虚构健康协作验收", "health")
@@ -349,6 +370,7 @@ class AcceptanceSuite:
         weight = await self.turn("health_weight", conversation,
                                  f"今天是{self.today}，今天上午八点实际称重70.9公斤，帮我记录这次测量。", "direct")
         rows = [row for row in weight["snapshot"]["health"]["weights"] if row.get("source_id") == weight["message_id"]]
+        self.semantic_review(weight)
         self.checked("health_weight", {
             "one_actual_weight": len(rows) == 1,
             "actual_value_and_unit": len(rows) == 1 and rows[0]["value"] == 70.9 and rows[0]["unit"] == "kg",
@@ -359,6 +381,7 @@ class AcceptanceSuite:
         changed = await self.turn("health_profile_patch", conversation,
                                   "把我的饮食档案中不吃的食物增加香菜，原来的身高、过敏、活动限制和目标都保持。", "direct")
         after = changed["snapshot"]["health"]["profile"]
+        self.semantic_review(changed)
         self.checked("health_profile_patch", {
             "new_exclusion_saved": "香菜" in after["food_exclusions"],
             "other_profile_facts_preserved": all(after[key] == baseline[key] for key in (
@@ -373,19 +396,19 @@ class AcceptanceSuite:
         snapshot, source = recorded["snapshot"], recorded["message_id"]
         tx = [row for row in snapshot["transactions"] if row.get("source_id") == source]
         meals = [row for row in snapshot["meals"] if row.get("source_id") == source]
+        self.semantic_review(recorded, meal=meals[0] if len(meals) == 1 else None)
         self.checked("linked_meal", {
             "one_payment_and_one_meal": len(tx) == len(meals) == 1,
             "explicit_payment": len(tx) == 1 and tx[0]["amount"] == "24.60",
             "actual_food": len(meals) == 1 and "豆腐" in meals[0]["description"],
-            "unknown_clock_preserved": len(meals) == 1 and self.unknown_meal_time_preserved(meals[0], source, recorded["run"]["result"]),
-            "no_invented_other_food_portion": len(meals) == 1 and not guessed_other_food_portion(
-                f"{meals[0]['description']}\n{meals[0]['portion']}\n{recorded['run']['result']}"),
+            "unknown_clock_preserved": len(meals) == 1 and self.unknown_meal_time_preserved(meals[0], source),
             "atomic_receipt": self.succeeded(recorded, "record_life_meal"),
         }, duplicate_write=len(tx) > 1 or len(meals) > 1)
         corrected = await self.turn("linked_meal_correction", conversation,
                                    "刚才那顿午饭的花费我说错了，实际是22.60元；米饭实际只吃了三分之一，请改原来的同一条，其他内容保留。")
         new_tx = [row for row in corrected["snapshot"]["transactions"] if row["id"] == tx[0]["id"]]
         new_meals = [row for row in corrected["snapshot"]["meals"] if row["id"] == meals[0]["id"]]
+        self.semantic_review(corrected, meal=new_meals[0] if len(new_meals) == 1 else None)
         self.checked("linked_meal_correction", {
             "same_original_ids": len(new_tx) == len(new_meals) == 1,
             "corrected_amount": len(new_tx) == 1 and new_tx[0]["amount"] == "22.60",
@@ -393,9 +416,7 @@ class AcceptanceSuite:
             "food_preserved": len(new_meals) == 1 and all(
                 food in f"{new_meals[0]['description']} {new_meals[0]['portion']}"
                 for food in ("豆腐", "青菜", "米饭")),
-            "unknown_clock_unchanged": len(new_meals) == 1 and self.unknown_meal_time_preserved(new_meals[0], source, corrected["run"]["result"]),
-            "no_invented_other_food_portion": len(new_meals) == 1 and not guessed_other_food_portion(
-                f"{new_meals[0]['description']}\n{new_meals[0]['portion']}\n{corrected['run']['result']}"),
+            "unknown_clock_unchanged": len(new_meals) == 1 and self.unknown_meal_time_preserved(new_meals[0], source),
             "no_extra_records": len(corrected["snapshot"]["meals"]) == len(snapshot["meals"])
             and len(corrected["snapshot"]["transactions"]) == len(snapshot["transactions"]),
             "atomic_correction_receipt": self.succeeded(corrected, "correct_life_meal"),
@@ -450,6 +471,7 @@ class AcceptanceSuite:
                                                    "timeline": timeline, "wait_receipts": wait_receipts})
         text = result["run"]["result"]
         usability = orchestration_usability(result, "start_agent")
+        self.semantic_review(result)
         result["collaboration_tool_usability"] = usability
         result["evaluation"]["expected_first_orchestration_tool"] = "start_agent"
         self.checked("parallel_research", {
@@ -465,7 +487,6 @@ class AcceptanceSuite:
             "both_fixture_codes_in_results": all(any(code in (row["result"] or "") for row in rows)
                                                   for code in ("PINE-17", "MAPLE-29")),
             "both_fixture_codes_in_final": all(code in text for code in ("PINE-17", "MAPLE-29")),
-            "no_unprovided_liability_claim": not unprovided_liability_claim(text),
             "followup_reused_original_children": bool(followup) and set(row["id"] for row in rows) == initial_ids,
             "followup_actually_applied": any(row["status"] == "applied" and row["child_id"] in initial_ids for row in inputs),
             "supplement_in_child_and_final": all(word in text for word in ("偏远", "周二")) and any(
@@ -483,11 +504,11 @@ class AcceptanceSuite:
         with sqlite3.connect(f"file:{self.settings.data_dir / 'checkpoints.sqlite'}?mode=ro", uri=True) as db:
             checkpointed = db.execute("SELECT COUNT(*) FROM checkpoints WHERE thread_id=?", (target,)).fetchone()[0] > 0
         require(checkpointed and initial["run"]["status"] == "completed", "target_real_checkpoint_missing")
+        self.semantic_review(initial)
         self.checked("consultation_target_setup", {
             "real_initial_checkpoint": checkpointed,
             "provided_facts_in_reply": "HARBOR-42" in initial["run"]["result"]
             and "停航" in initial["run"]["result"],
-            "no_unprovided_liability_claim": not unprovided_liability_claim(initial["run"]["result"]),
         })
         source = await self.conversation("虚构跨对话咨询")
         conversations_before = {row["id"] for row in (await self.request("GET", "/v1/conversations", params={"limit": 100}))["items"]}
@@ -510,6 +531,7 @@ class AcceptanceSuite:
         }, "send_conversation_message")["failed_tool_calls"] for item in targets)
         result["collaboration_tool_usability"] = usability
         result["evaluation"]["expected_first_orchestration_tool"] = "send_conversation_message"
+        self.semantic_review(result, additional_reply=receipt.get("result", ""))
         self.checked("conversation_consultation", {
             "first_orchestration_choice_correct": usability["first_orchestration_choice_correct"] is True,
             "no_failed_tool_calls": usability["trace_coverage"] == "events" and usability["failed_tool_calls"] == 0
@@ -530,8 +552,6 @@ class AcceptanceSuite:
             and "周三" in receipt.get("result", "") and "停航" in receipt.get("result", ""),
             "actual_reply_in_source_summary": "HARBOR-42" in result["run"]["result"]
             and "停航" in result["run"]["result"],
-            "no_unprovided_liability_claim": not unprovided_liability_claim(result["run"]["result"])
-            and not unprovided_liability_claim(receipt.get("result", "")),
             "business_state_unchanged": result["before_snapshot"] == result["snapshot"],
         }, duplicate_write=False)
 
@@ -540,9 +560,11 @@ class AcceptanceSuite:
                            ("parallel_research", self.research), ("conversation_consultation", self.consultation)):
             self.write("progress.json", {"case": name, "status": "running", "completed": list(self.case_results)})
             await case()
-        return {"status": "passed", "real_model_run": True, "checks": self.case_results,
+        return {"status": "review_pending", "programmatic_checks_passed": True,
+                "real_model_run": True, "checks": self.case_results,
                 "turns": len(self.evidence), "manual_review_required": True,
-                "memory_evaluation": False}
+                "verification_scope": "programmatic_assertions_only",
+                "semantic_review_status": "required", "memory_evaluation": False}
 
 
 async def drive_worker(worker, stop, tick_gate):
@@ -636,7 +658,9 @@ def main(argv=None):
     settings = load_settings().model_copy(update={"config_file": None})
     summary = asyncio.run(run_acceptance(settings, directory, case_timeout=args.case_timeout))
     print(json.dumps(summary, ensure_ascii=False))
-    return 0 if summary["status"] == "passed" else 1
+    # Exit 3 means the run is complete but cannot be accepted without a separate
+    # independent review bound to these unchanged inputs, outputs and snapshots.
+    return 0 if summary["status"] == "passed" else 3 if summary["status"] == "review_pending" else 1
 
 
 if __name__ == "__main__":
