@@ -3,6 +3,7 @@
 import asyncio
 import json
 from contextlib import contextmanager
+from threading import Event, Thread
 
 import httpx
 import pytest
@@ -13,6 +14,7 @@ from zhixing_next.config import Settings
 from zhixing_next.display_stream import stream_display
 from zhixing_next.live_stream import MAX_EVENT_BYTES, MAX_EVENTS, LiveModelStream
 from zhixing_next.reply_process import MAX_PARTS, MAX_UNITS, project
+from zhixing_next.sqlite_policy import safe_journal_mode
 from zhixing_next.store import Store, StoreError
 
 TOKEN = "isolated-display-test-token-00000"
@@ -300,14 +302,41 @@ def test_projection_ignores_old_stream_late_events_and_private_terminal_payload(
     assert "NEVER" not in str(result) and result["cursor"] == 4
 
 
-def test_projection_and_resume_cursor_share_one_read_snapshot(tmp_path, monkeypatch):
+@pytest.mark.parametrize("journal_mode", sorted({"DELETE", safe_journal_mode()}))
+def test_projection_and_resume_cursor_share_one_read_snapshot(tmp_path, monkeypatch, journal_mode):
+    monkeypatch.setattr("zhixing_next.store.safe_journal_mode", lambda: journal_mode)
     settings, store, conversation = setup(tmp_path)
+    assert store.journal_mode == journal_mode.lower()
     run = start(store, conversation, "consistent")
     append(store, run, "assistant.reset", stream_id="s")
     snapshot(store, run, "before")
+    before_cursor = store.list_events(run["id"])["items"][-1]["seq"]
     original = store._connection
     writer = Store(settings)
+    writer_original = writer._connection
+    commit_ready, writer_finished = Event(), Event()
+    writer_errors, synchronization_errors = [], []
+    committed_during_read = []
     fired = False
+
+    @contextmanager
+    def observed_write(write=False):
+        with writer_original(write=write) as db:
+            yield db
+            if write:
+                # The insert is real; DELETE may commit only once the reader closes.
+                commit_ready.set()
+
+    def write_snapshot():
+        try:
+            snapshot(writer, run, "after")
+        except BaseException as error:
+            writer_errors.append(error)
+        finally:
+            writer_finished.set()
+
+    monkeypatch.setattr(writer, "_connection", observed_write)
+    writing = Thread(target=write_snapshot)
 
     @contextmanager
     def traced(write=False):
@@ -317,14 +346,31 @@ def test_projection_and_resume_cursor_share_one_read_snapshot(tmp_path, monkeypa
                 nonlocal fired
                 if not fired and sql.startswith("SELECT id,run_id,content FROM messages"):
                     fired = True
-                    snapshot(writer, run, "after")
+                    writing.start()
+                    # Never raise in a SQLite trace callback: SQLite swallows it.
+                    if not commit_ready.wait(5):
+                        synchronization_errors.append("writer did not reach commit")
+                    if journal_mode == "WAL":
+                        if not writer_finished.wait(5):
+                            synchronization_errors.append("WAL writer did not finish during read")
+                        committed_during_read.append(writer_finished.is_set() and not writer_errors)
+                    else:
+                        committed_during_read.append(writer_finished.is_set())
             db.set_trace_callback(trace)
             yield db
 
     monkeypatch.setattr(store, "_connection", traced)
-    first = store.reply_processes(conversation["id"], [run["id"]])["items"][0]
+    try:
+        first = store.reply_processes(conversation["id"], [run["id"]])["items"][0]
+    finally:
+        if writing.ident is not None:
+            writing.join(10)
+    assert fired and not writing.is_alive()
+    assert writer_finished.is_set() and not writer_errors
+    assert not synchronization_errors
+    assert committed_during_read == [journal_mode == "WAL"]
     second = store.reply_processes(conversation["id"], [run["id"]])["items"][0]
-    assert fired and first["parts"][0]["text"] == "before"
+    assert first["parts"][0]["text"] == "before" and first["cursor"] == before_cursor
     assert second["parts"][0]["text"] == "after"
     assert first["cursor"] < second["cursor"]
     assert writer.list_events(run["id"], after=first["cursor"])["items"][-1]["data"]["text"] == "after"
