@@ -20,6 +20,12 @@ def assert_shared_evidence_limits(prompt):
     assert "does not establish who bears liability" in prompt
     assert "original user statement or an identified source explicitly supports" in prompt
     assert "do not turn another assistant's inference into an original user fact" in prompt
+    assert "A process, condition or trigger does not establish exclusivity, nonexistence or a guarantee" in prompt
+    assert "'goods are prepared against orders' does not establish that no ready stock exists" in prompt
+    assert "when inventory availability is unstated, keep inventory unknown" in prompt
+    assert "Preserve the source wording's scope and qualifications" in prompt
+    assert "State your own inference separately as a hypothesis and retain the original unknown" in prompt
+    assert "never inline a conjecture as an established limitation" in prompt
     assert "Never invent an exact meal time or serving count" in prompt
     assert "do not silently use submission time or one serving" in prompt
     assert "recording metadata, explicitly distinguished from the actual eating time" in prompt
