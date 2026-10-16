@@ -346,7 +346,8 @@ export function ChatPanel({
                 : ""}
             </Text>
             </View>
-            <View style={item.role === "user" && !item.origin ? chatStyles.userBubble : chatStyles.assistantContent}>
+            <View onTouchStart={item.role === "assistant" ? () => { nearBottomRef.current = false; setAwayFromLatest(true); } : undefined}
+              style={item.role === "user" && !item.origin ? chatStyles.userBubble : chatStyles.assistantContent}>
               {item.role === "assistant" && !item.origin ? (() => {
                 const record = replyRecords[item.run_id], run = runs.find((value) => value.id === item.run_id);
                 const status = replyStatus(item.run_id);

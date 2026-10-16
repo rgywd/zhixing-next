@@ -616,3 +616,16 @@ test("shared composer stops only an empty active draft and keeps queue sends and
     assert.equal(composer.props.stopping, false); assert.equal(composer.props.pending, true); assert.equal(composer.props.editable, false);
   }
 });
+
+test("opening a reply process pauses following before its content grows", () => {
+  const scrolls = [], nearBottomRef = { current: true };
+  const message = { id: "answer", role: "assistant", run_id: "finished", content: "Answer", seq: 2 };
+  const app = chatHarness({ messages: [message], nearBottomRef, list: { current: { scrollToEnd: (options) => scrolls.push(options) } } });
+  let nodes = app.render(), list = nodes.find((node) => node.type === "FlatList");
+  const body = walk(list.props.renderItem({ item: message }));
+  body.find((node) => node.type === "View" && typeof node.props.onTouchStart === "function").props.onTouchStart();
+  list.props.onContentSizeChange();
+  assert.equal(nearBottomRef.current, false); assert.equal(scrolls.length, 0);
+  nodes = app.render(); nodes.find((node) => node.props?.accessibilityLabel === "回到最新消息").props.onPress();
+  assert.equal(nearBottomRef.current, true); assert.equal(scrolls.length, 1);
+});
