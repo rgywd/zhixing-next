@@ -25,7 +25,7 @@ async def test_real_child_gets_evidence_context_without_assistant_workflows(tmp_
         AIMessage(content="MAPLE-29要求完整地址，偏远地区未承诺；其他信息保持未知。"),
     ])
     monkeypatch.setattr("zhixing_next.runtime.create_model", lambda *args, **kwargs: child)
-    parent = Coordinator(replies=[], child_id=child_id)
+    parent = Coordinator(replies=[], child_id=child_id, source_paths=["uploads/delivery.txt"])
     await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls, acknowledge=ignore, model_override=parent)
     systems = ["\n".join(str(message.content) for message in messages if isinstance(message, SystemMessage)) for messages in child.seen]
     assert len(systems) == 2

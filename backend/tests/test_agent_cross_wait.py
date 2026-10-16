@@ -33,7 +33,7 @@ async def test_cross_chat_pause_finishes_research_and_resume_requires_observing_
     child = ScriptedModel(replies=[AIMessage(content="RESEARCH-FACT")], entered=entered, release=release)
     monkeypatch.setattr("zhixing_next.runtime.create_model", lambda *args, **kwargs: child)
     parent = ScriptedModel(replies=[
-        call("start_agent", {"task": "Research independent facts"}, "research"),
+        call("start_agent", {"task": "Research independent facts", "source_paths": []}, "research"),
         call("wait_conversation_replies", {"delivery_ids": [delivery["delivery_id"]]}, "wait-chat"),
     ])
 
@@ -98,7 +98,7 @@ async def test_research_drain_is_bounded_and_cancellation_stops_actual_model(tmp
     child = StoppingModel(replies=[], entered=asyncio.Event(), release=asyncio.Event(), stopped=stopped)
     monkeypatch.setattr("zhixing_next.runtime.create_model", lambda *args, **kwargs: child)
     parent = ScriptedModel(replies=[
-        call("start_agent", {"task": "Research evidence"}, "research"),
+        call("start_agent", {"task": "Research evidence", "source_paths": []}, "research"),
         call("wait_conversation_replies", {"delivery_ids": [delivery["delivery_id"]]}, "wait-chat"),
     ])
 

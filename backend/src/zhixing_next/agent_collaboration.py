@@ -13,9 +13,17 @@ import hashlib
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from pathlib import PurePosixPath
 from typing import Annotated, Any
 
-from langchain_core.messages import AIMessage, BaseMessage, messages_from_dict
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+    messages_from_dict,
+)
 from langchain_core.tools import InjectedToolCallId, tool
 from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from pydantic import Field
@@ -24,6 +32,14 @@ from .store import StoreError, timestamp
 
 ACTIVE = {"queued", "running", "closing"}
 RESULT_WINDOW = 16000
+SOURCE_SCOPE_KEY = "zhixing_research_source_paths"
+MAX_SOURCE_PATHS = 8
+SOURCE_READERS = frozenset({"read_text_file", "read_document", "view_image"})
+SCOPED_RESEARCH_TOOLS = SOURCE_READERS | {"calculate", "date_info"}
+FILESYSTEM_TOOLS = SOURCE_READERS | frozenset({
+    "inspect_environment", "list_directory", "write_text_file", "copy_file",
+    "ls", "read_file", "write_file", "edit_file", "delete_file", "glob", "grep", "execute",
+})
 READ_ONLY_TOOLS = frozenset({
     "list_directory", "read_text_file", "read_document", "fetch_public_page",
     "calculate", "date_info", "search_history", "read_history",
@@ -46,6 +62,115 @@ def _decode_history(value):
     if isinstance(saved, list):
         return messages_from_dict(saved)
     return JsonPlusSerializer().loads_typed((saved["encoding"], base64.b64decode(saved["payload"])))
+
+
+def _normalise_source_paths(paths):
+    if not isinstance(paths, (list, tuple)) or len(paths) > MAX_SOURCE_PATHS:
+        raise StoreError("invalid_research_sources", "Choose at most eight source_paths from the available workspace files.", 422)
+    for path in paths:
+        if (not isinstance(path, str) or not path or len(path) > 2000
+                or path.startswith(("/", "~")) or "\\" in path or ":" in path
+                or any(ord(char) < 32 for char in path)
+                or ".." in PurePosixPath(path).parts or path == "."
+                or PurePosixPath(path).as_posix() != path):
+            raise StoreError("invalid_research_sources", "Use the exact relative source_paths returned in the available workspace files.", 422)
+    return tuple(sorted(set(paths)))
+
+
+def child_source_paths(history):
+    """Read only the initial request's trusted scope, never task/follow-up text."""
+    initial = next((message for message in history if isinstance(message, HumanMessage)), None)
+    if initial is None or SOURCE_SCOPE_KEY not in initial.additional_kwargs:
+        return ()  # Pre-scope children retain generic history/web access only.
+    return _normalise_source_paths(initial.additional_kwargs[SOURCE_SCOPE_KEY])
+
+
+def _preserve_source_request(previous, history):
+    """A runner snapshot cannot replace or remove the original scope anchor."""
+    initial = next((message for message in previous if isinstance(message, HumanMessage)), None)
+    if initial is None or SOURCE_SCOPE_KEY not in initial.additional_kwargs:
+        return history
+    child_source_paths(previous)  # Fail closed rather than downgrade corrupt scope.
+    return [initial, *(message for message in history if message.id != initial.id)]
+
+
+class ResearchSourceGuard(AgentMiddleware):
+    """Enforce the persisted source scope even for forged raw model calls."""
+
+    def __init__(self, paths):
+        self.paths = frozenset(_normalise_source_paths(paths))
+
+    def _rejection(self, request):
+        call = request.tool_call
+        name, args = call["name"], call.get("args", {})
+        allowed = (
+            name in SCOPED_RESEARCH_TOOLS - SOURCE_READERS or (
+                name in SOURCE_READERS and isinstance(args, dict)
+                and isinstance(args.get("path"), str) and args["path"] in self.paths
+                and not args.get("resource_id")
+            )
+        ) if self.paths else name in READ_ONLY_TOOLS and name not in FILESYSTEM_TOOLS
+        if allowed:
+            return None
+        return ToolMessage(
+            content=json.dumps({"error": {
+                "code": "research_source_unavailable",
+                "message": "This tool or source is outside this child's fixed scope. Use its selected source paths, or report that the requested evidence is unavailable; no read was performed.",
+            }}),
+            tool_call_id=call["id"], name=name, status="error",
+        )
+
+    async def awrap_tool_call(self, request, handler):
+        rejected = self._rejection(request)
+        if rejected is not None:
+            return rejected
+        try:
+            result = await handler(request)
+        except (FileNotFoundError, PermissionError) as exc:
+            if not self.paths or request.tool_call["name"] not in SOURCE_READERS:
+                raise
+            return self._unreadable_source(request, exc)
+        return self._relative_receipt(request, result)
+
+    def wrap_tool_call(self, request, handler):
+        rejected = self._rejection(request)
+        if rejected is not None:
+            return rejected
+        try:
+            result = handler(request)
+        except (FileNotFoundError, PermissionError) as exc:
+            if not self.paths or request.tool_call["name"] not in SOURCE_READERS:
+                raise
+            return self._unreadable_source(request, exc)
+        return self._relative_receipt(request, result)
+
+    @staticmethod
+    def _unreadable_source(request, exc):
+        return ToolMessage(
+            content=json.dumps({"error": {
+                "code": "file_not_found" if isinstance(exc, FileNotFoundError) else "file_access_denied",
+                "message": "The selected source is currently unreadable; no source content was returned.",
+                "next_action": "Keep the missing evidence unknown and report it to the main assistant. This child's selected source scope cannot change; do not search for replacement sources.",
+                "retryable": False,
+            }}),
+            tool_call_id=request.tool_call["id"], name=request.tool_call["name"], status="error",
+        )
+
+    def _relative_receipt(self, request, result):
+        # Physical readers return a host absolute path. A scoped child must see
+        # its exact callable enum path instead, including on document pages.
+        if (not self.paths or request.tool_call["name"] not in SOURCE_READERS
+                or not isinstance(result, ToolMessage) or result.status != "success"
+                or not isinstance(result.content, str)):
+            return result
+        try:
+            payload = json.loads(result.content)
+        except (ValueError, TypeError):
+            return result
+        if not isinstance(payload, dict) or "path" not in payload:
+            return result
+        payload["path"] = request.tool_call["args"]["path"]
+        return result.model_copy(update={"content": json.dumps(payload, ensure_ascii=False)})
 
 
 def migrate(db) -> None:
@@ -135,19 +260,21 @@ class ChildLedger:
     def _event(self, db, child_id, status):
         db.execute("INSERT INTO agent_child_events(root_run_id,child_id,status,created_at) VALUES(?,?,?,?)", (self.root_run_id, child_id, status, timestamp()))
 
-    def create(self, call_id, name, task, max_children):
+    def create(self, call_id, name, task, max_children, *, source_paths=()):
+        source_paths = _normalise_source_paths(source_paths)
         identifier = "a_" + hashlib.sha256(f"{self.root_run_id}:{call_id}".encode()).hexdigest()[:16]
         with self.store._connection(write=True) as db:
             old = db.execute("SELECT * FROM agent_children WHERE id=?", (identifier,)).fetchone()
             if old:
-                if old["task"] != task or old["name"] != name:
+                if old["task"] != task or old["name"] != name or child_source_paths(_decode_history(old["history_json"])) != source_paths:
                     raise StoreError("child_call_conflict", "This start call already created a different request. Use its existing handle.")
                 return dict(old), False
             count = db.execute("SELECT count(*) FROM agent_children WHERE root_run_id=?", (self.root_run_id,)).fetchone()[0]
             if count >= max_children:
                 raise StoreError("child_limit", "This run has reached its research-agent limit. Use an existing child or finish the research yourself.", 422)
             now = timestamp()
-            db.execute("INSERT INTO agent_children(id,root_run_id,start_call_id,name,task,status,created_at,updated_at) VALUES(?,?,?,?,?,'queued',?,?)", (identifier, self.root_run_id, call_id, name, task, now, now))
+            history = [HumanMessage(content=task, id="request-" + identifier, additional_kwargs={SOURCE_SCOPE_KEY: list(source_paths)})]
+            db.execute("INSERT INTO agent_children(id,root_run_id,start_call_id,name,task,status,history_json,created_at,updated_at) VALUES(?,?,?,?,?,'queued',?,?,?)", (identifier, self.root_run_id, call_id, name, task, _encode_history(history), now, now))
             self._event(db, identifier, "queued")
             return self._require(db, identifier), True
 
@@ -156,7 +283,7 @@ class ChildLedger:
             old = self._require(db, child_id)
             db.execute("UPDATE agent_children SET status=?,result=?,error_code=?,history_json=?,result_version=?,updated_at=? WHERE id=?", (
                 status, result if result is not None else old["result"], error_code,
-                _encode_history(history) if history is not None else old["history_json"],
+                _encode_history(_preserve_source_request(_decode_history(old["history_json"]), history)) if history is not None else old["history_json"],
                 old["result_version"] + int(result is not None), timestamp(), child_id,
             ))
             self._event(db, child_id, status)
@@ -191,7 +318,8 @@ class ChildLedger:
         if applied_ids is not None:
             present.intersection_update(applied_ids)
         with self.store._connection(write=True) as db:
-            self._require(db, child_id)
+            old = self._require(db, child_id)
+            history = _preserve_source_request(_decode_history(old["history_json"]), history)
             db.execute("UPDATE agent_children SET history_json=?,updated_at=? WHERE id=?", (_encode_history(history), timestamp(), child_id))
             for identifier in present:
                 db.execute("UPDATE agent_child_inputs SET status='applied' WHERE id=? AND child_id=?", (identifier, child_id))
@@ -218,7 +346,7 @@ class Child:
 class AgentCollaboration:
     """Own all in-process children; no child can outlive its owning runtime."""
 
-    def __init__(self, store, run, runner: Callable[..., Awaitable[list]], emit, controls, *, max_children=4, concurrency=2):
+    def __init__(self, store, run, runner: Callable[..., Awaitable[list]], emit, controls, *, max_children=4, concurrency=2, available_source_paths=None):
         self.run, self.runner, self.emit, self.controls = run, runner, emit, controls
         self.ledger = ChildLedger(store, run["id"])
         self.ledger.interrupt_orphans()
@@ -228,14 +356,23 @@ class AgentCollaboration:
         self.changed = asyncio.Condition()
         self.shutting_down = False
         self.observed_results: dict[str, tuple[str, int]] = {}
+        self.available_source_paths = available_source_paths or (lambda: ())
 
     async def _notify(self, row):
         async with self.changed:
             self.changed.notify_all()
         await self.emit("agent.child", {"child_id": row["id"], "status": row["status"], "result_version": row["result_version"], "stopped": row["status"] not in ACTIVE})
 
-    async def start(self, task, name, call_id):
-        row, created = self.ledger.create(call_id, name, task, self.max_children)
+    async def start(self, task, name, call_id, source_paths=()):
+        source_paths = _normalise_source_paths(source_paths)
+        # Replays keep their original handle even if a source later disappears;
+        # changing that call's scope is still an idempotency conflict.
+        existing = next((row for row in self.ledger.all() if row["start_call_id"] == call_id), None)
+        if existing is None and source_paths:
+            available = await asyncio.to_thread(self.available_source_paths)
+            if not set(source_paths).issubset(available):
+                raise StoreError("research_source_unavailable", "Choose source_paths from this conversation's currently available workspace files. No research agent was created.", 422)
+        row, created = self.ledger.create(call_id, name, task, self.max_children, source_paths=source_paths)
         if created:
             child = Child(row["id"])
             self.children[child.id] = child
@@ -399,10 +536,11 @@ def create_agent_tools(collaboration):
     async def start_agent(
         task: Annotated[str, Field(min_length=1, max_length=12000, description="The original research question, only necessary context and source locations, and the desired concise findings. Preserve the original scope and unknowns; do not expand unasked dimensions, infer missing facts, or ask for a full report repeating the whole prompt.")],
         tool_call_id: Annotated[str, InjectedToolCallId],
+        source_paths: Annotated[list[str], Field(max_length=MAX_SOURCE_PATHS, description="Select the exact paths of the workspace files needed for this task from the available choices. This fixed read-only scope persists across follow-ups; task text cannot add paths. Use [] for general history/resources/web research, which has no filesystem access.")],
         name: Annotated[str, Field(min_length=1, max_length=80)] = "Research",
     ) -> dict:
-        """Start a bounded read-only research agent; return its stable agent_id immediately. Pass the original question, only necessary source/context details, and ask for concise evidence findings with known limits. Do not expand unknown dimensions, request unsupported inferences, or ask the child to reproduce a full report or the whole prompt. It can read authorized history/resources and search when enabled; it cannot record service data, publish files, execute code or delegate. Use the named finance/health task tool for service operations. Receive the needed results with wait_agents before your final answer; an already-read terminal result needs no close_agent cleanup. Close only work you are abandoning."""
-        return await collaboration.start(task, name, tool_call_id)
+        """Start a bounded read-only research agent; return its stable agent_id immediately. Select source_paths from the available workspace choices instead of copying or inventing paths in task text. Selected paths are its entire filesystem/evidence scope and cannot be expanded by send_agent; [] instead permits general history/resources/web research with no filesystem access. Pass the original question, only necessary context, and ask for concise evidence findings with known limits. Do not expand unknown dimensions, request unsupported inferences, or ask the child to reproduce a full report or the whole prompt. It cannot record service data, publish files, execute code or delegate. Use the named finance/health task tool for service operations. Receive the needed results with wait_agents before your final answer; an already-read terminal result needs no close_agent cleanup. Close only work you are abandoning."""
+        return await collaboration.start(task, name, tool_call_id, source_paths=source_paths)
 
     @tool
     async def send_agent(

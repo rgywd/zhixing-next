@@ -50,7 +50,7 @@ async def test_handles_and_deliveries_are_injected_idempotent_and_scoped(tmp_pat
     manager = AgentCollaboration(store, run, immediate, ignore, no_controls)
     tools = {item.name: item for item in create_agent_tools(manager)}
     assert "tool_call_id" not in tools["start_agent"].tool_call_schema.model_fields
-    call = {"name": "start_agent", "args": {"task": "Read old context"}, "id": "start-one", "type": "tool_call"}
+    call = {"name": "start_agent", "args": {"task": "Read old context", "source_paths": []}, "id": "start-one", "type": "tool_call"}
     first = json.loads((await tools["start_agent"].ainvoke(call)).content)
     second = json.loads((await tools["start_agent"].ainvoke(call)).content)
     assert first["agent_id"] == second["agent_id"]
@@ -219,6 +219,7 @@ async def test_wait_ignores_startup_and_unselected_child_events(tmp_path):
 
 class Coordinator(ScriptedModel):
     child_id: str
+    source_paths: list[str] = Field(default_factory=list)
     stage: int = 0
     serial: int = 0
     followup: bool = False
@@ -231,7 +232,7 @@ class Coordinator(ScriptedModel):
         self.serial += 1
         if self.stage == 0:
             self.stage = 1
-            name, args = "start_agent", {"task": "Calculate 1+2; verify evidence"}
+            name, args = "start_agent", {"task": "Calculate 1+2; verify evidence", "source_paths": self.source_paths}
             identifier = "start"
         elif self.stage == 1:
             self.stage = 2

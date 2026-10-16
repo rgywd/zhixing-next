@@ -207,7 +207,7 @@ async def test_live_flush_failure_still_stops_child_before_root_returns(tmp_path
 
     monkeypatch.setattr(LiveModelStream, "flush", broken_flush)
     parent_model = ScriptedModel(replies=[AIMessage(content="", tool_calls=[{
-        "name": "start_agent", "args": {"task": "read evidence"}, "id": "start", "type": "tool_call",
+        "name": "start_agent", "args": {"task": "read evidence", "source_paths": []}, "id": "start", "type": "tool_call",
     }]), AIMessage(content="waiting")])
     try:
         with pytest.raises(OSError, match="injected"):
@@ -227,7 +227,7 @@ async def test_waiting_for_child_still_respects_root_active_time_budget(tmp_path
     child_model = StoppingModel(replies=[AIMessage(content="Should not finish")], entered=asyncio.Event(), release=asyncio.Event(), stopped=stopped)
     monkeypatch.setattr("zhixing_next.runtime.create_model", lambda *args, **kwargs: child_model)
     parent_model = ScriptedModel(replies=[
-        AIMessage(content="", tool_calls=[{"name": "start_agent", "args": {"task": "read evidence"}, "id": "start", "type": "tool_call"}]),
+        AIMessage(content="", tool_calls=[{"name": "start_agent", "args": {"task": "read evidence", "source_paths": []}, "id": "start", "type": "tool_call"}]),
         AIMessage(content="", tool_calls=[{"name": "wait_agents", "args": {"agent_ids": [child_id], "timeout_ms": 30000}, "id": "wait", "type": "tool_call"}]),
     ])
     with pytest.raises(RunLimitError, match="累计执行时间预算"):

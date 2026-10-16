@@ -150,7 +150,7 @@ class ResearchReader(SchemaModel):
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         self.seen.append(messages)
         if len(self.seen) == 1:
-            response = call("start_agent", {"task": "Read the supplied evidence"}, "start")
+            response = call("start_agent", {"task": "Read the supplied evidence", "source_paths": []}, "start")
         else:
             latest = next((message for message in reversed(messages) if isinstance(message, ToolMessage)), None)
             if latest and latest.name == "wait_agents":

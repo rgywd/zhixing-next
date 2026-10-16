@@ -31,12 +31,13 @@ def calculation(index):
 
 class LimitCoordinator(ScriptedModel):
     child_id: str
+    source_paths: list[str] = Field(default_factory=list)
     receipts: list[dict] = Field(default_factory=list)
 
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         self.seen.append(messages)
         if len(self.seen) == 1:
-            call = {"name": "start_agent", "args": {"task": "Read the evidence and report its limits"}, "id": "start", "type": "tool_call"}
+            call = {"name": "start_agent", "args": {"task": "Read the evidence and report its limits", "source_paths": self.source_paths}, "id": "start", "type": "tool_call"}
         else:
             for message in reversed(messages):
                 if isinstance(message, ToolMessage) and message.name == "wait_agents":
@@ -57,7 +58,7 @@ class ResumeCoordinator(LimitCoordinator):
     async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
         self.seen.append(messages)
         if len(self.seen) == 1:
-            call = {"name": "start_agent", "args": {"task": "Read the evidence and report its limits"}, "id": "start", "type": "tool_call"}
+            call = {"name": "start_agent", "args": {"task": "Read the evidence and report its limits", "source_paths": self.source_paths}, "id": "start", "type": "tool_call"}
         else:
             latest = next((message for message in reversed(messages) if isinstance(message, ToolMessage)), None)
             if latest and latest.name == "send_agent" and self.failure_release is not None:
@@ -98,7 +99,7 @@ async def test_limited_research_can_continue_same_history_and_root_budget(tmp_pa
             failed_notice.set()
             await release.wait()
 
-    parent = ResumeCoordinator(replies=[], child_id=child_id, failure_release=release if notification_inflight else None)
+    parent = ResumeCoordinator(replies=[], child_id=child_id, source_paths=["uploads/supply.txt"], failure_release=release if notification_inflight else None)
     answer = await asyncio.wait_for(fixture_run_agent(settings, run, persona="", emit=emit, controls=no_controls, acknowledge=ignore, model_override=parent), 3)
     assert "same assistant" in answer
     initial, final = parent.receipts
