@@ -60,7 +60,14 @@ def _budget_facts(summary):
             "label": _plain(item["label"], 100),
             **{
                 key: item[key]
-                for key in ("monthly_cost", "cash_due", "remaining_due", "next_due_on")
+                for key in (
+                    "monthly_cost",
+                    "cash_due",
+                    "remaining_due",
+                    "next_due_on",
+                    "next_due_month",
+                    "next_due_precision",
+                )
             },
         }
         for item in summary["commitments"]["items"]
@@ -127,9 +134,9 @@ def build_finance_report(
         # commitments rather than invented monthly payment/earnings scenarios.
         due_months = sorted(
             {
-                item["next_due_on"][:7]
+                item["next_due_month"]
                 for item in closing["commitments"]["items"]
-                if item["next_due_on"][:7] > closing_month
+                if item["next_due_month"] > closing_month
             }
         )[:2]
         summaries = [closing] + [
@@ -178,15 +185,15 @@ def build_finance_report(
         "",
         "## 预算与付款安排",
         "",
-        "以下是已保存的预算安排，可以随实际情况调整；预计收入不等于已经到账。",
+        "以下是已保存的预算安排，可以随实际情况调整；预计收入不等于已经到账。本月已归属收入仅统计日期已能归到该月的记录，跨月范围尚未归属不代表没有到账。",
         "",
     ]
     for budget in budgets:
         lines += [
             f"### {_month_label(budget['month'])}",
             "",
-            f"预计收入 {_cash(budget['expected_income'])}；已收收入 {_cash(budget['received_income'])}；"
-            f"计入预算收入 {_cash(budget['budget_income'])}（预计与实收不重复相加）。",
+            f"预计收入 {_cash(budget['expected_income'])}；本月已归属收入 {_cash(budget['received_income'])}；"
+            f"计入预算收入 {_cash(budget['budget_income'])}（预计与已归属收入不重复相加）。",
             f"结余目标 {_cash(budget['savings_target'])}；已记净支出 {_cash(budget['recorded_expense'])}；"
             f"待付现金预留 {_cash(budget['reserved_cash'])}。",
             f"剩余可支配 {_cash(budget['total_spend_budget'])}；日常预算剩余 {_cash(budget['daily_budget'])}。",
@@ -196,10 +203,15 @@ def build_finance_report(
             f"本月到期现金合计 {_cash(budget['cash_due'])}。月成本用于理解负担，不替代实际到期付款或现金预留。",
         ]
         for item in budget["commitments"]:
+            next_payment = (
+                f"下一付款日 {item['next_due_on']}"
+                if item["next_due_on"] is not None
+                else f"下一付款月 {_month_label(item['next_due_month'])}（具体日未确定）"
+            )
             lines.append(
                 f"- {_inline(item['label'], 100)}：月成本 {_cash(item['monthly_cost'])}；"
                 f"本月到期现金 {_cash(item['cash_due'])}；尚待支付 {_cash(item['remaining_due'])}；"
-                f"下一付款日 {item['next_due_on']}。"
+                f"{next_payment}。"
             )
         if budget["income_schedule"]:
             lines.append(

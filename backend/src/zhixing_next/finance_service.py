@@ -1260,8 +1260,11 @@ class FinanceService:
             next_number += (anchor_number - next_number) % every
             due_year, due_month = divmod(next_number, 12)
             due_month += 1
-            due_day = min(item.get("due_day") or 1, calendar.monthrange(due_year, due_month)[1])
-            next_due = date(due_year, due_month, due_day).isoformat()
+            next_due_month = f"{due_year:04d}-{due_month:02d}"
+            next_due = None
+            if item.get("due_day") is not None:
+                due_day = min(item["due_day"], calendar.monthrange(due_year, due_month)[1])
+                next_due = date(due_year, due_month, due_day).isoformat()
             commitment_items.append(
                 {
                     "key": item["key"],
@@ -1270,6 +1273,8 @@ class FinanceService:
                     "cash_due": _fmt(cash_due),
                     "remaining_due": _fmt(remaining_due),
                     "next_due_on": next_due,
+                    "next_due_month": next_due_month,
+                    "next_due_precision": "day" if next_due is not None else "month",
                     "paid_through": paid_through,
                 }
             )

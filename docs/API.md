@@ -149,6 +149,8 @@ Transaction 包含 `id,revision,kind:expense|income|transfer|refund,amount,occur
 
 `totals` 分列收入、净支出、日常／固定／一次性、退款与转账；`reservations` 为本月到期仍未付的承诺。`commitments.monthly_cost` 与 `cash_due` 分别列月成本和本月应付现金，不双重相加；历史付款覆盖期抵扣后续预留。`remaining.daily_budget` 同时受整体结余底线与独立日常上限约束，未知时为 null。`projection` 含预计与已收收入、剩余预计收入、费用／结余、`daily_basis,assumptions,reliable`；预计收入包含实收，不相加两次。`daily_average` 含 `amount,days,from,through,basis`，覆盖未知时不制造日均。`coverage.gaps` 与预测假设必须随结果解释，不把缺记录当零消费。
 
+`commitments.items` 另含 `next_due_month:YYYY-MM,next_due_precision:day|month,next_due_on:string|null`。仅当承诺明确提供付款日时返回具体日期；未知日的付款保留月份，`next_due_on=null`，不以每月 1 日代替真实付款日。月内已归属收入不包含跨月未分配区间，不能据此断言实际没有到账。
+
 ## 健康服务（v12）
 
 记录、规范、建议与实际摄入独立保存。健康列表返回 `{items:[...]}`，可传 `start/end=YYYY-MM-DD,limit=1..500`；summary 内的记录是直接数组。记录含 `id,revision,created_at,updated_at`，来源可附 `source_id,conversation_id`。

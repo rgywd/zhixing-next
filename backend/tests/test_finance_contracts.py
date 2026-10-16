@@ -711,3 +711,35 @@ async def test_real_graph_sees_finance_errors_and_corrects_without_false_success
     assert saved["totals"]["income"] == "0.00" and saved["totals"]["transfer"] == "100.00"
     assert len(saved["budget"]["commitments"]) == 1
     assert saved["commitments"]["monthly_cost"] == "900.00"
+
+
+def test_missing_payment_day_retains_month_precision_for_monthly_and_quarterly_costs(service):
+    quarterly = rent()
+    quarterly.pop("due_day")
+    quarterly["paid_through"] = "2026-11"
+    patch(
+        service,
+        "unknown-payment-days",
+        {
+            "commitments_upsert": [
+                quarterly,
+                {"key": "metro", "label": "通勤", "amount": "200", "kind": "fixed"},
+            ]
+        },
+    )
+    result = service.summary(month="2026-10", as_of="2026-10-31")
+    items = {item["key"]: item for item in result["commitments"]["items"]}
+    assert items["quarterly-rent"]["next_due_on"] is None
+    assert items["quarterly-rent"]["next_due_month"] == "2026-12"
+    assert items["quarterly-rent"]["next_due_precision"] == "month"
+    assert items["metro"]["next_due_on"] is None
+    assert items["metro"]["next_due_month"] == "2026-10"
+    assert items["metro"]["next_due_precision"] == "month"
+    assert result["reservations"]["total"] == "200.00"
+    december = service.summary(month="2026-12", as_of="2026-12-31")
+    assert december["reservations"]["total"] == "3800.00"
+    assert december["commitments"]["monthly_cost"] == "1400.00"
+    patch(service, "actual-payment-day", {"commitments_upsert": [{**quarterly, "due_day": 10}]})
+    exact = service.summary(month="2026-12")["commitments"]["items"][0]
+    assert exact["next_due_on"] == "2026-12-10" and exact["next_due_month"] == "2026-12"
+    assert exact["next_due_precision"] == "day"

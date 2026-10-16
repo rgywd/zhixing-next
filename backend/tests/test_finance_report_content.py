@@ -320,3 +320,68 @@ def test_inconsistent_budget_receipt_is_rejected_instead_of_printing_wrong_formu
 def test_invalid_report_inputs_are_rejected_not_turned_into_questions(service, fields):
     with pytest.raises(StoreError):
         report(service, **fields)
+
+
+def test_report_month_only_payment_schedule_never_invents_first_day(service):
+    from zhixing_next.finance_report import build_finance_report
+
+    service.patch_budget(
+        month="2026-10",
+        idempotency_key="no-due-day",
+        changes={
+            "expected_income": "14000",
+            "savings_target": "8000",
+            "commitments_upsert": [
+                {
+                    "key": "rent",
+                    "label": "房租",
+                    "amount": "3600",
+                    "kind": "fixed",
+                    "every_months": 3,
+                    "anchor_month": "2026-09",
+                    "monthly_cost": "1200",
+                    "paid_through": "2026-11",
+                },
+                {"key": "metro", "label": "通勤", "amount": "200", "kind": "fixed"},
+            ],
+        },
+    )
+    report = build_finance_report(service, start_date="2026-10-01", end_date="2026-10-31")
+    content = report["content"]
+    assert "下一付款月 2026年12月（具体日未确定）" in content
+    assert "下一付款月 2026年10月（具体日未确定）" in content
+    assert "下一付款日 2026-12-01" not in content and "下一付款日 2026-10-01" not in content
+    assert "本月已归属收入" in content and "已收收入" not in content
+    assert "跨月范围尚未归属不代表没有到账" in content
+    december = next(item for item in report["facts"]["budgets"] if item["month"] == "2026-12")
+    assert december["reserved_cash"] == "3800.00" and december["total_spend_budget"] == "2200.00"
+    assert "待付预留 3800.00 = 剩余可支配 2200.00" in december["formula"]
+    assert all(
+        item["next_due_precision"] == "month" and item["next_due_on"] is None
+        for item in december["commitments"]
+    )
+    service.patch_budget(
+        month="2026-10",
+        idempotency_key="known-rent-day",
+        changes={
+            "commitments_upsert": [
+                {
+                    "key": "rent",
+                    "label": "房租",
+                    "amount": "3600",
+                    "kind": "fixed",
+                    "every_months": 3,
+                    "anchor_month": "2026-09",
+                    "due_day": 10,
+                    "monthly_cost": "1200",
+                    "paid_through": "2026-11",
+                }
+            ]
+        },
+    )
+    precise = build_finance_report(service, start_date="2026-10-01", end_date="2026-10-31")
+    assert "下一付款日 2026-12-10" in precise["content"]
+    precise_december = next(
+        item for item in precise["facts"]["budgets"] if item["month"] == "2026-12"
+    )
+    assert precise_december["formula"] == december["formula"]
