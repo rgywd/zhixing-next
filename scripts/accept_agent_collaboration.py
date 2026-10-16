@@ -187,9 +187,12 @@ def orchestration_usability(evidence, expected_first):
 
 def unprovided_liability_claim(text):
     """Catch unsupported additions in these fictional fixtures, not general NLI."""
-    for clause in re.split(r"[。；;\n]", text):
+    for clause in re.split(r"[，,。；;\n]", text):
         if any(phrase in clause for phrase in ("不能推断", "不代表", "不等于", "没有说明", "未说明", "未提供", "未知", "无法判断")):
             continue
+        # "未声明免责" explicitly withholds an allocation. Keep the positive
+        # exemption/assignment checks; do not turn a negated mention into a claim.
+        clause = re.sub(r"(?:未|没有|不)(?:声明|规定|约定|构成|等于|意味着|代表)(?:任何)?[‘“\"']?免责[’”\"']?", "", clause)
         if re.search(r"免责|(?:由|归)(?:乘客|用户|方案方|承运方)[^，,。；;]{0,12}(?:承担|负责|负担)|(?:风险|责任)[^，,。；;]{0,12}不由", clause):
             return True
     return False

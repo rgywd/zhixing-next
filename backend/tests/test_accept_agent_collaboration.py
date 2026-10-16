@@ -29,6 +29,8 @@ SPEC.loader.exec_module(acceptance)
     ("把沉默式免责升级为明确政策。", True),
     ("不能保证转乘；责任归属未知。", False),
     ("不保证转乘不代表由乘客承担责任。", False),
+    ("路线安排完全空白，既未承诺可靠换乘，也未声明免责；责任归属未知。", False),
+    ("没有说明赔付标准，风险由乘客承担。", True),
 ])
 def test_semantic_review_catches_unprovided_liability_without_banning_unknowns(text, unsupported):
     assert acceptance.unprovided_liability_claim(text) is unsupported
