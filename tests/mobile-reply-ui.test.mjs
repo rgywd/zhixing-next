@@ -94,6 +94,13 @@ function uiHarness(initial) {
 const byLabel = (nodes, label) => nodes.find((n) => n.props?.accessibilityLabel === label);
 const bodyTexts = (nodes) => nodes.filter((n) => n.type === "Markdown").map((n) => n.props.children);
 
+test("a reply waiting on another conversation explains the wait and permits a follow-up request", () => {
+  const ui = uiHarness({ parts: [], active: true, status: "queued", phase: "agent_wait" });
+  const nodes = ui.render();
+  assert.ok(nodes.some((node) => node.type === "Text" && node.props.children === "等待其他对话回复，可补充要求"));
+  assert.ok(!nodes.some((node) => node.type === "Text" && node.props.children === "等待回复"));
+});
+
 test("real reasoning has a bounded preview, full expansion survives completion, untouched process folds", () => {
   const parts = [thought("r", "Actual provider thought\n".repeat(12)), tool("t")];
   const untouched = uiHarness({ parts, active: true });

@@ -337,7 +337,7 @@ export function ChatPanel({
             <View style={[chatStyles.messageIdentity, item.role === "user" && !item.origin && { justifyContent: "flex-end" }]}>
             {item.role === "assistant" ? <View style={chatStyles.assistantMark}><Ionicons name="sparkles" size={13} color={colors.accent} /></View> : null}
             <Text style={[s.muted, item.role === "assistant" && { color: colors.ink, fontWeight: "600" }]}>
-              {item.origin === "assistant_task" ? "后台任务" : item.role === "assistant" ? assistantName : "你"}
+              {item.origin === "agent_message" ? "其他对话的助手 · 只读咨询" : item.origin === "assistant_task" ? "后台任务" : item.role === "assistant" ? assistantName : "你"}
               {item.role === "user" && !item.origin && item.intent === "queue" && item.status === "rejected"
                 && runs.some((run) => run.id === item.run_id && run.status === "cancelled" && run.started_at === null)
                 ? " · 已撤回" : ""}
@@ -425,7 +425,7 @@ export function ChatPanel({
         <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
           <Text style={s.text}>{running
             ? `正在${running.kind === "task" ? "处理委托" : "回复"} · ${pendingRuns.filter((run) => run.status === "queued").length} 条等待`
-            : pendingRuns.some((run) => run.phase === "input") ? "有问题需要你补充" : pendingRuns.some((run) => run.phase === "approval") ? "有操作需要你的决定" : pendingRuns.length ? `${pendingRuns.length} 条等待执行` : "当前没有正在处理的回复"}</Text>
+            : pendingRuns.some((run) => run.phase === "input") ? "有问题需要你补充" : pendingRuns.some((run) => run.phase === "approval") ? "有操作需要你的决定" : pendingRuns.some((run) => run.phase === "agent_wait") ? "等待其他对话回复" : pendingRuns.length ? `${pendingRuns.length} 条等待执行` : "当前没有正在处理的回复"}</Text>
           {currentRun ? <ActionLink icon="receipt-outline" onPress={() => setDetail(currentRun.id)}>查看运行进度</ActionLink> : null}
           {running ? <Button secondary danger disabled={running.cancel_requested} onPress={() => { void cancel(running).catch(() => undefined); }}>{running.cancel_requested ? "已请求取消" : "取消当前运行"}</Button> : null}
           <Text style={s.muted}>本条发送方式：{intent === "steer" ? "补充当前回复" : "接着处理"}</Text>
@@ -619,7 +619,7 @@ function RunDetail({
           <>
             <Text style={s.title}>{run.prompt}</Text>
             <Text style={s.muted}>
-              {run.status === "queued" && run.phase === "input" ? "等待回答" : run.status === "queued" && run.phase === "approval" ? "等待批准" : run.status === "queued" && run.phase === "recovering" ? "正在恢复任务" : runLabels[run.status]} · {run.id.slice(0, 8)}
+              {run.status === "queued" && run.phase === "input" ? "等待回答" : run.status === "queued" && run.phase === "approval" ? "等待批准" : run.status === "queued" && run.phase === "agent_wait" ? "等待其他对话回复" : run.status === "queued" && run.phase === "recovering" ? "正在恢复任务" : runLabels[run.status]} · {run.id.slice(0, 8)}
             </Text>
             {run.model_id ? (
               <Text style={s.muted}>

@@ -6,6 +6,7 @@ import ts from "typescript";
 import * as jsxRuntime from "react/jsx-runtime";
 import * as api from "../src/api.ts";
 import * as liveRun from "../src/liveRun.ts";
+import * as steerableRun from "../src/steerableRun.ts";
 import { availablePreference } from "../src/providerEditing.ts";
 import * as theme from "../src/theme.ts";
 
@@ -135,6 +136,7 @@ function chatHarness({ initial = { text: "hello", pending: null }, read, post, c
   const sync = () => {};
   const { useChat } = load("useChat.ts", {
     "./liveRun": liveRun,
+    "./steerableRun": steerableRun,
     react: lifecycle.react,
     "react-native": { AppState: { currentState: "active", addEventListener: () => ({ remove() {} }) }, Alert: { alert: (_title, _body, actions) => confirmation.push(actions) } },
     "expo-crypto": { randomUUID: () => `message-${++sequence}` },

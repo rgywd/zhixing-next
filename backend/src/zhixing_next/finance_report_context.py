@@ -36,7 +36,7 @@ _CLOSING = re.compile(
 def _source(store, identifier):
     with store._connection() as db:
         row = db.execute(
-            "SELECT id,role,status,content,created_at FROM messages WHERE id=?", (identifier,)
+            "SELECT id,role,status,content,created_at FROM messages WHERE id=? AND COALESCE(json_extract(request_json,'$.origin'),'')!='agent_message'", (identifier,)
         ).fetchone()
     if row is not None and row["role"] == "user" and row["status"] in {"accepted", "applied"}:
         return dict(row)

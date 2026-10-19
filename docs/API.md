@@ -1,6 +1,6 @@
 # HTTP 与运行接口
 
-状态：2026-10-14，当前源码包含数据库 v12 的财务与健康服务。安装、部署及验收状态以[0.2.0 说明](RELEASE-0.2.0.md)为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
+状态：2026-10-16，当前源码包含数据库 v14 的工具契约与 Agent 协作。历史安装、部署及验收状态以各版发布说明为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
 
 ## 交付范围
 
@@ -17,6 +17,11 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 用户和模型供应商密钥分离；App 只持有服务访问令牌。
 
 ## HTTP 接口
+
+- `POST /v1/runs/{run_id}/conversation-messages {id,target_conversation_id,message}`：当前活动用户运行向已有其他对话发起只读咨询。`id` 是本次投递的稳定请求 ID；目标消息、目标运行与投递回执同事务创建，相同 ID 换内容／目标返回 409。返回 `delivery_id,target_run_id,target_conversation_id,status,terminal,needs_attention,read_only:true`；queued/running 不代表咨询完成。内部咨询不能继续投递，拒绝本对话、阻塞目标、依赖环与单运行超过八次投递。
+- `GET /v1/runs/{run_id}/conversation-messages`、`GET /v1/runs/{run_id}/conversation-messages/{delivery_id}`：查询该源运行的实际投递状态与结果，跨源读取返回 403。终态保留 completed/failed/cancelled/interrupted；结果窗口最多 16000 字，附 `result_truncated,reply_message_id`，可通过既有历史消息读取能力继续获取。取消源运行不撤回已接收的独立咨询。
+- 跨对话等待由运行时 `wait_conversation_replies` 使用 LangGraph interrupt；运行状态为 `queued,phase=agent_wait` 时释放聊天槽，完成／需要处理后恢复。原目标的模型上下文只由正常 worker 领取流程写入。等待阶段允许用户对该 run 发送 Steer 或取消。内部消息返回 `origin=agent_message,source_conversation_id,delivery_id`，运行也带 `origin=agent_message`；不能作为普通用户排队消息撤回或提升为引导，不进入个人记忆及财务用户证据。
+- 运行内研究工具为 `start_agent/send_agent/wait_agents/close_agent`；具体生命周期、只读白名单、预算和重启边界见 [Agent 协作](AGENT-COLLABORATION.md)。跟进／等待工具在已有对应句柄后才向模型提供。
 
 - `GET /v1/status`: `{model_ready: bool, worker_online: bool, execution_available: bool, execution_reason: string|null, file_tools_available: bool}`；`model_ready` 按当前聊天/执行默认模型及服务端密钥判断，不代表供应商已通过调用。`execution_available` 检查启用配置及 Docker 镜像可见性，实际启动仍可能失败，以执行回执为准。
 - `GET /v1/models`：返回 `{items,roles}`。每个模型只公开 `id,name,model,provider,protocol,ready,image_input,reasoning_levels,default_reasoning_effort,reasoning_kind,reasoning_labels`；`image_input` 是服务端对端点能力的声明，不是实时探测。不返回密钥、环境变量名或 Base URL。`roles` 为聊天、执行、记忆整理的当前默认模型 ID。
@@ -57,7 +62,7 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 - `POST /v1/runs/{id}/cancel`: 从未开始的 queued 立即撤回，不改变会话阻塞状态；等待批准或恢复的已开始任务取消后阻塞队列；running 持久记录取消请求，
   实际停止后暂停其后续队列。取消不删除后续队列。
 - `POST /v1/runs/{id}/queued/withdraw`: 仅撤回普通用户提交、`kind=chat,status=queued,phase=normal,started_at=null` 且尚未取消的输入，返回 `{message,run}`。同一撤回可以重试；worker 已领取时返回 `409 stale_queue`，不会转为取消正在运行的任务。撤回不改变当前执行或已有会话阻塞；后台任务、等待批准／回答、恢复任务及已改投为引导的输入不能使用此接口。
-- `POST /v1/runs/{id}/queued/steer {target_run_id}`: 将上述尚未开始的队列输入原子改投到同会话、未请求取消的实际 running 运行，返回 `{message,run:目标运行,source_run:已撤回的原队列运行}`。保留同一 message ID、顺序、正文、附件、创建时间和原始 `request_json`；不重新上传附件、不新建消息／运行，也不把原队列的模型、思考或搜索配置覆盖到目标。图片按目标已保存的模型快照校验，不支持时返回 `422 image_not_supported` 并保持原队列。source 被领取或 target 已结束／取消时返回 409，整个操作无部分修改。
+- `POST /v1/runs/{id}/queued/steer {target_run_id}`: 将上述尚未开始的队列输入原子改投到同会话、未请求取消的用户 running 或 queued+agent_wait 运行，返回 `{message,run:目标运行,source_run:已撤回的原队列运行}`。内部只读咨询不能作为引导目标。保留同一 message ID、顺序、正文、附件、创建时间和原始 `request_json`；不重新上传附件、不新建消息／运行，也不把原队列的模型、思考或搜索配置覆盖到目标。图片按目标已保存的模型快照校验，不支持时返回 `422 image_not_supported` 并保持原队列。source 被领取或 target 已结束／取消时返回 409，整个操作无部分修改。引导 agent_wait 时同事务清除旧等待依赖并转为 recovering。
   成功后重试同一 source／target 返回同一投递的当前回执，即使引导已应用或目标已结束；不同目标返回 `409 stale_queue`，不会再次投递。原 queue POST 仍须原样重试，返回同一已改投消息和目标运行。操作与 worker 领取、结束共用 SQLite 写事务；禁止客户端使用“先取消再发送”模拟转换。原队列模型快照被清理，目标配置、checkpoint 和实际效果不变。
 - `GET /v1/runs/{id}/events?after=0&limit=100`: `{items: [{seq,run_id,type,data,created_at}],next_cursor}`。
   类型包括 started/progress/tool/queue_promoted/steer_applied/execution/artifact/operation/approval/paused/recovering/completed/failed/cancelled/interrupted；序号单调递增。`queue_promoted.data={message_id,source_run_id}` 只表示同一排队输入已接受为目标引导；实际应用仍以 checkpoint 后的 `steer_applied` 为准。
@@ -163,6 +168,8 @@ Transaction 包含 `id,revision,kind:expense|income|transfer|refund,amount,occur
 ## 健康服务（v12）
 
 记录、规范、建议与实际摄入独立保存。健康列表返回 `{items:[...]}`，可传 `start/end=YYYY-MM-DD,limit=1..500`；summary 内的记录是直接数组。记录含 `id,revision,created_at,updated_at`，来源可附 `source_id,conversation_id`。
+
+AI 记录入口允许省略未知的用餐／测量时刻，或只给已知 `YYYY-MM-DD`。程序使用系统绑定原用户消息的记录时钟并追加实际时间未知说明，保留已知日期；不会把餐次或示例时间当成实际时刻，也不要求用户补表单。已明确的实际时刻保持，局部修改保留未改时间与未知说明。HTTP 健康服务仍使用原显式 timestamp 格式；记录时钟不能作为实际发生时刻引用，手机端对未知时刻另作标注。份量只保存已说明的对应食物，不给其他菜补默认份数。
 
 | 接口 | 输入或结果 |
 | --- | --- |

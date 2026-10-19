@@ -6,6 +6,7 @@ import ts from "typescript";
 import * as jsx from "react/jsx-runtime";
 import * as api from "../src/api.ts";
 import * as live from "../src/liveRun.ts";
+import * as steerableRun from "../src/steerableRun.ts";
 const settle = async () => { for (let i = 0; i < 3; i++) await new Promise((resolve) => setImmediate(resolve)); };
 const plain = (value) => JSON.parse(JSON.stringify(value));
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
@@ -76,6 +77,7 @@ function harness({ initial = { text: "", pending: null }, preference = "queue", 
   const { useChat } = load("useChat.ts", {
     react: lifecycle.react, "react-native": { AppState: appState, Alert: { alert() {} } }, "expo-crypto": { randomUUID: () => `out-${++sequence}` }, "expo-speech": { stop: async () => {} },
     "./liveRun": live, "./ConnectionStatus": { useSyncStatus: () => sync }, "./ui": { humanError: (e) => e.message },
+    "./steerableRun": steerableRun,
     "./storage": { draftKey: (url, id) => `${url}:${id}`, readDraft: async () => plain(stored), saveDraft: async (_key, value) => { stored = plain(value); }, clearDraft: async () => { stored = { text: "", pending: null }; } },
     "./api": { ...api, request: async (connection, path, options = {}) => {
       const call = { connection, path, ...options }; calls.push(call);
@@ -200,6 +202,38 @@ test("idle drafts remain queued when another run starts and pending retry ignore
   assert.deepEqual(plain(retry.calls.find((v) => v.method === "POST").body), pending); retry.unmount();
   const blocked = harness({ initial: { text: "New draft", pending: null }, preferenceReady: false }); value = await blocked.ready(); await value.send();
   assert.equal(blocked.calls.filter((v) => v.method === "POST").length, 0); blocked.unmount();
+});
+
+test("a waiting user reply remains the draft guidance target across refresh and transport retry", async () => {
+  let posts = 0;
+  const app = harness({ preference: "steer", read: ({ method }) => method === "POST" && ++posts === 1
+    ? Promise.reject(new Error("response lost")) : null });
+  app.setRuns([{ ...run("waiting", "queued"), phase: "agent_wait" }]);
+  let value = await app.ready(); assert.equal(value.running.id, "waiting");
+  await value.updateDraft({ text: "先按新的约束继续", pending: null }); value = app.render();
+  assert.equal(value.target, "waiting"); await value.send();
+  const original = plain(app.calls.find((call) => call.method === "POST").body);
+  app.setRuns([run("later")]); value.refresh.current(); await settle(); value = app.render();
+  await value.send();
+  const payloads = app.calls.filter((call) => call.method === "POST").map((call) => plain(call.body));
+  assert.deepEqual(payloads, [original, original]);
+  assert.equal(original.intent, "steer"); assert.equal(original.target_run_id, "waiting");
+  app.unmount();
+});
+
+test("approval/input/recovery/cancellation and internal consultation never become a guidance target", async () => {
+  const excluded = [
+    ...["normal", "approval", "input", "recovering"].map((phase) => ({ ...run("blocked", "queued"), phase })),
+    { ...run(), cancel_requested: true }, { ...run(), origin: "agent_message" },
+    { ...run("internal-wait", "queued"), phase: "agent_wait", origin: "agent_message" },
+  ];
+  for (const candidate of excluded) {
+    const app = harness({ preference: "steer" }); app.setRuns([candidate]);
+    let value = await app.ready(); assert.equal(value.running, null);
+    await value.updateDraft({ text: "新的人类输入", pending: null }); value = app.render(); await value.send();
+    const payload = app.calls.find((call) => call.method === "POST").body;
+    assert.equal(payload.intent, "queue"); assert.equal(payload.target_run_id, undefined); app.unmount();
+  }
 });
 test("attachment-only steer binds its initial target and that binding survives draft restoration", async () => {
   const app = harness({ preference: "steer" }); let value = await app.ready();

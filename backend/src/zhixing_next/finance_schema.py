@@ -3,6 +3,7 @@
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 class FinanceInput(BaseModel):
@@ -127,7 +128,7 @@ class CorrectionArguments(FactToolInput):
     transaction_id: str
     entry_key: str
     changes: TransactionChanges | None = None
-    changes_json: str | None = None
+    changes_json: SkipJsonSchema[str | None] = None
     expected_revision: int | None = Field(default=None, ge=1)
 
 
@@ -135,7 +136,7 @@ class BudgetArguments(DatedToolInput):
     month: str
     entry_key: str
     changes: BudgetChanges | None = None
-    changes_json: str | None = None
+    changes_json: SkipJsonSchema[str | None] = None
     recurring: bool = True
 
 
