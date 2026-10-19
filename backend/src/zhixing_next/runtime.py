@@ -556,7 +556,7 @@ class RunControls(AgentMiddleware):
                 active = self.collaboration.outstanding()
                 if active:
                     return {"messages": [HumanMessage(
-                        content="Research agents still have unfinished work or unread results. Call wait_agents to receive their actual results, or close_agent if their work is no longer needed, before your final answer. Outstanding agent handles: " + ", ".join(row["id"] for row in active),
+                        content="Research agents still have unfinished work or unread results. Call wait_agents to receive their actual results before your final answer. For a truncated result, keep reading the same result_version using its actual next_result_offset until all result text is received; a first page or tail page alone does not complete the read. If the result_version changes, read the new result from offset zero. Use close_agent only if abandoning that work. Outstanding agent handles: " + ", ".join(row["id"] for row in active),
                         id=f"children-{self.run_id}-{latest.id}",
                     )], "jump_to": "model"}
             if self.task_flow and isinstance(latest, AIMessage) and not latest.tool_calls:
@@ -616,7 +616,7 @@ class RunControls(AgentMiddleware):
 
             paths = await asyncio.to_thread(self.collaboration.available_source_paths)
             tools = [self.research_start_contract(item, paths) if (item.get("name") if isinstance(item, dict) else item.name) == "start_agent" else item for item in tools]
-            if not any(len(row.get("result") or "") > RESULT_WINDOW for row in children):
+            if not any(len(row.get("result") or "") > RESULT_WINDOW for row in children) and not self.collaboration.has_unread_result_pages(children):
                 tools = [self.unpaged_wait_contract(item) if (item.get("name") if isinstance(item, dict) else item.name) == "wait_agents" else item for item in tools]
             # The SDK prepends its generic `task`; concrete tools and the actual
             # research lifecycle should be encountered before service delegation.

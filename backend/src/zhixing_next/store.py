@@ -210,7 +210,14 @@ class Store:
                 migrate_agent_collaboration(db)
                 migrate_conversation_links(db)
                 health = db.execute("SELECT instructions FROM agents WHERE id='health'").fetchone()
-                if health and (health["instructions"] == HEALTH_INSTRUCTIONS or hashlib.sha256(health["instructions"].encode()).hexdigest() == "f4bf08b73c6669ca53c2b4e847f16a5b08cb04e08c69480f97ba2aa6c01dcbe4"):
+                if health and (
+                    health["instructions"] == HEALTH_INSTRUCTIONS
+                    or hashlib.sha256(health["instructions"].encode()).hexdigest() in {
+                        "f4bf08b73c6669ca53c2b4e847f16a5b08cb04e08c69480f97ba2aa6c01dcbe4",
+                        # v13 built-in at 9bc88c1; keep customized or appended text.
+                        "0005c36d57596235f8dbed50fdbf9fd53c1a2d6557cd3ab4e475af5ba30dc3fe",
+                    }
+                ):
                     # Built-in protocol lives in code; this column is only for
                     # user customization. Do not strip arbitrary custom text.
                     db.execute("UPDATE agents SET instructions='',updated_at=? WHERE id='health'", (timestamp(),))

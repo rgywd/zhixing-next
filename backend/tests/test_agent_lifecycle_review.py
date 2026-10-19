@@ -87,8 +87,8 @@ async def test_long_child_result_is_saved_in_full_and_paged_without_losing_unico
         assert first["status"] == "completed" and first["result_version"] == 1
         assert first["result_length"] == len(content)
         assert first["result_offset"] == 0
-        assert first["result_truncated"] and first["next_result_offset"] == RESULT_WINDOW
-        assert len(first["result"]) == RESULT_WINDOW
+        assert first["result_truncated"] and 0 < first["next_result_offset"] <= RESULT_WINDOW
+        assert len(first["result"]) == first["next_result_offset"]
         collected = first["result"]
         page = first
         while page["next_result_offset"] is not None:

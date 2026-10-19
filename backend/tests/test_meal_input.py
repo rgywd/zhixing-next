@@ -125,6 +125,67 @@ async def test_explicit_user_clocks_are_preserved_without_an_unknown_time_label(
 
 
 @pytest.mark.parametrize("route", ["health", "life"])
+@pytest.mark.parametrize(("text", "expected"), [
+    ("昨天中午一点吃的午饭，豆腐和青菜。", "2026-10-15T13:00:00+08:00"),
+    ("昨晚十一点半吃的夜宵，面条。", "2026-10-15T23:30:00+08:00"),
+    ("昨晚11:30吃的夜宵，面条。", "2026-10-15T23:30:00+08:00"),
+    ("今天凌晨十二点二十分吃的夜宵，面条。", "2026-10-16T00:20:00+08:00"),
+])
+async def test_explicit_natural_period_clocks_are_not_replaced_by_recording_time(inputs, route, text, expected):
+    _, source = inputs
+    result = await record(source(text=text), route, occurred_at=expected)
+    assert result["occurred_at"] == expected
+    assert UNKNOWN_MEAL_TIME_NOTE not in result["note"]
+
+
+@pytest.mark.parametrize("route", ["health", "life"])
+@pytest.mark.parametrize(("text", "proposed", "expected"), [
+    ("今天12:20吃的午饭。", "2026-10-16T04:20:00Z", "2026-10-16T12:20:00+08:00"),
+    ("今天中午一点吃的午饭。", "2026-10-16T14:00:00+09:00", "2026-10-16T13:00:00+08:00"),
+    ("今天凌晨十二点二十分吃的夜宵。", "2026-10-15T16:20:00+00:00", "2026-10-16T00:20:00+08:00"),
+])
+async def test_equivalent_offset_meal_proposals_match_business_clock_and_keep_business_day(
+    inputs, route, text, proposed, expected,
+):
+    store, source = inputs
+    result = await record(source(text=text), route, occurred_at=proposed)
+    assert result["occurred_at"] == expected
+    assert UNKNOWN_MEAL_TIME_NOTE not in result["note"]
+    with store._connection() as db:
+        actual_source_time = db.execute("SELECT created_at FROM messages WHERE id='source'").fetchone()[0]
+    assert actual_source_time == "2026-10-16T07:42:13.123456+00:00"
+
+
+@pytest.mark.parametrize("route", ["health", "life"])
+async def test_a_meeting_clock_cannot_replace_explicitly_unknown_meal_time(inputs, route):
+    _, source = inputs
+    result = await record(source(text="12:20有会议；今天午饭吃了豆腐，几点吃的记不清了。"), route,
+                          occurred_at="2026-10-16T12:20:00+08:00")
+    assert result["occurred_at"] == "2026-10-16T15:42:13+08:00"
+    assert UNKNOWN_MEAL_TIME_NOTE in result["note"]
+
+
+async def test_another_named_meals_unknown_time_does_not_erase_the_explicit_selected_meal_clock(inputs):
+    _, source = inputs
+    result = await record(source(text="早饭几点吃的记不清了；午饭是12:20吃的。"), "health",
+                          occurred_at="2026-10-16T12:20:00+08:00")
+    assert result["occurred_at"] == "2026-10-16T12:20:00+08:00"
+    assert UNKNOWN_MEAL_TIME_NOTE not in result["note"]
+
+
+@pytest.mark.parametrize(("text", "known"), [
+    ("早餐几点吃的不记得，午饭12:20吃的。", True),
+    ("12:20有会议，午饭吃了豆腐，具体时间记不清了。", False),
+    ("午饭12:20吃的，15:20有会议，具体时间记不清了。", True),
+])
+async def test_comma_clauses_carry_only_the_adjacent_meals_unknown_clock(inputs, text, known):
+    _, source = inputs
+    result = await record(source(text=text), "health", occurred_at="2026-10-16T12:20:00+08:00")
+    assert result["occurred_at"] == ("2026-10-16T12:20:00+08:00" if known else "2026-10-16T15:42:13+08:00")
+    assert (UNKNOWN_MEAL_TIME_NOTE not in result["note"]) is known
+
+
+@pytest.mark.parametrize("route", ["health", "life"])
 async def test_portion_only_corrections_preserve_original_recording_time_and_unknown_note(inputs, route):
     _, source = inputs
     tools = source()
@@ -236,6 +297,45 @@ async def test_note_only_measurement_patch_preserves_unknown_marker_and_source_c
     })
     assert corrected["measured_at"] == original["measured_at"] and corrected["value"] == original["value"]
     assert corrected["note"] == UNKNOWN_MEASUREMENT_TIME_NOTE
+
+
+@pytest.mark.parametrize(("name", "value", "text", "proposed", "expected"), [
+    ("record_weight", 70.9, "昨晚十一点半称重70.9公斤。", "2026-10-15T23:30:00+08:00", "2026-10-15T23:30:00+08:00"),
+    ("record_steps", 4200, "昨天中午一点测到4200步。", "2026-10-15T05:00:00Z", "2026-10-15T13:00:00+08:00"),
+])
+async def test_measurement_tools_keep_explicit_period_clocks_and_equivalent_offsets(
+    inputs, name, value, text, proposed, expected,
+):
+    _, source = inputs
+    result = await source(text=text)[name].ainvoke({"entry_key": "measurement", "value": value, "measured_at": proposed})
+    assert result["measured_at"] == expected and result["value"] == value
+    assert UNKNOWN_MEASUREMENT_TIME_NOTE not in result["note"]
+
+
+@pytest.mark.parametrize(("name", "value", "text"), [
+    ("record_weight", 70.9, "12:20有会议；今天称重70.9公斤，具体测量时间记不清了。"),
+    ("record_steps", 4200, "12:20有会议；今天步数4200，几点测的记不清了。"),
+])
+async def test_measurements_cannot_borrow_a_meeting_clock_when_actual_time_is_unknown(inputs, name, value, text):
+    _, source = inputs
+    result = await source(text=text)[name].ainvoke({
+        "entry_key": "measurement", "value": value, "measured_at": "2026-10-16T04:20:00Z",
+    })
+    assert result["measured_at"] == "2026-10-16T15:42:13+08:00"
+    assert UNKNOWN_MEASUREMENT_TIME_NOTE in result["note"]
+
+
+async def test_an_explicit_natural_clock_patch_updates_known_measurement_clock(inputs):
+    _, source = inputs
+    original = await source(text="今天12:20称重70.9公斤。")["record_weight"].ainvoke({
+        "entry_key": "weight", "value": 70.9, "measured_at": "2026-10-16T12:20:00+08:00", "note": "原备注",
+    })
+    corrected = await source("correction", "那次实际是昨晚十一点半称的，其他保留。")["correct_health_record"].ainvoke({
+        "kind": "weights", "identifier": original["id"], "entry_key": "fix-clock",
+        "record": {"measured_at": "2026-10-15T15:30:00Z"},
+    })
+    assert corrected["measured_at"] == "2026-10-15T23:30:00+08:00"
+    assert corrected["note"] == "原备注" and corrected["value"] == original["value"]
 
 
 def test_model_schemas_do_not_require_unknown_clocks_or_supply_a_meal_time_example(inputs):

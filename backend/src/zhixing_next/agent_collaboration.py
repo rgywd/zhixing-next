@@ -32,6 +32,9 @@ from .store import StoreError, timestamp
 
 ACTIVE = {"queued", "running", "closing"}
 RESULT_WINDOW = 16000
+# Deep Agents offloads tool text above 80k serialized characters. Keep the whole
+# multi-agent receipt below that boundary, including JSON escapes and metadata.
+RESULT_MESSAGE_LIMIT = 60000
 SOURCE_SCOPE_KEY = "zhixing_research_source_paths"
 MAX_SOURCE_PATHS = 8
 SOURCE_READERS = frozenset({"read_text_file", "read_document", "view_image"})
@@ -48,6 +51,40 @@ READ_ONLY_TOOLS = frozenset({
     "list_finance_observations", "get_finance_summary", "list_finance_transactions",
     "reconcile_finance_assets", "query_health_context", "query_life_events",
 })
+
+
+def _bound_result_pages(snapshot):
+    def encoded_size(value):
+        return max(len(json.dumps(value, ensure_ascii=ascii_only)) for ascii_only in (True, False))
+
+    if encoded_size(snapshot) <= RESULT_MESSAGE_LIMIT:
+        return snapshot
+
+    def trimmed(page_size):
+        agents = []
+        for row in snapshot["agents"]:
+            if row["result"] is None:
+                agents.append(row)
+                continue
+            text = row["result"][:page_size]
+            end = row["result_offset"] + len(text)
+            agents.append({
+                **row, "result": text,
+                "result_truncated": end < row["result_length"],
+                "next_result_offset": end if end < row["result_length"] else None,
+            })
+        return {**snapshot, "agents": agents}
+
+    low, high = 0, max(len(row["result"] or "") for row in snapshot["agents"])
+    if encoded_size(trimmed(0)) > RESULT_MESSAGE_LIMIT:
+        raise StoreError("agent_receipt_too_large", "Read a smaller selection of agent handles; no result page was delivered.", 422)
+    while low < high:
+        midpoint = (low + high + 1) // 2
+        if encoded_size(trimmed(midpoint)) <= RESULT_MESSAGE_LIMIT:
+            low = midpoint
+        else:
+            high = midpoint - 1
+    return trimmed(low)
 
 
 def _encode_history(history):
@@ -356,6 +393,8 @@ class AgentCollaboration:
         self.changed = asyncio.Condition()
         self.shutting_down = False
         self.observed_results: dict[str, tuple[str, int]] = {}
+        self.result_read_ranges: dict[str, tuple[str, int, list[tuple[int, int]]]] = {}
+        self.dismissed_results: dict[str, tuple[str, int]] = {}
         self.available_source_paths = available_source_paths or (lambda: ())
 
     async def _notify(self, row):
@@ -455,8 +494,45 @@ class AgentCollaboration:
     def active(self):
         return [row for row in self.ledger.all() if row["status"] in ACTIVE]
 
+    def _observe_result_page(self, row):
+        identity = (row["status"], row["result_version"])
+        previous = self.result_read_ranges.get(row["id"])
+        ranges = list(previous[2]) if previous and previous[:2] == identity else []
+        start = row["result_offset"]
+        end = start + len(row["result"] or "")
+        if start <= row["result_length"]:
+            ranges.append((start, end))
+        merged = []
+        for start, end in sorted(ranges):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        self.result_read_ranges[row["id"]] = (*identity, merged)
+
+    def _fully_observed(self, row):
+        identity = (row["status"], row["result_version"])
+        if self.dismissed_results.get(row["id"]) == identity:
+            return True
+        evidence = self.result_read_ranges.get(row["id"])
+        return bool(
+            self.observed_results.get(row["id"]) == identity
+            and evidence and evidence[:2] == identity and evidence[2]
+            and evidence[2][0][0] == 0
+            and evidence[2][0][1] >= len(row["result"] or "")
+        )
+
     def outstanding(self):
-        return [row for row in self.ledger.all() if row["status"] in ACTIVE or (row["status"] != "closed" and self.observed_results.get(row["id"]) != (row["status"], row["result_version"]))]
+        return [row for row in self.ledger.all() if row["status"] in ACTIVE or (row["status"] != "closed" and not self._fully_observed(row))]
+
+    def has_unread_result_pages(self, rows):
+        for row in rows:
+            evidence = self.result_read_ranges.get(row["id"])
+            if (evidence and evidence[:2] == (row["status"], row["result_version"])
+                    and any(end > start for start, end in evidence[2])
+                    and not self._fully_observed(row)):
+                return True
+        return False
 
     async def wait(self, child_ids=None, *, after=0, timeout_ms=10000, result_offset=0):
         if not 0 <= timeout_ms <= 30000:
@@ -492,8 +568,10 @@ class AgentCollaboration:
                 snapshot = self.ledger.snapshot(child_ids, result_offset=result_offset)
             snapshot = self.ledger.snapshot(child_ids, result_offset=result_offset)
         snapshot["timed_out"] = timed_out
+        snapshot = _bound_result_pages(snapshot)
         for row in snapshot["agents"]:
             self.observed_results[row["id"]] = (row["status"], row["result_version"])
+            self._observe_result_page(row)
         return snapshot
 
     async def close(self, child_id):
@@ -501,6 +579,7 @@ class AgentCollaboration:
         child = self.children.get(child_id)
         if row["status"] == "interrupted":
             self.observed_results[child_id] = (row["status"], row["result_version"])
+            self.dismissed_results[child_id] = (row["status"], row["result_version"])
             return self.ledger.public(row)
         if child and child.task and not child.task.done():
             child.close_requested = True
