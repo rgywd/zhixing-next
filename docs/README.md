@@ -1,5 +1,7 @@
 # 文档入口
 
+- [助手提示词基底](ASSISTANT-BASE.md)：Muse 提示词的通用原则复用、知行身份替换与实际工具边界。
+
 - [0.2.6 更新兜底、工具与子 Agent 协作](RELEASE-0.2.6.md)：正式标签 Actions 签名 ARM64 包、versionCode 8、v14 完整备份与迁移、只读研究及跨对话咨询；实际构建、下载与模拟器验收另留回执。
 
 - [工具调用体验与 harness 取舍](TOOL-HARNESS.md)：对照 Codex、OpenCode、Pi，简化参数、自动合并、可修复失败与验证边界。

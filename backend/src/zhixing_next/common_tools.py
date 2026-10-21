@@ -212,7 +212,7 @@ def create_calculation_tools():
 def create_common_tools(settings, run, workspace, emit, *, image_input=False, forgetting=False):
     """Use one assembler for main, direct and delegated named assistants."""
     from .common_reports import create_report_tool
-    from .memory import create_memory_lookup_tool
+    from .memory import create_memory_read_tools
     from .resources import create_image_tool
     from .retrieval import create_retrieval_tools
     from .search import create_search_tool
@@ -225,7 +225,7 @@ def create_common_tools(settings, run, workspace, emit, *, image_input=False, fo
     result.extend([fetch_public_page, *create_calculation_tools(), create_report_tool(scoped, run, workspace, emit)])
     if not forgetting:
         store = Store(settings)
-        result.extend([*create_retrieval_tools(store), create_memory_lookup_tool(store, run["conversation_id"])])
+        result.extend([*create_retrieval_tools(store), *create_memory_read_tools(store, run["conversation_id"])])
     if image_input:
         result.append(create_image_tool(scoped, workspace, run["conversation_id"], allow_saved_resources=True))
     if run.get("search_provider") is not None:

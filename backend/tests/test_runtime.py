@@ -220,17 +220,28 @@ async def test_correction_between_memory_read_and_exposure_resets_next_context(t
     store = Store(settings)
     saved = store.add_memory("用户的代号是蓝莓灯塔")
     original_candidates = Store.memory_candidates
+    original_search = Store.search_memories
     corrected = False
 
     def racing_candidates(self, limit=200, offset=0):
         nonlocal corrected
         facts = original_candidates(self, limit, offset)
-        if not corrected and (limit == 25 if browse else limit == 200):
+        if not corrected and browse and limit == 25:
             corrected = True
             self.update_memory(saved["id"], "用户的代号是青山")
         return facts
 
     monkeypatch.setattr(Store, "memory_candidates", racing_candidates)
+
+    def racing_search(self, query, limit=25, offset=0):
+        nonlocal corrected
+        page = original_search(self, query, limit, offset)
+        if not corrected and not browse and page["items"]:
+            corrected = True
+            self.update_memory(saved["id"], "用户的代号是青山")
+        return page
+
+    monkeypatch.setattr(Store, "search_memories", racing_search)
     replies = []
     if browse:
         replies.append(AIMessage(content="", tool_calls=[{

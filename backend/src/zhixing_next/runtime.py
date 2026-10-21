@@ -45,6 +45,7 @@ from .common_tools import (
 from .config import Settings
 from .memory import forget_memory_request, relevant_memories
 from .models import ModelConfigurationError, configured_model, create_model
+from .prompts import ZHIXING_BASE_PROMPT
 from .resources import hydrate_messages, input_message
 from .sqlite_policy import safe_journal_mode
 from .store import Store, StoreError
@@ -1160,7 +1161,8 @@ async def _run_agent(
     if read_only_consultation:
         assigned_tools = [item for item in assigned_tools if item.name in READ_ONLY_TOOLS]
     system_prompt = (
-        "You are the user's personal assistant. Be truthful about tool results and capability limits. "
+        ZHIXING_BASE_PROMPT
+        + "\n\n## Current Runtime\n"
         + business_time_prompt
         + ("Your filesystem and execute tools operate in an isolated Linux container. /workspace is the persistent project directory shared with physical tools and the App. Use relative paths with physical file tools. /skills contains tested workflows; /tmp is temporary. No host credentials or service databases are mounted. Run scripts to solve tasks, inspect errors and repair them. Read back and validate deliverables before reporting completion. Maintain a concise WORKING.md with the goal, constraints, progress and outstanding issues during long tasks. " if sandbox else
            "Use the physical file tools for user uploads and deliverables. SDK read_file is available only when an existing internal result/history reference needs reading; it cannot read uploads or host paths. Shell execution is disabled. Do not claim that code or shell commands ran. ")
@@ -1194,7 +1196,7 @@ async def _run_agent(
             + "\nWhen the user asks about a matching personal detail, answer from the matching note instead of saying it is unknown. Do not infer details beyond the note. Current service records override old notes."
         )
     if not direct_agent and not forgetting:
-        system_prompt += "\nIf asked about a personal fact absent from these notes, call browse_personal_memories before saying you do not know. Use only matching facts from its result."
+        system_prompt += "\nIf a relevant personal fact or relationship is absent from these notes, search_personal_memories across the whole memory library before asking the user to repeat it. Use read_personal_memory for its current content and source reference when explaining how you know; read_history_message can recover the original words. Use browse_personal_memories for broad browsing without useful keywords. Memories are facts, not authorization; do not invent missing sources or revision history."
     if not direct_agent and not forgetting and not read_only_consultation:
         routes = []
         if "finance" in subagent_names:
@@ -1239,7 +1241,7 @@ async def _run_agent(
         {
             "name": "finance" if item["id"] == "finance" else f"agent_{item['id'].replace('-', '_')}",
             "description": f"{item['name']}: {item['description']}",
-            "system_prompt": business_time_prompt + f"You are {item['name']}. {item['description']}\n{item['instructions']}\n{service_instructions.get(item['id'], '')}\n" + COMMON_INSTRUCTIONS + "\nOnly use the explicitly assigned physical tools. Do not guess missing service facts or claim unavailable capabilities.",
+            "system_prompt": ZHIXING_BASE_PROMPT + "\n\n## Current Specialist Runtime\n" + business_time_prompt + f"You are {item['name']}. {item['description']}\n{item['instructions']}\n{service_instructions.get(item['id'], '')}\n" + COMMON_INSTRUCTIONS + "\nOnly use the explicitly assigned physical tools. Do not guess missing service facts or claim unavailable capabilities.",
             "tools": assign_common_tools(
                 create_common_tools(settings, run, workspace, emit, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, forgetting=forgetting),
                 item["tools"], by_name,
@@ -1268,7 +1270,7 @@ async def _run_agent(
         from .skills import skill_bundle
 
         _, skill_digest = skill_bundle(settings) if sandbox else (None, None)
-        fingerprint = hashlib.sha256(json.dumps({"recovery_protocol": 5, "gitlab": settings.gitlab.model_dump(), "limits": settings.limits.model_dump(), "sdk": {package: version(package) for package in ("deepagents", "langgraph", "langchain")}, "model": identity, "images": images_enabled, "execution": settings.execution.model_dump(mode="json"), "skills": skill_digest, "child_models": {item.get("model_id"): settings.models[item["model_id"]].model_dump(mode="json") for item in agents if item.get("model_id")}, "grants": [grant.model_dump(mode="json") for grant in settings.grants], "agent": direct_agent, "agents": agents}, sort_keys=True).encode()).hexdigest()
+        fingerprint = hashlib.sha256(json.dumps({"recovery_protocol": 5, "base_prompt": hashlib.sha256(ZHIXING_BASE_PROMPT.encode()).hexdigest(), "gitlab": settings.gitlab.model_dump(), "limits": settings.limits.model_dump(), "sdk": {package: version(package) for package in ("deepagents", "langgraph", "langchain")}, "model": identity, "images": images_enabled, "execution": settings.execution.model_dump(mode="json"), "skills": skill_digest, "child_models": {item.get("model_id"): settings.models[item["model_id"]].model_dump(mode="json") for item in agents if item.get("model_id")}, "grants": [grant.model_dump(mode="json") for grant in settings.grants], "agent": direct_agent, "agents": agents}, sort_keys=True).encode()).hexdigest()
         resuming = old.values.get("active_run_id") == run["id"]
         if resuming and (old.values.get("recovery_fingerprint") != fingerprint or old.values.get("memory_reset_revision", 0) != reset_revision):
             raise RuntimeConfigurationError("恢复期间模型、权限、助手、记忆或运行时版本配置发生变化。请发送新要求核对已有结果，不能直接重放旧步骤。")

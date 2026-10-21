@@ -47,7 +47,7 @@ READ_ONLY_TOOLS = frozenset({
     "list_directory", "read_text_file", "read_document", "fetch_public_page",
     "calculate", "date_info", "search_history", "read_history",
     "read_history_message", "find_resources", "read_saved_resource",
-    "browse_personal_memories", "view_image", "search_web",
+    "browse_personal_memories", "search_personal_memories", "read_personal_memory", "view_image", "search_web",
     "list_finance_observations", "get_finance_summary", "list_finance_transactions",
     "reconcile_finance_assets", "query_health_context", "query_life_events",
 })

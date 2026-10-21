@@ -51,6 +51,7 @@ async def test_remember_correct_forget_and_cross_conversation_retrieval(tmp_path
         {"op": "replace", "id": saved[0]["id"], "content": "用户的 Mac mini 内存为 24GB"}
     ))
     assert store.list_memories()["items"][0]["content"].endswith("24GB")
+    assert store.list_memories()["items"][0]["source_message_id"] == "message-2"
     assert store.memory_reset_revision(first) == 1
     assert store.memory_reset_revision(second) == 1
 
@@ -59,7 +60,9 @@ async def test_remember_correct_forget_and_cross_conversation_retrieval(tmp_path
         {"op": "forget", "id": saved[0]["id"]}
     ))
     assert store.list_memories()["items"] == []
-    assert store.memory_reset_revision(first) == 2
+    # The original source context was already reset by the correction and has
+    # not read the replacement; forgetting only invalidates current readers.
+    assert store.memory_reset_revision(first) == 1
     assert store.memory_reset_revision(second) == 2
     assert relevant_memories(store, "Mac mini 的内存？") == []
 
@@ -153,7 +156,7 @@ async def test_forget_does_not_reextract_from_retained_chat(tmp_path):
     assert await organize_run(settings, store, later, model_override=observer)
     request = json.loads(observer.ainvoke.call_args.args[0][-1].content)
     assert fact not in json.dumps(request, ensure_ascii=False)
-    assert request["recent_conversation"] == [{"role": "user", "content": "明天聊聊散步"}]
+    assert request["recent_conversation"] == [{"id": "later", "role": "user", "content": "明天聊聊散步"}]
     assert store.list_memories()["items"] == []
 
 
@@ -166,10 +169,11 @@ async def test_explicit_memory_request_can_reference_last_answer_and_applied_ste
     observer = SimpleNamespace(ainvoke=AsyncMock(return_value=AIMessage(content='{"actions":[]}')))
     assert await organize_run(settings, store, current, model_override=observer)
     request = json.loads(observer.ainvoke.call_args.args[0][-1].content)
-    assert request["recent_conversation"] == [
+    assert [{key: item[key] for key in ("role", "content")} for item in request["recent_conversation"]] == [
         {"role": "assistant", "content": "叫作青山计划。"},
         {"role": "user", "content": "记住这个"},
     ]
+    assert request["recent_conversation"][-1]["id"] == "remember"
 
     saved = store.add_memory("用户正在推进青山计划")
     store.submit_message(conversation, id="task", content="继续讨论项目")

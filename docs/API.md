@@ -27,7 +27,7 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 - `GET /v1/models`：返回 `{items,roles}`。每个模型只公开 `id,name,model,provider,protocol,ready,image_input,reasoning_levels,default_reasoning_effort,reasoning_kind,reasoning_labels`；`image_input` 是服务端对端点能力的声明，不是实时探测。不返回密钥、环境变量名或 Base URL。`roles` 为聊天、执行、记忆整理的当前默认模型 ID。
 - `PUT /v1/models/roles/{role} {model_id}`：`role` 为 `chat|task|memory`，保存角色默认模型。模型须已在服务端配置；未配置专用记忆模型时，整理使用当前聊天默认模型。
 - `GET /v1/memories?cursor=&limit=&query=`：返回个人语义记忆 `{items,next_cursor}`；每项含 `id,content,source_message_id,created_at,updated_at,seq`。`query` 最多 200 字，去除两端空白后按内容字面子串搜索全库，忽略 ASCII 大小写，`%` 和 `_` 不作通配符；先筛选再按原有序号升序分页，空白查询等同未筛选。只读当前记忆，不返回原始聊天或内部去重键。
-- `POST /v1/memories {content}`、`PATCH /v1/memories/{id} {content}`、`DELETE /v1/memories/{id}`：后端直接写入、纠正或忘记；内容最多 500 字，凭据类内容拒绝写入。纠正和遗忘会阻止旧的待整理、运行中或失败整理任务在稍后写回旧说法；之后的新运行仍可形成记忆。删除记忆不删除原会话或文件，旧任务隔离的边界见[记忆说明](MEMORY.md#纠正与遗忘)。
+- `POST /v1/memories {content}`、`PATCH /v1/memories/{id} {content}`、`DELETE /v1/memories/{id}`：后端直接写入、纠正或忘记；内容最多 500 字，凭据类内容拒绝写入。手动纠正会清除已不适用的聊天来源；自然语言整理纠正绑定本次已应用的用户来源。纠正和遗忘会阻止旧的待整理、运行中或失败整理任务在稍后写回旧说法；之后的新运行仍可形成记忆。删除记忆不删除原会话或文件，旧任务隔离的边界见[记忆说明](MEMORY.md#纠正与遗忘)。
 - `GET /v1/memories/status`：返回 `{pending,failed}` 整理运行数；`POST /v1/memories/retry` 将失败的整理重新排队，返回 `{retried}`。手机侧栏可以查看和忘记记忆，整理状态仍由后台处理。
 - `GET /v1/conversations/recent?limit=10`：按 `updated_at` 降序取最近活动会话，覆盖较早建立的话题；不是创建序号窗口。
 - `GET /v1/conversations?project_id=<id>`：在分页前按项目过滤，支持现有 `cursor`、`latest`、`before` 语义；无此项目返回 404。
@@ -203,6 +203,8 @@ POST 可提供稳定 `id`，同 ID 同内容重试不重复；相同来源经主
 
 代码在 `backend/src/zhixing_next`。config.py 负责配置，store.py 负责业务事务，api.py 负责 HTTP，
 worker.py 负责调度与生命周期，runtime.py/models.py/tools.py 负责实际智能体与工具调用。
+运行时提供 `search_personal_memories(query, offset=0)` 全库词法检索（每页 25 项与 `next_offset`）和 `read_personal_memory(memory_id)` 当前内容／来源读取；均为只读通用工具，遗忘运行中不开放，也不扩大指定来源研究助手的范围。HTTP 记忆列表的字面子串查询协议保持不变。
+
 memory.py 在成功运行后整理用户确认的持久事实；整理按运行顺序进行，增删改与处理标记在同一 SQLite 事务提交。运行时只带入少量相关记录，checkpoint 不充当长期记忆。
 
 配置由 `config.py` 提供 `Settings`、`ModelConfig`、`PathGrant` 和 `load_settings()`：
@@ -230,7 +232,7 @@ emit(type, data)、controls()、acknowledge(ids) 均为异步回调。取消可�
 模型 ID、思考档位和搜索服务 ID 在消息入队时写入运行记录，worker 按快照调用；LangGraph thread 以 conversation_id 标识，checkpoint 使用 data_dir 下独立 SQLite。worker 在运行开始时读取子智能体配置快照；主知行只委派已配置命名助手，主知行、直接子智能体和受委派助手复用同一通用工具装配：历史、个人记忆、资源库、当前附件、公开网页、计算、日期和报告交付；业务写工具仍按身份白名单提供。图片工具仍受模型 image_input 声明约束，搜索仅在本次选择服务时开放。搜索密钥只存服务端 SQLite，不进入消息、运行记录或 API 回执；联网结果是外部资料，回答应引用来源链接。
 通用文件和网页错误返回受控 `error={code,message,next_action,retryable}`；参数字段错误只给出脱敏字段位置，不回显原输入、服务路径或 URL 凭据。保存资源的文本窗口支持 `char_offset`，返回 `next_start/next_char_offset` 以继续超长单行。工具执行取舍见[工具调用体验](TOOL-HARNESS.md)。
 
-运行时发现原生 interrupt 后抛出 RunPaused，由 worker 保存等待状态并释放执行槽。恢复时复用同一 checkpoint 和步骤回执；模型/权限/助手/记忆重置/SDK 版本变化会拒绝旧恢复。旧版无恢复标记的运行仍保留 interrupted 行为，不宣称任意工具能自动安全续跑。
+运行时发现原生 interrupt 后抛出 RunPaused，由 worker 保存等待状态并释放执行槽。恢复时复用同一 checkpoint 和步骤回执；模型/权限/助手/记忆重置/SDK 版本或助手基底提示词变化会拒绝旧恢复。旧版无恢复标记的运行仍保留 interrupted 行为，不宣称任意工具能自动安全续跑。
 
 历史运行底座包含 `start_background_task`、`list_scheduled_tasks`、`schedule_task`、`set_schedule_enabled` 的实现；当前产品不向主知行提供这些创建／管理工具，旧计划在 v12 迁移中停用。它们不是手机远程通知接口。执行任务通过 DockerSandbox 接入 Deep Agents 的 execute/文件工具；`browser_action` 操作任务内 Chromium，`view_image` 查看实际图片，`publish_artifact` 校验并发布产物。主知行的 `copy_file` 在已授权文件目录间搬运最多 20 MiB 二进制文件。子智能体不自动获得 Shell、浏览器、调度或宿主目录挂载权限。
 

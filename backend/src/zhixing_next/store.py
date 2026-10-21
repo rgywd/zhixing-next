@@ -11,6 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config import Settings
+from .memory_search import memory_terms
 from .sqlite_policy import safe_journal_mode
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
@@ -290,6 +291,34 @@ class Store:
                 (limit, offset),
             ).fetchall()]
 
+    def search_memories(self, query, limit=25, offset=0):
+        terms = memory_terms(query)
+        if not terms:
+            return {"items": [], "next_offset": None}
+        score = " + ".join("(instr(lower(content),?)>0)" for _ in terms)
+        with self._connection() as db:
+            rows = db.execute(
+                f"SELECT id,content,source_message_id,created_at,updated_at FROM "
+                f"(SELECT *,({score}) AS score FROM memories) WHERE score>0 "
+                "ORDER BY score DESC,updated_at DESC,id LIMIT ? OFFSET ?",
+                (*terms, limit + 1, offset),
+            ).fetchall()
+        return {
+            "items": [dict(row) for row in rows[:limit]],
+            "next_offset": offset + limit if len(rows) > limit else None,
+        }
+
+    def get_memory(self, memory_id):
+        with self._connection() as db:
+            memory = _record(self._require(db, "memories", memory_id))
+            source = db.execute(
+                "SELECT id AS message_id,conversation_id,role,created_at FROM messages "
+                "WHERE id=? AND role='user' AND status='applied' "
+                "AND json_extract(request_json,'$.source_run_id') IS NULL",
+                (memory["source_message_id"],),
+            ).fetchone()
+            return {**memory, "source": dict(source) if source else None}
+
     def memory_status(self):
         with self._connection() as db:
             rows = db.execute(
@@ -387,7 +416,7 @@ class Store:
             targets = self._memory_context_targets(db, memory_id)
             try:
                 db.execute(
-                    "UPDATE memories SET content=?,content_key=?,updated_at=? WHERE id=?",
+                    "UPDATE memories SET content=?,content_key=?,source_message_id=NULL,updated_at=? WHERE id=?",
                     (content, content.casefold(), timestamp(), memory_id),
                 )
             except sqlite3.IntegrityError as exc:
@@ -420,11 +449,12 @@ class Store:
             ).fetchone()
             return dict(row) if row else None
 
-    def memory_context(self, run_id, *, include_previous_assistant=False):
+    def memory_context(self, run_id, *, include_previous_assistant=False, include_source_ids=False):
+        fields = "id,role,content" if include_source_ids else "role,content"
         with self._connection() as db:
             run = self._require(db, "runs", run_id)
             rows = db.execute(
-                "SELECT role,content FROM messages WHERE run_id=? AND role='user' "
+                f"SELECT {fields} FROM messages WHERE run_id=? AND role='user' "
                 "AND json_extract(request_json,'$.source_run_id') IS NULL "
                 "AND status='applied' ORDER BY seq",
                 (run_id,),
@@ -432,7 +462,7 @@ class Store:
             context = [dict(row) for row in rows]
             if include_previous_assistant:
                 previous = db.execute(
-                    "SELECT role,content FROM messages WHERE conversation_id=? AND status='applied' "
+                    f"SELECT {fields} FROM messages WHERE conversation_id=? AND status='applied' "
                     "AND seq<(SELECT seq FROM messages WHERE id=?) ORDER BY seq DESC LIMIT 1",
                     (run["conversation_id"], run["message_id"]),
                 ).fetchone()
@@ -447,6 +477,15 @@ class Store:
                 return False
             for action in actions:
                 operation = action["op"]
+                source_id = action.get("source_message_id") or run["message_id"]
+                if not isinstance(source_id, str):
+                    continue
+                if operation in {"add", "replace"} and not db.execute(
+                    "SELECT 1 FROM messages WHERE id=? AND run_id=? AND role='user' "
+                    "AND status='applied' AND json_extract(request_json,'$.source_run_id') IS NULL",
+                    (source_id, run_id),
+                ).fetchone():
+                    continue
                 try:
                     content = _memory_content(action.get("content")) if operation in {"add", "replace"} else ""
                 except StoreError:
@@ -454,7 +493,7 @@ class Store:
                 if operation == "add":
                     db.execute(
                         "INSERT OR IGNORE INTO memories VALUES(?,?,?,?,?,?)",
-                        (str(uuid4()), content, content.casefold(), run["message_id"], timestamp(), timestamp()),
+                        (str(uuid4()), content, content.casefold(), source_id, timestamp(), timestamp()),
                     )
                 elif operation == "replace":
                     existing = db.execute("SELECT content FROM memories WHERE id=?", (action["id"],)).fetchone()
@@ -464,9 +503,9 @@ class Store:
                         )
                         try:
                             changed = db.execute(
-                                "UPDATE memories SET content=?,content_key=?,updated_at=? "
+                                "UPDATE memories SET content=?,content_key=?,source_message_id=?,updated_at=? "
                                 "WHERE id=? AND updated_at=?",
-                                (content, content.casefold(), timestamp(), action["id"], action["expected_updated_at"]),
+                                (content, content.casefold(), source_id, timestamp(), action["id"], action["expected_updated_at"]),
                             ).rowcount
                             if changed:
                                 self._reset_memory_contexts(db, action["id"], targets)
