@@ -20,8 +20,8 @@ async def test_product_base_reaches_real_graph_with_current_capability_limits(tm
     assert ZHIXING_BASE_PROMPT in system
     assert '知行 (Zhixing)' in system and '说话温和，称呼我小林。' in system
     assert 'Shell execution is disabled' in system and 'Web search is unavailable' in system
-    assert 'separate pass applies it after your reply' in system
-    assert 'The service reports actual failures' in system
+    assert 'A memory lookup is not a write receipt' in system
+    assert '对记忆部分只简短确认意图' in system
     assert 'Do not list unrelated retrieved memories' in system
     if direct:
         assert f"You are the dedicated {run['agent']['name']} agent" in system

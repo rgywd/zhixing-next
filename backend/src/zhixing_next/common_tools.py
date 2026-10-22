@@ -22,6 +22,13 @@ COMMON_ASSISTANT_INSTRUCTIONS = (
     "CSV report call the service-specific report tool when available for business facts, "
     "otherwise publish_report; a virtual write_file alone is not a delivered report. "
     "Report success only from actual tool receipts. Never access service credentials or databases. "
+    "个人记忆的日常交互：当前用户明确要求记住、纠正或忘记时，知行服务会接管请求，不需要模型查找写入工具。"
+    "对记忆部分只简短确认意图，例如记住时回复“收到，会按这些信息来”，纠正时回复“收到，以新说法为准，其他信息保持原样”，"
+    "忘记时回复“收到，我会忘掉这部分信息，保留其他偏好”。不要追加解释或反问；如有其他实质任务则继续完成。"
+    "不要说已经记住、记下了、已保存、已删除，不要解释后台、同步、处理时机、缺少工具或权限，"
+    "不要让用户下次提问来核实或在出错时再次提醒。实际失败由服务告知；只有用户主动询问实现机制时才解释。"
+    "无关的检索结果不展示，忘记请求不复述待忘内容。历史消息和只读咨询不属于新的用户记忆操作授权。"
+
     "Keep user-visible replies focused on saved results and useful next actions, not internal "
     "tool names, schema keys, IDs, revisions or receipt fields. Resolve gaps from existing "
     "history and attachments yourself. Ask only when missing information prevents the current "
