@@ -12,6 +12,7 @@ from langchain_core.tools import tool
 from pydantic import Field
 
 from .config import Settings
+from .memory_recall import memory_query_expansion
 from .models import create_model
 from .prompts import MEMORY_ORGANIZER_PROMPT
 from .store import Store
@@ -49,8 +50,8 @@ def memory_dialogue_hint(prompt: str) -> str | None:
     )
 
 
-def memory_search_missed(messages) -> bool:
-    """Only a real, successful lookup in this user turn can establish a miss."""
+def memory_search_result(messages) -> dict | None:
+    """Only inspect a genuine successful lookup in the current user turn."""
     for message in reversed(messages):
         if isinstance(message, HumanMessage):
             break
@@ -59,9 +60,24 @@ def memory_search_missed(messages) -> bool:
         try:
             result = json.loads(message.content)
         except (ValueError, TypeError):
-            return False
-        return isinstance(result, dict) and result.get("items") == []
-    return False
+            return None
+        return result if isinstance(result, dict) else None
+    return None
+
+
+def memory_search_missed(messages) -> bool:
+    result = memory_search_result(messages)
+    return result is not None and result.get("items") == []
+
+
+def memory_search_resolution_hint(messages) -> str | None:
+    result = memory_search_result(messages)
+    context = result.get("recall_context", {}) if result else {}
+    if context.get("ambiguous_aliases"):
+        return "本轮实际记忆搜索发现称谓有歧义。不要按最近记录选人，也不要说没有记忆或让用户重述已保存的事实；只简短问用户指哪一位。"
+    if context.get("blocked_aliases"):
+        return "本轮实际记忆搜索中的称谓只有旧关系、否定或冲突的对应。不要当成当前关系，也不要从旧身份猜测当前人物；只在需要时简短确认指谁。"
+    return None
 
 
 def explicit_memory_request(prompt: str) -> bool:
@@ -109,10 +125,14 @@ def create_memory_read_tools(store: Store, conversation_id: str):
         query: Annotated[str, Field(min_length=1, max_length=200)],
         offset: Annotated[int, Field(ge=0)] = 0,
     ) -> dict:
-        """Search all saved personal memories by relevant names or keywords, including older facts and relationships. Returns up to 25 matches with memory IDs; page only with next_offset. This is lexical search, not semantic or full chat history search. Empty matches mean no matching saved fact was found: preserve that uncertainty, do not list unrelated memories or browse the whole library to fill the gap."""
+        """Search saved personal facts by names, explicit relationship aliases or keywords. Returns up to 25 matches; page only with next_offset. recall_context contains supporting facts and ambiguous or obsolete aliases: do not pick a person from an ambiguous title or treat a former relationship as current. Empty scoped matches with ambiguous_aliases mean the person is unspecified, not that memory is absent; ask which person, not for saved facts again. This is bounded lexical/explicit-alias search, not semantic or chat-history search. Empty matches do not justify unrelated browsing."""
         page = store.search_memories(query, offset=offset)
+        dependencies = page.pop("_recall_dependencies", [])
         store.record_memory_exposure(
-            conversation_id, {item["id"]: item["updated_at"] for item in page["items"]}
+            conversation_id, memory_exposure_versions([
+                *page["items"], *page.get("recall_context", {}).get("facts", []),
+                *dependencies,
+            ]),
         )
         return page
 
@@ -132,6 +152,87 @@ def relevant_memories(store: Store, prompt: str, limit: int = 5) -> list[dict[st
         return matches
     # A broad personal question has no useful lexical terms; only carry a few recent notes.
     return store.memory_candidates(min(limit, 3)) if _BROAD_PERSONAL.fullmatch(prompt) else []
+
+
+def memory_exposure_versions(facts):
+    return {item["id"]: item["updated_at"] for item in facts}
+
+
+def personal_memory_context(store: Store, prompt: str) -> dict:
+    """A bounded reading view, with dependencies included for later invalidation."""
+    core = store.core_memory_candidates()
+    page = store.search_memories(prompt, limit=5)
+    related = page["items"]
+    if not related and _BROAD_PERSONAL.fullmatch(prompt):
+        related = store.memory_candidates(3)
+    context = page.get("recall_context", {})
+    # Core preferences have their own small budget; do not print them twice.
+    core_ids = {item["id"] for item in core}
+    related = [item for item in related if item["id"] not in core_ids]
+    shown_ids = core_ids | {item["id"] for item in related}
+    support = [item for item in context.get("facts", []) if item["id"] not in shown_ids]
+    return {
+        "core": core, "related": related, "support": support,
+        "ambiguous_aliases": context.get("ambiguous_aliases", []),
+        "blocked_aliases": context.get("blocked_aliases", []),
+        "unresolved_pronoun": context.get("unresolved_pronoun", False),
+        "dependencies": page.get("_recall_dependencies", []),
+    }
+
+
+_PERSONAL_TOPIC = re.compile(r"喜欢|爱好|口味|饮食|忌口|兴趣|偏好|习惯|生日|名字|送|推荐|吃什么|喝什么")
+_SINGULAR_PERSON = re.compile(r"她(?!们)|(?<![其吉维利排])他(?!们|山|乡|国|日)")
+_MIXED_PERSON_REQUEST = re.compile(
+    r"顺便|同时|另外|然后|以及|还有|记账|记录(?:收支|餐费|体重|饮食)|预算|生成|制作|导出"
+    r"|创建|删除.{0,16}(?:文件|报告)|发送|发邮件|\b(?:and|also|then)\b", re.I,
+)
+PERSONAL_RECALL_TOOLS = {
+    "browse_personal_memories", "search_personal_memories", "read_personal_memory",
+    "search_history", "read_history", "read_history_message", "send_conversation_message",
+    "read_conversation_reply", "wait_conversation_replies",
+}
+
+
+def personal_recall_guard(store: Store, run_id: str) -> dict | None:
+    """Ground a personal preference question in this chat's genuine user inputs.
+
+    Recompute after applied Steer; assistant guesses, injected memories and other
+    conversations cannot establish who a bare pronoun refers to.
+    """
+    current = store.memory_context(run_id)
+    prompt = "\n".join(item["content"] for item in current)
+    if not prompt or not _PERSONAL_TOPIC.search(prompt):
+        return None
+    facts = store.memory_recall_facts()
+    expansion = memory_query_expansion(prompt, [*facts, {
+        "id": "current-user-input", "content": prompt, "updated_at": "",
+    }])
+    multiple_singular = len(expansion.resolved_people) > 1 and bool(_SINGULAR_PERSON.search(prompt))
+    if expansion.resolved_people and not multiple_singular:
+        return None
+    unresolved = expansion.unresolved_pronoun
+    unknown_title = expansion.person_scoped and not expansion.scope_record_ids
+    if not (unresolved or multiple_singular or unknown_title or expansion.ambiguous_aliases or expansion.blocked_aliases):
+        return None
+    if unresolved:
+        for previous in store.personal_reference_messages(run_id):
+            if previous["run_id"] == run_id:
+                continue
+            reference = memory_query_expansion(previous["content"], facts)
+            if reference.ambiguous_aliases or reference.blocked_aliases or len(reference.resolved_people) > 1:
+                break
+            if len(reference.resolved_people) == 1:
+                return {
+                    "mode": "anchor", "name": reference.resolved_people[0],
+                    "terms": reference.scope_terms, "memory_ids": reference.scope_record_ids,
+                    "dependencies": reference.dependency_records,
+                }
+    return {"mode": "mixed" if _MIXED_PERSON_REQUEST.search(prompt) else "clarify"}
+
+
+def anchored_memory_query(store: Store, query: str, name: str) -> bool:
+    resolution = memory_query_expansion(query, store.memory_recall_facts())
+    return resolution.resolved_people == [name] and not resolution.ambiguous_aliases and not resolution.blocked_aliases
 
 
 def _response_text(response: Any) -> str:
@@ -189,8 +290,10 @@ async def organize_run(
         return store.apply_memory_actions(run["id"], [])
     # Search the whole library for conflicts before merging with recent context.
     # Old facts should remain correctable even after hundreds of newer memories.
+    matching = store.search_memories(user_input, limit=100)
     existing = list({item["id"]: item for item in [
-        *store.memory_candidates(100), *store.search_memories(user_input, limit=100)["items"],
+        *store.core_memory_candidates(), *store.memory_candidates(100),
+        *matching["items"], *matching.get("recall_context", {}).get("facts", []),
     ]}.values())
     history = store.memory_context(
         run["id"], include_previous_assistant=explicit_memory_request(user_input), include_source_ids=True,
@@ -209,6 +312,10 @@ async def organize_run(
         "existing_memories": [
             {"id": item["id"], "content": item["content"]} for item in existing
         ],
+        "relationship_resolution": {
+            key: matching.get("recall_context", {}).get(key, [])
+            for key in ("ambiguous_aliases", "blocked_aliases")
+        },
     }
     response = await model.ainvoke([
         SystemMessage(content=MEMORY_ORGANIZER_PROMPT),
