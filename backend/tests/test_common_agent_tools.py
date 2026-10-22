@@ -136,6 +136,9 @@ async def test_delegated_agents_share_history_and_publish_into_root_conversation
     artifact = next(item["data"] for item in events if item["type"] == "artifact")
     assert artifact["resource"]["conversation_id"] == run["conversation_id"]
     assert "16500" in resource_bytes(settings, artifact["resource"]).decode()
+    assert any("## Current Specialist Runtime" in str(message.content)
+               and "知行 (Zhixing)" in str(message.content)
+               for messages in model.seen for message in messages if message.type == "system")
     assert any("每月结余目标" in str(message.content) for messages in model.seen for message in messages if isinstance(message, ToolMessage))
 
 
