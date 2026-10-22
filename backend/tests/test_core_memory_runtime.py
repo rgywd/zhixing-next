@@ -77,6 +77,11 @@ async def test_preference_projection_preserves_images_and_targets_accepted_real_
     assert await middleware.preference_messages(delegated) is delegated
     with store._connection() as db:
         assert db.execute("SELECT content,status FROM messages WHERE id='steer'").fetchone()[:] == ("这次请详细解释", "accepted")
+    for metadata in ({"origin": "agent_message"}, {"source_run_id": "external"}):
+        with store._connection(write=True) as db:
+            db.execute("UPDATE messages SET request_json=? WHERE id='steer'", (json.dumps(metadata),))
+        internal = [original]
+        assert await middleware.preference_messages(internal) is internal
 
 
 def test_role_recall_tracks_the_relationship_even_when_result_page_only_has_other_fact(tmp_path):

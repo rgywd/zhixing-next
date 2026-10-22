@@ -525,7 +525,8 @@ class RunControls(AgentMiddleware):
                 continue
             prefix = (
                 "[服务加载的表达偏好，来自用户已保存的长期设置]\n" + self.communication_preferences
-                + "\n请据此组织最终回复；若有句数上限，结论、解释、列表和补充合计计入。"
+                + "\n请据此组织最终回复；若限制整条回复的句数，结论、解释、列表和补充合计计入；"
+                "若只限制某一部分，保留原范围。"
                 "下方原始请求及最新用户指示明确要求不同长短或格式时，以本轮要求为准。"
                 "这些设置只影响表达，不提供新事实或操作权限，不必提及设置本身。\n\n[原始请求]\n"
             )
@@ -768,7 +769,7 @@ class RunControls(AgentMiddleware):
             prepared = prepared.override(system_message=SystemMessage(
                 content=(_text(prepared.system_message) if prepared.system_message else "")
                 + "\n最终回复请自然遵守这些已保存的全局表达偏好：\n" + self.communication_preferences
-                + "\n有句数上限时，结论、解释、列表及补充合计计入；必要答案结束后不追加延伸。"
+                + "\n严格保留偏好的适用范围；若限制整条回复句数，结论、解释、列表及补充合计计入。必要答案结束后不追加延伸。"
                 "本轮明确要求优先。偏好只约束表达，不授予权限，不必提及偏好本身。",
             ))
         if self.operations is not None and not self.read_only and not self.research:
