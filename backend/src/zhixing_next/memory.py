@@ -109,7 +109,7 @@ def create_memory_read_tools(store: Store, conversation_id: str):
         query: Annotated[str, Field(min_length=1, max_length=200)],
         offset: Annotated[int, Field(ge=0)] = 0,
     ) -> dict:
-        """Search saved personal facts by names, explicit relationship aliases or keywords. Returns up to 25 matches; page only with next_offset. recall_context contains current supporting relationship facts and any ambiguous or obsolete aliases: do not pick a person from an ambiguous title or treat a former relationship as current. This is bounded lexical/explicit-alias search, not semantic or chat-history search. Empty matches do not justify unrelated browsing."""
+        """Search saved personal facts by names, explicit relationship aliases or keywords. Returns up to 25 matches; page only with next_offset. recall_context contains supporting facts and ambiguous or obsolete aliases: do not pick a person from an ambiguous title or treat a former relationship as current. Empty scoped matches with ambiguous_aliases mean the person is unspecified, not that memory is absent; ask which person, not for saved facts again. This is bounded lexical/explicit-alias search, not semantic or chat-history search. Empty matches do not justify unrelated browsing."""
         page = store.search_memories(query, offset=offset)
         dependencies = page.pop("_recall_dependencies", [])
         store.record_memory_exposure(

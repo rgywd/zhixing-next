@@ -146,6 +146,18 @@ def test_pronoun_alone_does_not_inject_any_persons_private_facts(tmp_path, query
     assert not context["ambiguous_aliases"]
 
 
+@pytest.mark.parametrize("query", ["我那个朋友喜欢什么？", "我的那位同事喜欢什么？"])
+def test_qualified_ambiguous_titles_do_not_fall_back_to_generic_likes(tmp_path, query):
+    _, store = setup(tmp_path)
+    store.add_memory("阿岚是用户的朋友，喜欢咖啡")
+    store.add_memory("小周是用户的朋友，喜欢抹茶")
+    store.add_memory("阿岚是用户的同事")
+    store.add_memory("小周是用户的同事")
+    context = personal_memory_context(store, query)
+    assert context["ambiguous_aliases"]
+    assert context["related"] == [] and context["support"] == []
+
+
 @pytest.mark.parametrize("query", ["其他", "吉他", "维他命", "利他", "排他", "他山之石"])
 def test_nonperson_words_do_not_become_pronoun_queries(tmp_path, query):
     _, store = setup(tmp_path)

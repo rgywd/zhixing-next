@@ -243,7 +243,7 @@ def _query_roles(query: str) -> list[tuple[str, str]]:
     result = []
     for match in _QUERY_ROLE.finditer(query):
         before, after = query[:match.start()], query[match.end():]
-        explicit = re.search(r"(?:我|用户|咱)(?:的)?$", before)
+        explicit = re.search(r"(?:我|用户|咱)(?:的)?(?:(?:这|那|某|一)(?:位|个))?$", before)
         # Another person's possessive ('林岚的对象') never means the user.
         unqualified = not before.strip() or not before[-1:].isalnum()
         if not (explicit or unqualified):

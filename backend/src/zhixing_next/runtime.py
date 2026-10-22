@@ -1240,7 +1240,8 @@ async def _run_agent(
             "\nThe current memory library has multiple people for these titles or aliases: "
             + ", ".join(memory_context["ambiguous_aliases"])
             + ". Do not choose or merge people by recency or guess which preferences belong to the intended person. "
-            "Use an explicit name in the current request when supplied; otherwise ask only the short clarification needed for the action."
+            "Ambiguity is not missing memory: do not say no records exist or ask the user to repeat saved facts. "
+            "Use an explicit name in the current request when supplied; otherwise ask only which person they mean."
         )
     if memory_context.get("blocked_aliases"):
         memory_prompt += (
