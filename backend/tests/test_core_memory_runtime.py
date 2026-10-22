@@ -133,7 +133,9 @@ def test_ambiguous_role_decision_tracks_candidates_without_disclosing_private_pr
     store.update_memory(first["id"], "小林是用户的前同事")
 
 
-@pytest.mark.parametrize("query", ["她喜欢什么？", "今晚跟她吃什么？", "他有什么爱好？"])
+@pytest.mark.parametrize("query", [
+    "她喜欢什么？", "今晚跟她吃什么？", "他有什么爱好？", "告诉我她喜欢什么？", "你知道他喜欢什么吗？",
+])
 def test_pronoun_alone_does_not_inject_any_persons_private_facts(tmp_path, query):
     _, store = setup(tmp_path)
     store.add_memory("阿岚是用户的伴侣")
@@ -142,6 +144,13 @@ def test_pronoun_alone_does_not_inject_any_persons_private_facts(tmp_path, query
     context = personal_memory_context(store, query)
     assert context["related"] == [] and context["support"] == []
     assert not context["ambiguous_aliases"]
+
+
+@pytest.mark.parametrize("query", ["其他", "吉他", "维他命", "利他", "排他", "他山之石"])
+def test_nonperson_words_do_not_become_pronoun_queries(tmp_path, query):
+    _, store = setup(tmp_path)
+    saved = store.add_memory(f"用户想了解{query}")
+    assert [item["id"] for item in store.search_memories(query)["items"]] == [saved["id"]]
 
 
 async def test_organizer_can_correct_old_person_via_title_and_forget_without_resurrection(tmp_path):

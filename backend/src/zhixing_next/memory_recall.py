@@ -154,7 +154,7 @@ _QUERY_NEGATIVE = re.compile(
     rf"不再是|并不是|不是|并非|曾经|以前|过去|前(?:{_ROLE_PATTERN})|{_EX_ROLE_PATTERN}"
 )
 _QUERY_ROLE = re.compile(_ROLE_PATTERN)
-_PERSON_PRONOUN = re.compile(r"(?:^|[，。！？\s]|和|跟|给|替|帮|与|关于)(?:她|他)(?:们)?")
+_PERSON_PRONOUN = re.compile(r"她|(?<![其吉维利排])他(?!山|乡|国|日)")
 _ROLE_FACT = re.compile(
     rf"^\s*(?:用户|我)(?:的)?(?P<role>{_ROLE_PATTERN})(?:的)?"
     r"(?P<predicate>喜欢|不喜欢|偏好|不吃|不能吃|不怎么吃|讨厌|爱好|生日|身高|体重"
