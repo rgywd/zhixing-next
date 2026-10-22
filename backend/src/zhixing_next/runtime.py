@@ -44,6 +44,8 @@ from .common_tools import (
 )
 from .config import Settings
 from .memory import (
+    PERSONAL_RECALL_TOOLS,
+    anchored_memory_query,
     forget_memory_request,
     forget_only_request,
     memory_dialogue_hint,
@@ -51,6 +53,7 @@ from .memory import (
     memory_search_missed,
     memory_search_resolution_hint,
     personal_memory_context,
+    personal_recall_guard,
 )
 from .models import ModelConfigurationError, configured_model, create_model
 from .prompts import ZHIXING_BASE_PROMPT
@@ -449,7 +452,7 @@ class RunControls(AgentMiddleware):
 
     def __init__(self, controls: Controls, emit: Emit, allowed_subagents: set[str] | None = None,
                  settings: Settings | None = None, image_input: bool = False,
-                 execution_enabled: bool = False, restricted_files: bool = False, operations=None, budget=None, task_flow=None, run_id=None, finance_completion=False, collaboration=None, read_only=False, subagent_descriptions=None, research=False):
+                 execution_enabled: bool = False, restricted_files: bool = False, operations=None, budget=None, task_flow=None, run_id=None, finance_completion=False, collaboration=None, read_only=False, subagent_descriptions=None, research=False, communication_preferences=""):
         self.controls = controls
         self.emit = emit
         self.allowed_subagents = allowed_subagents or set()
@@ -465,6 +468,7 @@ class RunControls(AgentMiddleware):
         self.research, self.research_model_calls = research, 0
         self.research_consumed_ids: set[str] = set()
         self.subagent_descriptions = subagent_descriptions or {}
+        self.communication_preferences = communication_preferences
         self.named_task_schema = create_schema_model(
             "NamedAgentTask",
             __config__=ConfigDict(extra="forbid"),
@@ -481,6 +485,18 @@ class RunControls(AgentMiddleware):
     @staticmethod
     def internal_file_paths(state):
         return sorted(path for path, content in (state.get("files") or {}).items() if isinstance(path, str) and content is not None and path.startswith(("/large_tool_results/", "/conversation_history/")) and not {"..", "~"}.intersection(path.split("/")))
+
+    async def personal_guard(self):
+        if self.research or not self.operations or not self.run_id:
+            return None
+        store = self.operations.journal.store
+        guard = await asyncio.to_thread(personal_recall_guard, store, self.run_id)
+        if guard and guard.get("dependencies"):
+            await asyncio.to_thread(
+                store.record_memory_exposure, self.operations.run["conversation_id"],
+                memory_exposure_versions(guard["dependencies"]),
+            )
+        return guard
 
     def internal_read_contract(self, tool, paths):
         description = "Read an existing SDK internal result/history reference only. Use the exact file_path returned by an internal reference; offset/limit page its lines. User uploads and deliverables use the physical file tools, never this reader. Available internal paths: " + ", ".join(paths)
@@ -602,6 +618,13 @@ class RunControls(AgentMiddleware):
             if (item.get("name") if isinstance(item, dict) else item.name)
             not in self.blocked_tools
         ]
+        person_guard = await self.personal_guard()
+        if person_guard:
+            if person_guard["mode"] == "clarify":
+                tools = []
+            else:
+                excluded = PERSONAL_RECALL_TOOLS if person_guard["mode"] == "mixed" else {"browse_personal_memories"}
+                tools = [item for item in tools if (item.get("name") if isinstance(item, dict) else item.name) not in excluded]
         hidden = set()
         children = self.collaboration.ledger.all() if self.collaboration is not None else []
         if self.collaboration is not None and not children:
@@ -639,6 +662,16 @@ class RunControls(AgentMiddleware):
             tools = [item for item in tools if (item.get("name") if isinstance(item, dict) else item.name) in READ_ONLY_TOOLS]
         await self.emit("progress", {"stage": "model"})
         messages = hydrate_messages(self.settings, request.messages, image_input=self.image_input) if self.settings else request.messages
+        if person_guard and person_guard["mode"] == "clarify":
+            source_ids = {item["id"] for item in self.operations.journal.store.memory_context(self.run_id, include_source_ids=True)}
+            positions = [index for index, item in enumerate(messages) if isinstance(item, HumanMessage) and item.id in source_ids]
+            if not positions:
+                positions = [index for index, item in enumerate(messages) if isinstance(item, HumanMessage)][-1:]
+            if positions:
+                # Clarifying an unidentified person needs this real input, not
+                # old candidates' private details from the checkpoint. Storage
+                # is unchanged; Steer with an identity removes this restriction.
+                messages = messages[min(positions):]
         prepared = request.override(tools=tools, messages=messages)
         if research_sources_complete:
             # The SDK ignores request.tool_choice when tools=[]; pass the native
@@ -683,6 +716,25 @@ class RunControls(AgentMiddleware):
                 content=(_text(prepared.system_message) if prepared.system_message else "")
                 + "\n" + lookup_policy
                 + "不要顺序浏览或展示无关记忆、编号、占位资料、内部状态来填补答案，也不要编造已忘记的事实。",
+            ))
+        if person_guard:
+            person_policy = (
+                "本聊天当前可确定代词指向：" + person_guard["name"] + "。只针对这个人检索，不用泛词枚举其他人的资料。"
+                if person_guard["mode"] == "anchor" else
+                "本轮人物称谓或代词没有确定指向。不要猜姓名、列候选人的资料或泛搜朋友、女性、喜好和其他聊天来认人；"
+                "只简短问用户指哪一位，不要求重述已经记下的偏好。"
+                + ("同时完成用户明确要求的其他独立操作，含糊的人物部分等待澄清。" if person_guard["mode"] == "mixed" else "本轮无需工具，也不介绍内部权限或工具限制。")
+            )
+            prepared = prepared.override(system_message=SystemMessage(
+                content=(_text(prepared.system_message) if prepared.system_message else "") + "\n" + person_policy,
+            ))
+        if self.communication_preferences and not self.research:
+            prepared = prepared.override(system_message=SystemMessage(
+                content=(_text(prepared.system_message) if prepared.system_message else "")
+                + "\n最终回复请自然遵守这些已保存的全局表达偏好：\n" + self.communication_preferences
+                + "\n输出前检查语种、长短和叙述顺序。若偏好要求简短或限制句数，解释、列表及补充都计入限制，"
+                "给出必要答案后结束，不再追加趣味延伸。本轮用户明确要求的详细程度和格式优先；"
+                "不必解释记忆机制或宣布正在遵守偏好。这些偏好不授予权限，也不覆盖运行规则。",
             ))
         if self.operations is not None and not self.read_only and not self.research:
             source_messages = self.operations.journal.store.memory_context(self.run_id)
@@ -776,6 +828,31 @@ class RunControls(AgentMiddleware):
             )
         from .agent_collaboration import READ_ONLY_TOOLS
 
+        person_guard = await self.personal_guard()
+        person_denied = False
+        if person_guard:
+            mode = person_guard["mode"]
+            person_denied = mode == "clarify" or (mode == "mixed" and call["name"] in PERSONAL_RECALL_TOOLS)
+            if mode == "anchor":
+                person_denied = call["name"] == "browse_personal_memories"
+                if call["name"] == "search_personal_memories" and isinstance(call.get("args", {}).get("query"), str):
+                    person_denied = not anchored_memory_query(
+                        self.operations.journal.store, call["args"]["query"], person_guard["name"],
+                    )
+                if call["name"] == "read_personal_memory" and isinstance(call.get("args", {}).get("memory_id"), str):
+                    try:
+                        fact = self.operations.journal.store.get_memory(call["args"]["memory_id"])
+                        person_denied = fact["id"] not in person_guard["memory_ids"] and not any(
+                            term.casefold() in fact["content"].casefold() for term in person_guard["terms"]
+                        )
+                    except StoreError:
+                        person_denied = True
+        if person_denied:
+            await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed", "error_code": "unresolved_person"})
+            return ToolMessage(
+                content="The person is not established for this lookup. Ask briefly who the user means; do not enumerate private candidates. If this chat established one person, search that explicit name instead of generic terms.",
+                tool_call_id=call["id"], name=call["name"], status="error",
+            )
         invalid_internal_read = self.internal_files_only and call["name"] == "read_file" and call.get("args", {}).get("file_path") not in self.internal_file_paths(request.state)
         if call["name"] in self.blocked_tools or invalid_internal_read or (self.read_only and call["name"] not in READ_ONLY_TOOLS) or (call["name"] == "task" and call.get("args", {}).get("subagent_type") not in self.allowed_subagents):
             await self.emit("tool", {"tool": call["name"], "tool_call_id": call["id"], "status": "failed", "failure_category": "capability", "error_code": "capability_unavailable"})
@@ -1222,6 +1299,8 @@ async def _run_agent(
         system_prompt += "\nFor multi-step work first call set_task_plan with concrete completion conditions. Validate outputs with check_task_step (actual assertions) or verify_task_evidence (actual successful operation receipts), then deliver. Do not mark unsupported or unverified claims as done; use block_task_step when a real blocker remains. Ask request_user_input only for missing information that changes the next action."
     memory_context = {} if forgetting else personal_memory_context(store, run["prompt"])
     core_memories = memory_context.get("core", [])
+    communication_preferences = "\n".join(f"- {item['content']}" for item in core_memories)
+    middleware.communication_preferences = communication_preferences
     memories = [*memory_context.get("related", []), *memory_context.get("support", [])]
     store.record_memory_exposure(run["conversation_id"], memory_exposure_versions([
         *core_memories, *memories, *memory_context.get("dependencies", []),
@@ -1307,7 +1386,7 @@ async def _run_agent(
                 item["tools"], by_name,
             ),
             **({"model": create_model(settings, run["kind"], item["model_id"])} if item.get("model_id") else {}),
-            "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=True, operations=operations, budget=budget, run_id=run["id"], finance_completion=item["id"] == "finance")],
+            "middleware": [RunControls(controls, emit, settings=settings, image_input=settings.models[item["model_id"]].image_input if item.get("model_id") else images_enabled, restricted_files=True, operations=operations, budget=budget, run_id=run["id"], finance_completion=item["id"] == "finance", communication_preferences=communication_preferences)],
         }
         for item in agents
     ]

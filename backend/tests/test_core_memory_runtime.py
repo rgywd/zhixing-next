@@ -1,12 +1,17 @@
 import json
 
 import pytest
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from test_memory import complete, model, setup
 from test_runtime import ScriptedModel, ignore, make_run, make_settings, no_controls
 from test_runtime import run_agent as fixture_run_agent
 
-from zhixing_next.memory import create_memory_read_tools, organize_run, personal_memory_context
+from zhixing_next.memory import (
+    create_memory_read_tools,
+    organize_run,
+    personal_memory_context,
+    personal_recall_guard,
+)
 from zhixing_next.store import Store
 
 
@@ -84,7 +89,9 @@ async def test_actual_ambiguous_search_asks_who_instead_of_claiming_missing_memo
     await fixture_run_agent(settings, make_run("ambiguous-search", "我那个朋友喜欢什么？"), persona="",
                             emit=ignore, controls=no_controls, acknowledge=ignore, model_override=observer)
     assert "browse_personal_memories" not in observer.bound_names
-    assert "本轮实际记忆搜索发现称谓有歧义" in str(observer.seen[-1])
+    assert observer.bound_names == []
+    assert any(item.status == "error" for item in observer.seen[-1] if isinstance(item, ToolMessage))
+    assert "陶艺" not in str(observer.seen[-1]) and "咖啡" not in str(observer.seen[-1])
     assert "本轮实际记忆搜索没有匹配信息" not in str(observer.seen[-1])
 
 
@@ -109,6 +116,111 @@ async def test_core_read_racing_with_correction_invalidates_next_context(tmp_pat
     await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls,
                             acknowledge=ignore, model_override=observer)
     assert store.memory_reset_revision(run["conversation_id"]) == 1
+
+
+async def test_pronoun_cannot_use_generic_search_to_enumerate_other_people(tmp_path):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    store.add_memory("阿岚是用户的朋友，喜欢陶艺")
+    store.add_memory("小周是用户的朋友，喜欢咖啡")
+    observer = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "search_personal_memories", "args": {"query": "喜欢"},
+            "id": "generic", "type": "tool_call",
+        }]),
+        AIMessage(content="你指哪一位？"),
+    ])
+    await fixture_run_agent(settings, make_run("pronoun", "告诉我她喜欢什么？"), persona="",
+                            emit=ignore, controls=no_controls, acknowledge=ignore, model_override=observer)
+    assert observer.bound_names == []
+    assert "陶艺" not in str(observer.seen[-1]) and "咖啡" not in str(observer.seen[-1])
+    assert any(item.status == "error" for item in observer.seen[-1] if isinstance(item, ToolMessage))
+
+
+async def test_pronoun_with_unique_user_anchor_allows_targeted_search_but_not_generic_lookup(tmp_path):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    store.add_memory("阿岚是用户的朋友，喜欢陶艺")
+    store.add_memory("小周是用户的同事，喜欢咖啡")
+    conversation = store.create_conversation("朋友")["id"]
+    complete(store, conversation, "named", "聊聊阿岚吧")
+    run = make_run("anchored", "她喜欢什么？")
+    run["conversation_id"] = conversation
+    observer = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "search_personal_memories", "args": {"query": "喜欢"}, "id": "broad", "type": "tool_call",
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "name": "search_personal_memories", "args": {"query": "阿岚 小周 喜欢"}, "id": "two-people", "type": "tool_call",
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "name": "search_personal_memories", "args": {"query": "阿岚"}, "id": "targeted", "type": "tool_call",
+        }]),
+        AIMessage(content="阿岚喜欢陶艺。"),
+    ])
+    await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls,
+                            acknowledge=ignore, model_override=observer)
+    receipts = [item for item in observer.seen[-1] if isinstance(item, ToolMessage)]
+    assert receipts[0].status == "error" and receipts[1].status == "error" and receipts[2].status == "success"
+    assert "陶艺" in str(receipts[2].content) and "咖啡" not in str(receipts[2].content)
+    assert "browse_personal_memories" not in observer.bound_names
+
+
+async def test_mixed_unresolved_person_request_keeps_independent_calculation(tmp_path):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    store.add_memory("阿岚是用户的朋友，喜欢陶艺")
+    observer = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "calculate", "args": {"expression": "12+8"}, "id": "math", "type": "tool_call",
+        }]),
+        AIMessage(content="12+8=20。你指哪一位？"),
+    ])
+    await fixture_run_agent(settings, make_run("mixed", "告诉我她喜欢什么，另外算一下12+8"), persona="",
+                            emit=ignore, controls=no_controls, acknowledge=ignore, model_override=observer)
+    assert "calculate" in observer.bound_names and "search_personal_memories" not in observer.bound_names
+    assert any('"result": "20"' in item.content for item in observer.seen[-1] if isinstance(item, ToolMessage))
+
+
+def test_only_user_context_establishes_pronoun_anchor_and_steer_can_clarify(tmp_path):
+    _, store = setup(tmp_path)
+    store.add_memory("阿岚是用户的朋友，喜欢陶艺")
+    store.add_memory("小周是用户的同事，喜欢咖啡")
+    conversation = store.create_conversation("身份")["id"]
+    complete(store, conversation, "greeting", "你好", "阿岚喜欢陶艺。")
+    store.submit_message(conversation, id="question", content="她喜欢什么？")
+    run = store.claim_next("chat")
+    assert personal_recall_guard(store, run["id"])["mode"] == "clarify"
+    store.submit_message(conversation, id="identify", content="我指的是阿岚", intent="steer", target_run_id=run["id"])
+    store.acknowledge_steers(run["id"], ["identify"])
+    assert personal_recall_guard(store, run["id"]) is None
+
+
+def test_multiple_people_in_current_input_do_not_identify_singular_pronoun(tmp_path):
+    _, store = setup(tmp_path)
+    store.add_memory("阿岚是用户的朋友，喜欢陶艺")
+    store.add_memory("小周是用户的同事，喜欢咖啡")
+    conversation = store.create_conversation("两个人")["id"]
+    run = complete(store, conversation, "two-names", "阿岚和小周都是朋友，她喜欢什么？")
+    assert personal_recall_guard(store, run["id"])["mode"] == "clarify"
+
+
+async def test_added_same_title_person_invalidates_previously_unique_checkpoint(tmp_path):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    first = store.add_memory("小林是用户的同事，喜欢抹茶")
+    run = make_run("unique", "我同事喜欢什么？")
+    await fixture_run_agent(settings, run, persona="", emit=ignore, controls=no_controls,
+                            acknowledge=ignore, model_override=ScriptedModel(replies=[AIMessage(content="小林喜欢抹茶。")]))
+    store.add_memory("小周是用户的同事，喜欢咖啡")
+    assert store.memory_reset_revision(run["conversation_id"]) == 1
+    later = make_run("two", "我同事喜欢什么？")
+    observer = ScriptedModel(replies=[AIMessage(content="你指哪位同事？")])
+    await fixture_run_agent(settings, later, persona="", emit=ignore, controls=no_controls,
+                            acknowledge=ignore, model_override=observer)
+    assert observer.bound_names == []
+    assert "抹茶" not in str(observer.seen[0]) and "咖啡" not in str(observer.seen[0])
+    assert store.get_memory(first["id"])["content"].endswith("抹茶")
 
 
 @pytest.mark.parametrize("agent_id,route", [("finance", "finance"), ("health", "agent_health")])

@@ -12,6 +12,7 @@ from langchain_core.tools import tool
 from pydantic import Field
 
 from .config import Settings
+from .memory_recall import memory_query_expansion
 from .models import create_model
 from .prompts import MEMORY_ORGANIZER_PROMPT
 from .store import Store
@@ -174,8 +175,64 @@ def personal_memory_context(store: Store, prompt: str) -> dict:
         "core": core, "related": related, "support": support,
         "ambiguous_aliases": context.get("ambiguous_aliases", []),
         "blocked_aliases": context.get("blocked_aliases", []),
+        "unresolved_pronoun": context.get("unresolved_pronoun", False),
         "dependencies": page.get("_recall_dependencies", []),
     }
+
+
+_PERSONAL_TOPIC = re.compile(r"喜欢|爱好|口味|饮食|忌口|兴趣|偏好|习惯|生日|名字|送|推荐|吃什么|喝什么")
+_SINGULAR_PERSON = re.compile(r"她(?!们)|(?<![其吉维利排])他(?!们|山|乡|国|日)")
+_MIXED_PERSON_REQUEST = re.compile(
+    r"顺便|同时|另外|然后|以及|还有|记账|记录(?:收支|餐费|体重|饮食)|预算|生成|制作|导出"
+    r"|创建|删除.{0,16}(?:文件|报告)|发送|发邮件|\b(?:and|also|then)\b", re.I,
+)
+PERSONAL_RECALL_TOOLS = {
+    "browse_personal_memories", "search_personal_memories", "read_personal_memory",
+    "search_history", "read_history", "read_history_message", "send_conversation_message",
+    "read_conversation_reply", "wait_conversation_replies",
+}
+
+
+def personal_recall_guard(store: Store, run_id: str) -> dict | None:
+    """Ground a personal preference question in this chat's genuine user inputs.
+
+    Recompute after applied Steer; assistant guesses, injected memories and other
+    conversations cannot establish who a bare pronoun refers to.
+    """
+    current = store.memory_context(run_id)
+    prompt = "\n".join(item["content"] for item in current)
+    if not prompt or not _PERSONAL_TOPIC.search(prompt):
+        return None
+    facts = store.memory_recall_facts()
+    expansion = memory_query_expansion(prompt, [*facts, {
+        "id": "current-user-input", "content": prompt, "updated_at": "",
+    }])
+    multiple_singular = len(expansion.resolved_people) > 1 and bool(_SINGULAR_PERSON.search(prompt))
+    if expansion.resolved_people and not multiple_singular:
+        return None
+    unresolved = expansion.unresolved_pronoun
+    unknown_title = expansion.person_scoped and not expansion.scope_record_ids
+    if not (unresolved or multiple_singular or unknown_title or expansion.ambiguous_aliases or expansion.blocked_aliases):
+        return None
+    if unresolved:
+        for previous in store.personal_reference_messages(run_id):
+            if previous["run_id"] == run_id:
+                continue
+            reference = memory_query_expansion(previous["content"], facts)
+            if reference.ambiguous_aliases or reference.blocked_aliases or len(reference.resolved_people) > 1:
+                break
+            if len(reference.resolved_people) == 1:
+                return {
+                    "mode": "anchor", "name": reference.resolved_people[0],
+                    "terms": reference.scope_terms, "memory_ids": reference.scope_record_ids,
+                    "dependencies": reference.dependency_records,
+                }
+    return {"mode": "mixed" if _MIXED_PERSON_REQUEST.search(prompt) else "clarify"}
+
+
+def anchored_memory_query(store: Store, query: str, name: str) -> bool:
+    resolution = memory_query_expansion(query, store.memory_recall_facts())
+    return resolution.resolved_people == [name] and not resolution.ambiguous_aliases and not resolution.blocked_aliases
 
 
 def _response_text(response: Any) -> str:

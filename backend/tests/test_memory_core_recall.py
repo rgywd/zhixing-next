@@ -1,4 +1,5 @@
 from zhixing_next.memory_recall import (
+    added_relationship_dependencies,
     core_memories,
     expanded_memory_terms,
     memory_query_expansion,
@@ -201,3 +202,60 @@ def test_role_only_facts_can_be_scoped_without_inventing_a_person_name():
     result = memory_query_expansion("我对象吃什么", [saved])
     assert result.person_scoped and not result.scope_terms
     assert result.scope_record_ids == ["r"]
+
+
+
+def test_new_relationship_invalidates_old_same_title_but_not_unrelated_relationships():
+    first = fact("a", "小林是用户的同事")
+    mother = fact("m", "小云是用户的母亲")
+    added = fact("new", "小陈是用户的同事")
+    assert added_relationship_dependencies(added, [first, mother]) == [first]
+    assert added_relationship_dependencies(fact("plain", "小陈喜欢抹茶"), [first, mother]) == []
+    # A negative candidate changes the old resolution too; metadata invalidation
+    # cannot be limited to positive bindings.
+    assert added_relationship_dependencies(fact("negative", "小林不再是用户的同事"), [first]) == [first]
+
+
+def test_new_partner_binding_invalidates_neutral_and_specific_old_role_dependencies():
+    girlfriend = fact("a", "阿岚是用户的女友")
+    neutral = fact("b", "小云是用户的伴侣")
+    role_only = fact("c", "用户的对象不吃香菜")
+    friend = fact("d", "小陈是用户的朋友")
+    added = fact("new", "小雨是用户的妻子")
+    assert {row["id"] for row in added_relationship_dependencies(added, [girlfriend, neutral, role_only, friend])} == {"a", "b", "c"}
+
+
+def test_new_nickname_and_canonical_collision_invalidate_old_alias_evidence():
+    nickname = fact("a", "阿岚的昵称是岚岚")
+    relation = fact("b", "阿岚是用户的伴侣")
+    other = fact("c", "小陈的昵称是小陈陈")
+    added = fact("new", "林岚的昵称是岚岚")
+    assert added_relationship_dependencies(added, [nickname, relation, other]) == [nickname]
+    collision = fact("new", "岚岚是用户的同事")
+    assert nickname in added_relationship_dependencies(collision, [nickname, relation, other])
+    # Reverse: a newly introduced nickname is an existing canonical name.
+    named = fact("old", "岚岚是用户的朋友")
+    assert named in added_relationship_dependencies(fact("new", "阿岚的昵称是岚岚"), [named])
+
+
+def test_expansion_reports_only_successfully_resolved_people_and_unresolved_pronouns():
+    relation = fact("a", "阿岚是用户的伴侣")
+    result = memory_query_expansion("我对象她吃什么", [relation])
+    assert result.resolved_people == ["阿岚"] and not result.unresolved_pronoun
+    result = memory_query_expansion("她吃什么", [relation])
+    assert result.resolved_people == [] and result.unresolved_pronoun
+    result = memory_query_expansion("我对象她吃什么", [relation, fact("b", "小云是用户的伴侣")])
+    assert result.ambiguous_aliases and not result.resolved_people and not result.unresolved_pronoun
+    assert not memory_query_expansion("其他事情呢", [relation]).unresolved_pronoun
+    oversized = fact("large", "阿岚是我伴侣，" + "其他内容" * 500)
+    assert memory_query_expansion("她是我对象吗", [oversized]).unresolved_pronoun
+
+
+
+def test_repeating_an_existing_binding_with_new_knowledge_does_not_invalidate_it():
+    relation = fact("r", "阿岚是用户的伴侣")
+    nickname = fact("n", "阿岚的昵称是岚岚")
+    repeated = fact("new", "阿岚是用户的伴侣，昵称岚岚，喜欢陶艺")
+    assert added_relationship_dependencies(repeated, [relation, nickname]) == []
+    negative = fact("new", "阿岚不再是用户的伴侣")
+    assert relation in added_relationship_dependencies(negative, [relation, nickname])

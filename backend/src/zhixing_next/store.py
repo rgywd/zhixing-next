@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config import Settings
-from .memory_recall import core_memories, memory_query_expansion
+from .memory_recall import added_relationship_dependencies, core_memories, memory_query_expansion
 from .sqlite_policy import safe_journal_mode
 
 TERMINAL = {"completed", "failed", "cancelled", "interrupted"}
@@ -300,6 +300,22 @@ class Store:
             ).fetchall()
         return core_memories([dict(row) for row in rows])
 
+    def memory_recall_facts(self):
+        with self._connection() as db:
+            return [dict(row) for row in db.execute(
+                "SELECT id,content,updated_at FROM memories ORDER BY updated_at DESC,id"
+            ).fetchall()]
+
+    def personal_reference_messages(self, run_id):
+        with self._connection() as db:
+            run = self._require(db, "runs", run_id)
+            return [dict(row) for row in db.execute(
+                "SELECT id,run_id,content FROM messages WHERE conversation_id=? AND role='user' "
+                "AND status='applied' AND json_extract(request_json,'$.source_run_id') IS NULL "
+                "AND json_extract(request_json,'$.origin') IS NOT 'agent_message' ORDER BY seq DESC LIMIT 40",
+                (run["conversation_id"],),
+            ).fetchall()]
+
     def search_memories(self, query, limit=25, offset=0):
         with self._connection() as db:
             db.execute("BEGIN")
@@ -333,11 +349,12 @@ class Store:
             "items": [dict(row) for row in rows[:limit]],
             "next_offset": offset + limit if len(rows) > limit else None,
         }
-        if expansion.support_records or expansion.ambiguous_aliases or expansion.blocked_aliases:
+        if expansion.support_records or expansion.ambiguous_aliases or expansion.blocked_aliases or expansion.unresolved_pronoun:
             result["recall_context"] = {
                 "facts": expansion.support_records,
                 "ambiguous_aliases": expansion.ambiguous_aliases,
                 "blocked_aliases": expansion.blocked_aliases,
+                "unresolved_pronoun": expansion.unresolved_pronoun,
             }
         if getattr(expansion, "dependency_records", None):
             result["_recall_dependencies"] = [
@@ -417,6 +434,17 @@ class Store:
         db.execute("DELETE FROM memory_exposures WHERE memory_id=?", (memory_id,))
 
     @classmethod
+    def _reset_added_relationship_contexts(cls, db, added):
+        facts = [dict(row) for row in db.execute("SELECT id,content,updated_at FROM memories WHERE id!=?", (added["id"],))]
+        for dependency in added_relationship_dependencies(added, facts):
+            # Reset actual readers of old mappings; ordinary new facts do not
+            # reset conversations. Keep all original facts and chat messages.
+            targets = {row[0] for row in db.execute(
+                "SELECT conversation_id FROM memory_exposures WHERE memory_id=?", (dependency["id"],),
+            )}
+            cls._reset_memory_contexts(db, dependency["id"], targets)
+
+    @classmethod
     def _forget_memory(cls, db, memory_id, expected_updated_at=None, conversation_id=None):
         targets = cls._memory_context_targets(db, memory_id, conversation_id)
         query = "DELETE FROM memories WHERE id=?"
@@ -443,6 +471,7 @@ class Store:
                 "INSERT INTO memories VALUES(?,?,?,?,?,?)",
                 (identifier, content, key, source_message_id, now, now),
             )
+            self._reset_added_relationship_contexts(db, {"id": identifier, "content": content})
             return _record(self._require(db, "memories", identifier))
 
     def update_memory(self, memory_id, content):
@@ -529,10 +558,13 @@ class Store:
                 except StoreError:
                     continue
                 if operation == "add":
-                    db.execute(
+                    identifier = str(uuid4())
+                    added = db.execute(
                         "INSERT OR IGNORE INTO memories VALUES(?,?,?,?,?,?)",
-                        (str(uuid4()), content, content.casefold(), source_id, timestamp(), timestamp()),
-                    )
+                        (identifier, content, content.casefold(), source_id, timestamp(), timestamp()),
+                    ).rowcount
+                    if added:
+                        self._reset_added_relationship_contexts(db, {"id": identifier, "content": content})
                 elif operation == "replace":
                     existing = db.execute("SELECT content FROM memories WHERE id=?", (action["id"],)).fetchone()
                     if existing and existing["content"] != content:

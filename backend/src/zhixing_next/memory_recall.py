@@ -172,6 +172,8 @@ class MemoryQueryExpansion:
     scope_record_ids: list[str] = field(default_factory=list)
     ambiguous_aliases: list[str] = field(default_factory=list)
     blocked_aliases: list[str] = field(default_factory=list)
+    resolved_people: list[str] = field(default_factory=list)
+    unresolved_pronoun: bool = False
 
 
 @dataclass
@@ -383,6 +385,7 @@ def memory_query_expansion(query: str, memories: list[Memory]) -> MemoryQueryExp
         result.scope_record_ids.extend(str(item["id"]) for item in new_support)
         result.dependency_records = _unique_records([*result.dependency_records, *new_support])
         expanded_people.add(name)
+        result.resolved_people.append(name)
     # A saved role-only fact needs no invented name. Return it for a matching
     # explicit user-role query only when the role is neither ambiguous nor past.
     if not _QUERY_NEGATIVE.search(query):
@@ -398,9 +401,56 @@ def memory_query_expansion(query: str, memories: list[Memory]) -> MemoryQueryExp
     result.scope_record_ids = list(dict.fromkeys(result.scope_record_ids))
     result.ambiguous_aliases = list(dict.fromkeys(result.ambiguous_aliases))
     result.blocked_aliases = list(dict.fromkeys(result.blocked_aliases))
+    result.unresolved_pronoun = bool(
+        _PERSON_PRONOUN.search(query) and not result.resolved_people
+        and not result.ambiguous_aliases and not result.blocked_aliases
+    )
     return result
 
 
 def expanded_memory_terms(query: str, memories: list[Memory]) -> list[str]:
     """Convenience for callers that only need the search terms."""
     return memory_query_expansion(query, memories).terms
+
+
+def added_relationship_dependencies(added_fact: Memory, existing_facts: list[Memory]) -> list[Memory]:
+    """Find old exposure dependencies invalidated by a new explicit binding.
+
+    Existing readers could not expose a fact that did not exist yet. A new
+    same-role person, alias collision or negative relationship can change their
+    old unique/ambiguous resolution. Reuse those old mapping facts as the
+    invalidation targets; ordinary new knowledge has no such effect.
+    """
+    new_bindings, new_aliases = _bindings([added_fact])
+    if not new_bindings and not new_aliases:
+        return []
+    old_bindings, old_aliases = _bindings(existing_facts)
+    old_binding_keys = {(binding.name, binding.role, binding.negative) for binding in old_bindings}
+    old_alias_keys = {(name, alias) for name, alias, _ in old_aliases}
+    new_bindings = [binding for binding in new_bindings
+                    if (binding.name, binding.role, binding.negative) not in old_binding_keys]
+    new_aliases = [(name, alias, memory) for name, alias, memory in new_aliases
+                   if (name, alias) not in old_alias_keys]
+    if not new_bindings and not new_aliases:
+        return []
+    new_names = {binding.name for binding in new_bindings}
+    new_names.update(name for name, _, _ in new_aliases)
+    new_labels = {alias for _, alias, _ in new_aliases}
+    new_roles = {binding.role for binding in new_bindings}
+
+    def related_role(role: str) -> bool:
+        return role in new_roles or (role in _PARTNER_TYPES and bool(new_roles & _PARTNER_TYPES))
+
+    affected = [binding.memory for binding in old_bindings if (
+        related_role(binding.role) or binding.name in new_names or binding.name in new_labels
+    )]
+    affected.extend(memory for name, alias, memory in old_aliases if (
+        name in new_names or name in new_labels or alias in new_names or alias in new_labels
+    ))
+    # A previously unnamed role-only fact may itself have been the old reader's
+    # only dependency. An added name/relationship now changes that resolution.
+    for memory in existing_facts:
+        match = _ROLE_FACT.search(str(memory.get("content", "")))
+        if match and related_role(_ROLES[match["role"]]):
+            affected.append(memory)
+    return [memory for memory in _unique_records(affected) if memory["id"] != added_fact.get("id")]
