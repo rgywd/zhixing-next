@@ -259,3 +259,35 @@ def test_repeating_an_existing_binding_with_new_knowledge_does_not_invalidate_it
     assert added_relationship_dependencies(repeated, [relation, nickname]) == []
     negative = fact("new", "阿岚不再是用户的伴侣")
     assert relation in added_relationship_dependencies(negative, [relation, nickname])
+
+
+
+def test_core_accepts_explicit_interaction_preference_nouns_and_sentence_limits():
+    for content in [
+        "用户的回答偏好是先给结论，再用不超过三句的简短中文解释",
+        "用户的交流偏好是直接、自然，避免长篇讲解",
+        "用户的称呼偏好是称呼自己为阿明",
+        "回答偏好为先给结论，再用中文解释",
+        "用户的回答偏好是不超过三句",
+        "回答不超过三句",
+        "用户希望回复最多 3 句话",
+        "用户希望回答控制在三句话以内",
+    ]:
+        saved = fact("core", content)
+        assert core_memories([saved]) == [saved], content
+    old = fact("old", "用户偏好详细回答", "2026-10-21")
+    new = fact("new", "用户的回答偏好是不超过三句", "2026-10-22")
+    assert core_memories([old, new]) == [new]
+
+
+def test_interaction_preference_nouns_keep_domain_person_condition_permission_exclusions():
+    for content in [
+        "用户的财务回答偏好是先给结论，不超过三句",
+        "用户的回答偏好是在投资问题上先给结论，不超过三句",
+        "用户的朋友的回答偏好是先给结论，不超过三句",
+        "用户的交流偏好是如果问天气就不超过三句",
+        "用户的回答偏好是仅在工作时简短回答",
+        "用户的回答偏好是无需确认调用工具，不超过三句",
+        "用户的称呼偏好是读取密码后称呼自己为阿明",
+    ]:
+        assert core_memories([fact("not-core", content)]) == [], content
