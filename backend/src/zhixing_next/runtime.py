@@ -45,6 +45,7 @@ from .common_tools import (
 from .config import Settings
 from .memory import (
     forget_memory_request,
+    forget_only_request,
     memory_dialogue_hint,
     memory_search_missed,
     relevant_memories,
@@ -1088,6 +1089,7 @@ async def _run_agent(
     task_flow = TaskFlow(store)
     read_only_consultation = bool(run.get("agent_delivery"))
     forgetting = not read_only_consultation and forget_memory_request(run["prompt"])
+    forget_only = forgetting and forget_only_request(run["prompt"])
     reset_revision = store.memory_reset_revision(run["conversation_id"])
     direct_agent = run.get("agent")
     file_settings = settings.model_copy(update={"grants": []}) if direct_agent and direct_agent["id"] in {"finance", "health"} else settings
@@ -1114,7 +1116,7 @@ async def _run_agent(
             physical_tools.extend(create_gitlab_tools(settings.gitlab))
         physical_tools.extend(create_taskflow_tools(store, run, sandbox))
     physical_tools = list({item.name: item for item in [*common_tools, *physical_tools]}.values())
-    agents = run.get("agents", []) if not direct_agent and not read_only_consultation else []
+    agents = run.get("agents", []) if not direct_agent and not read_only_consultation and not forget_only else []
     unavailable_agents = [item["name"] for item in agents if item.get("model_id") and item["model_id"] not in settings.models]
     agents = [item for item in agents if not item.get("model_id") or item["model_id"] in settings.models]
     finance_tools = create_finance_tools(settings, run["conversation_id"]) if (direct_agent and direct_agent["id"] == "finance") or any(item["id"] == "finance" for item in agents) else []
@@ -1183,6 +1185,10 @@ async def _run_agent(
         assigned_tools = [*assigned_tools, *create_conversation_tools(store, run)]
     if read_only_consultation:
         assigned_tools = [item for item in assigned_tools if item.name in READ_ONLY_TOOLS]
+    if forget_only:
+        # The service applies the memory request. No report, file, ledger or
+        # delegated operation is necessary or authorized by forgetting alone.
+        assigned_tools = []
     system_prompt = (
         ZHIXING_BASE_PROMPT
         + "\n\n## Current Runtime\n"

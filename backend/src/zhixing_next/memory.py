@@ -72,6 +72,19 @@ def forget_memory_request(prompt: str) -> bool:
     return bool(_FORGET_COMMAND.search(prompt))
 
 
+def forget_only_request(prompt: str) -> bool:
+    """Narrow the model menu only for an unambiguous standalone forget request."""
+    other_action = re.search(
+        r"(?:生成|写入?|创建|制作|导出|交付|发布|整理|保存|更新|修改|删除|移除|读取).{0,24}"
+        r"(?:报告|文件|文档|表格|PDF|CSV|账单)"
+        r"|记账|记一笔|记录(?:收支|餐费|体重|饮食)|(?:修改|更新)(?:预算|提醒)"
+        r"|发(?:送|邮件|消息)|搜索|查询|解释|告诉我|顺便|同时|另外|然后"
+        r"|\b(?:and|then|also|create|write|publish|generate|send|record|search|explain)\b",
+        prompt, re.I,
+    )
+    return forget_memory_request(prompt) and not other_action
+
+
 def create_memory_lookup_tool(store: Store, conversation_id: str):
     @tool
     def browse_personal_memories(offset: int = 0) -> str:

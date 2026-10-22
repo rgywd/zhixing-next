@@ -83,3 +83,26 @@ async def test_readonly_consultation_does_not_gain_memory_command_reminder(tmp_p
                             acknowledge=ignore, model_override=model)
     system = '\n'.join(str(item.content) for item in model.seen[0] if isinstance(item, SystemMessage))
     assert '本轮是用户本人的记忆操作请求。' not in system
+
+
+@pytest.mark.parametrize('direct', [False, True])
+async def test_standalone_forget_exposes_no_unrequested_report_or_business_writes(tmp_path, direct):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    run = make_run('standalone-forget', '忘掉林岚的个人记忆，保留其他偏好。')
+    if direct:
+        run['agent'] = store.get_agent('finance')
+    else:
+        run['agents'] = store.list_agents()['items']
+    model = ScriptedModel(replies=[AIMessage(content='收到，我会忘掉这部分信息，保留其他偏好。')])
+    await fixture_run_agent(settings, run, persona='', emit=ignore, controls=no_controls,
+                            acknowledge=ignore, model_override=model)
+    assert model.bound_names == []
+
+
+async def test_forget_combined_with_requested_report_keeps_its_actual_tool(tmp_path):
+    settings = make_settings(tmp_path)
+    model = ScriptedModel(replies=[AIMessage(content='收到。')])
+    await fixture_run_agent(settings, make_run('combined-forget', '忘记旧地址，并生成一份空白报告。'),
+                            persona='', emit=ignore, controls=no_controls, acknowledge=ignore, model_override=model)
+    assert 'publish_report' in model.bound_names
