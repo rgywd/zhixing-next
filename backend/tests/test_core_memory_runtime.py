@@ -1,7 +1,11 @@
 import json
+from types import SimpleNamespace
 
+import aiosqlite
 import pytest
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.graph import StateGraph
 from test_memory import complete, model, setup
 from test_runtime import ScriptedModel, ignore, make_run, make_settings, no_controls
 from test_runtime import run_agent as fixture_run_agent
@@ -12,6 +16,7 @@ from zhixing_next.memory import (
     personal_memory_context,
     personal_recall_guard,
 )
+from zhixing_next.runtime import RunControls, RuntimeState
 from zhixing_next.store import Store
 
 
@@ -33,10 +38,45 @@ async def test_old_global_preference_reaches_main_and_specialists_without_person
     assert preference["content"] in supplied
     assert private["content"] not in supplied
     assert "紫色陶罐" not in supplied
+    visible_input = next(item for item in observer.seen[0] if isinstance(item, HumanMessage))
+    assert "[服务加载的表达偏好" in visible_input.content
+    assert visible_input.content.endswith(run["prompt"])
+    with store._connection() as db:
+        assert db.execute("SELECT content FROM messages WHERE id=?", (run["message_id"],)).fetchone()[0] == run["prompt"]
+    async with aiosqlite.connect(settings.data_dir / "checkpoints.sqlite") as connection:
+        graph = StateGraph(RuntimeState).add_node("noop", lambda state: {}).set_entry_point("noop").set_finish_point("noop").compile(checkpointer=AsyncSqliteSaver(connection))
+        checkpoint = await graph.aget_state({"configurable": {"thread_id": run["conversation_id"]}})
+    saved_input = next(item for item in checkpoint.values["messages"] if item.id == run["message_id"])
+    assert saved_input.content == run["prompt"]
     store.update_memory(preference["id"], "用户偏好详细解释回答")
     assert store.memory_reset_revision(run["conversation_id"]) == 1
     store.delete_memory(private["id"])
     assert store.memory_reset_revision(run["conversation_id"]) == 1
+
+
+async def test_preference_projection_preserves_images_and_targets_accepted_real_steer_only(tmp_path):
+    _, store = setup(tmp_path)
+    conversation = store.create_conversation("偏好投影")["id"]
+    store.submit_message(conversation, id="question", content="解释天空的颜色")
+    run = store.claim_next("chat")
+    store.submit_message(conversation, id="steer", content="这次请详细解释", intent="steer", target_run_id=run["id"])
+    middleware = RunControls(no_controls, ignore, operations=SimpleNamespace(journal=SimpleNamespace(store=store)),
+                             run_id=run["id"], communication_preferences="用户偏好简短中文回答")
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,synthetic"}}
+    original = HumanMessage(id="steer", content=[{"type": "text", "text": "这次请详细解释"}, image],
+                            additional_kwargs={"zhixing_attachments": ["image-one"]})
+    messages = [HumanMessage(id="question", content="解释天空的颜色"), original,
+                HumanMessage(id="internal", content="只是一条内部提示")]
+    projected = await middleware.preference_messages(messages)
+    assert projected[0] is messages[0] and projected[-1] is messages[-1]
+    assert projected[1].id == original.id and projected[1].additional_kwargs == original.additional_kwargs
+    assert projected[1].content[1:] == original.content
+    assert "以本轮要求为准" in projected[1].content[0]["text"]
+    assert original.content == [{"type": "text", "text": "这次请详细解释"}, image]
+    delegated = [HumanMessage(id="delegated", content="代理委派描述")]
+    assert await middleware.preference_messages(delegated) is delegated
+    with store._connection() as db:
+        assert db.execute("SELECT content,status FROM messages WHERE id='steer'").fetchone()[:] == ("这次请详细解释", "accepted")
 
 
 def test_role_recall_tracks_the_relationship_even_when_result_page_only_has_other_fact(tmp_path):

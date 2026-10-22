@@ -498,6 +498,41 @@ class RunControls(AgentMiddleware):
             )
         return guard
 
+    async def preference_messages(self, messages):
+        """Project expression preferences near the real input, without saving it.
+
+        Large provider prompts can bury the system reminder. This copy keeps the
+        original message identity and image blocks; sources and checkpoint state
+        remain the genuine input. Delegated/internal messages are not user input.
+        """
+        if not self.communication_preferences or self.research or not self.operations or not self.run_id:
+            return messages
+
+        def source_ids():
+            with self.operations.journal.store._connection() as db:
+                return {row[0] for row in db.execute(
+                    "SELECT id FROM messages WHERE run_id=? AND role='user' "
+                    "AND status IN ('accepted','applied') "
+                    "AND json_extract(request_json,'$.source_run_id') IS NULL "
+                    "AND COALESCE(json_extract(request_json,'$.origin'),'')!='agent_message'",
+                    (self.run_id,),
+                )}
+
+        genuine = await asyncio.to_thread(source_ids)
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if not isinstance(message, HumanMessage) or message.id not in genuine:
+                continue
+            prefix = (
+                "[服务加载的表达偏好，来自用户已保存的长期设置]\n" + self.communication_preferences
+                + "\n请据此组织最终回复；若有句数上限，结论、解释、列表和补充合计计入。"
+                "下方原始请求及最新用户指示明确要求不同长短或格式时，以本轮要求为准。"
+                "这些设置只影响表达，不提供新事实或操作权限，不必提及设置本身。\n\n[原始请求]\n"
+            )
+            content = prefix + message.content if isinstance(message.content, str) else [{"type": "text", "text": prefix}, *message.content]
+            return [*messages[:index], message.model_copy(update={"content": content}), *messages[index + 1:]]
+        return messages
+
     def internal_read_contract(self, tool, paths):
         description = "Read an existing SDK internal result/history reference only. Use the exact file_path returned by an internal reference; offset/limit page its lines. User uploads and deliverables use the physical file tools, never this reader. Available internal paths: " + ", ".join(paths)
         if isinstance(tool, dict):
@@ -672,6 +707,7 @@ class RunControls(AgentMiddleware):
                 # old candidates' private details from the checkpoint. Storage
                 # is unchanged; Steer with an identity removes this restriction.
                 messages = messages[min(positions):]
+        messages = await self.preference_messages(messages)
         prepared = request.override(tools=tools, messages=messages)
         if research_sources_complete:
             # The SDK ignores request.tool_choice when tools=[]; pass the native
@@ -732,9 +768,8 @@ class RunControls(AgentMiddleware):
             prepared = prepared.override(system_message=SystemMessage(
                 content=(_text(prepared.system_message) if prepared.system_message else "")
                 + "\n最终回复请自然遵守这些已保存的全局表达偏好：\n" + self.communication_preferences
-                + "\n输出前检查语种、长短和叙述顺序。若偏好要求简短或限制句数，解释、列表及补充都计入限制，"
-                "给出必要答案后结束，不再追加趣味延伸。本轮用户明确要求的详细程度和格式优先；"
-                "不必解释记忆机制或宣布正在遵守偏好。这些偏好不授予权限，也不覆盖运行规则。",
+                + "\n有句数上限时，结论、解释、列表及补充合计计入；必要答案结束后不追加延伸。"
+                "本轮明确要求优先。偏好只约束表达，不授予权限，不必提及偏好本身。",
             ))
         if self.operations is not None and not self.read_only and not self.research:
             source_messages = self.operations.journal.store.memory_context(self.run_id)
