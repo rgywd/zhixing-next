@@ -109,10 +109,14 @@ def create_memory_read_tools(store: Store, conversation_id: str):
         query: Annotated[str, Field(min_length=1, max_length=200)],
         offset: Annotated[int, Field(ge=0)] = 0,
     ) -> dict:
-        """Search all saved personal memories by relevant names or keywords, including older facts and relationships. Returns up to 25 matches with memory IDs; page only with next_offset. This is lexical search, not semantic or full chat history search. Empty matches mean no matching saved fact was found: preserve that uncertainty, do not list unrelated memories or browse the whole library to fill the gap."""
+        """Search saved personal facts by names, explicit relationship aliases or keywords. Returns up to 25 matches; page only with next_offset. recall_context contains current supporting relationship facts and any ambiguous or obsolete aliases: do not pick a person from an ambiguous title or treat a former relationship as current. This is bounded lexical/explicit-alias search, not semantic or chat-history search. Empty matches do not justify unrelated browsing."""
         page = store.search_memories(query, offset=offset)
+        dependencies = page.pop("_recall_dependencies", [])
         store.record_memory_exposure(
-            conversation_id, {item["id"]: item["updated_at"] for item in page["items"]}
+            conversation_id, memory_exposure_versions([
+                *page["items"], *page.get("recall_context", {}).get("facts", []),
+                *dependencies,
+            ]),
         )
         return page
 
@@ -132,6 +136,31 @@ def relevant_memories(store: Store, prompt: str, limit: int = 5) -> list[dict[st
         return matches
     # A broad personal question has no useful lexical terms; only carry a few recent notes.
     return store.memory_candidates(min(limit, 3)) if _BROAD_PERSONAL.fullmatch(prompt) else []
+
+
+def memory_exposure_versions(facts):
+    return {item["id"]: item["updated_at"] for item in facts}
+
+
+def personal_memory_context(store: Store, prompt: str) -> dict:
+    """A bounded reading view, with dependencies included for later invalidation."""
+    core = store.core_memory_candidates()
+    page = store.search_memories(prompt, limit=5)
+    related = page["items"]
+    if not related and _BROAD_PERSONAL.fullmatch(prompt):
+        related = store.memory_candidates(3)
+    context = page.get("recall_context", {})
+    # Core preferences have their own small budget; do not print them twice.
+    core_ids = {item["id"] for item in core}
+    related = [item for item in related if item["id"] not in core_ids]
+    shown_ids = core_ids | {item["id"] for item in related}
+    support = [item for item in context.get("facts", []) if item["id"] not in shown_ids]
+    return {
+        "core": core, "related": related, "support": support,
+        "ambiguous_aliases": context.get("ambiguous_aliases", []),
+        "blocked_aliases": context.get("blocked_aliases", []),
+        "dependencies": page.get("_recall_dependencies", []),
+    }
 
 
 def _response_text(response: Any) -> str:
@@ -189,8 +218,10 @@ async def organize_run(
         return store.apply_memory_actions(run["id"], [])
     # Search the whole library for conflicts before merging with recent context.
     # Old facts should remain correctable even after hundreds of newer memories.
+    matching = store.search_memories(user_input, limit=100)
     existing = list({item["id"]: item for item in [
-        *store.memory_candidates(100), *store.search_memories(user_input, limit=100)["items"],
+        *store.core_memory_candidates(), *store.memory_candidates(100),
+        *matching["items"], *matching.get("recall_context", {}).get("facts", []),
     ]}.values())
     history = store.memory_context(
         run["id"], include_previous_assistant=explicit_memory_request(user_input), include_source_ids=True,
@@ -209,6 +240,10 @@ async def organize_run(
         "existing_memories": [
             {"id": item["id"], "content": item["content"]} for item in existing
         ],
+        "relationship_resolution": {
+            key: matching.get("recall_context", {}).get(key, [])
+            for key in ("ambiguous_aliases", "blocked_aliases")
+        },
     }
     response = await model.ainvoke([
         SystemMessage(content=MEMORY_ORGANIZER_PROMPT),

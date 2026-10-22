@@ -203,9 +203,9 @@ POST 可提供稳定 `id`，同 ID 同内容重试不重复；相同来源经主
 
 代码在 `backend/src/zhixing_next`。config.py 负责配置，store.py 负责业务事务，api.py 负责 HTTP，
 worker.py 负责调度与生命周期，runtime.py/models.py/tools.py 负责实际智能体与工具调用。
-运行时提供 `search_personal_memories(query, offset=0)` 全库词法检索（每页 25 项与 `next_offset`）和 `read_personal_memory(memory_id)` 当前内容／来源读取；均为只读通用工具，遗忘运行中不开放，也不扩大指定来源研究助手的范围。HTTP 记忆列表的字面子串查询协议保持不变。
+运行时提供 `search_personal_memories(query, offset=0)` 全库词法及明确人物称谓／昵称检索（每页 25 项与 `next_offset`）和 `read_personal_memory(memory_id)` 当前内容／来源读取；均为只读通用工具，遗忘运行中不开放，也不扩大指定来源研究助手的范围。有关系关联或歧义时，搜索回执额外提供 `recall_context: {facts,ambiguous_aliases,blocked_aliases}`；`facts` 为当前关联依据，不是新记忆，不能按歧义称谓选择某个人。用于唯一性、歧义和旧关系判断的依赖版本由服务内部登记，不发给模型。HTTP 记忆列表的字面子串查询协议保持不变。
 
-memory.py 在成功运行后整理用户确认的持久事实；整理按运行顺序进行，增删改与处理标记在同一 SQLite 事务提交。运行时只带入少量相关记录，checkpoint 不充当长期记忆。
+memory.py 在成功运行后整理用户确认的持久事实；整理按运行顺序进行，增删改与处理标记在同一 SQLite 事务提交。运行时带入最多四条／800 字全局交流偏好及少量相关事实和必要关系依据，均从当前 SQLite 事实派生，不另存画像；checkpoint 不充当长期记忆。主、直接及命名委派助手共享有边界上下文；指定来源研究助手保持原范围。纠正或遗忘也会使读取过派生称谓依据的会话失效；本轮运行恢复协议升级，不直接续跑旧协议暂停点。
 
 配置由 `config.py` 提供 `Settings`、`ModelConfig`、`PathGrant` 和 `load_settings()`：
 Settings: data_dir: Path, workspace_root: Path, api_token: str, models: dict[str,ModelConfig],
