@@ -43,7 +43,7 @@ from .common_tools import (
     create_common_tools,
 )
 from .config import Settings
-from .memory import forget_memory_request, relevant_memories
+from .memory import forget_memory_request, memory_dialogue_hint, relevant_memories
 from .models import ModelConfigurationError, configured_model, create_model
 from .prompts import ZHIXING_BASE_PROMPT
 from .resources import hydrate_messages, input_message
@@ -662,6 +662,15 @@ class RunControls(AgentMiddleware):
             )
             prepared = prepared.override(system_message=SystemMessage(content=(_text(request.system_message) if request.system_message else "") + "\n" + policy))
         from .finance_context import finance_write_model
+
+        if self.operations is not None and not self.read_only and not self.research:
+            source_messages = self.operations.journal.store.memory_context(self.run_id)
+            hint = next((value for item in reversed(source_messages)
+                         if (value := memory_dialogue_hint(item["content"]))), None)
+            if hint:
+                prepared = prepared.override(system_message=SystemMessage(
+                    content=(_text(prepared.system_message) if prepared.system_message else "") + hint,
+                ))
 
         async def research_handler(prepared_request):
             result = await handler(prepared_request)
