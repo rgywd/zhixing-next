@@ -43,7 +43,12 @@ from .common_tools import (
     create_common_tools,
 )
 from .config import Settings
-from .memory import forget_memory_request, memory_dialogue_hint, relevant_memories
+from .memory import (
+    forget_memory_request,
+    memory_dialogue_hint,
+    memory_search_missed,
+    relevant_memories,
+)
 from .models import ModelConfigurationError, configured_model, create_model
 from .prompts import ZHIXING_BASE_PROMPT
 from .resources import hydrate_messages, input_message
@@ -607,6 +612,9 @@ class RunControls(AgentMiddleware):
             if not has_delivery:
                 hidden.update({"read_conversation_reply", "wait_conversation_replies"})
         tools = [item for item in tools if (item.get("name") if isinstance(item, dict) else item.name) not in hidden]
+        memory_miss = memory_search_missed(request.messages)
+        if memory_miss:
+            tools = [item for item in tools if (item.get("name") if isinstance(item, dict) else item.name) != "browse_personal_memories"]
         if self.named_task_schema is not None:
             available_tools = {(item.get("name") if isinstance(item, dict) else item.name) for item in tools}
             tools = [self.named_task_contract(item, available_tools) if (item.get("name") if isinstance(item, dict) else item.name) == "task" else item for item in tools]
@@ -663,6 +671,12 @@ class RunControls(AgentMiddleware):
             prepared = prepared.override(system_message=SystemMessage(content=(_text(request.system_message) if request.system_message else "") + "\n" + policy))
         from .finance_context import finance_write_model
 
+        if memory_miss:
+            prepared = prepared.override(system_message=SystemMessage(
+                content=(_text(prepared.system_message) if prepared.system_message else "")
+                + "\n本轮实际记忆搜索没有匹配信息。可以尝试更准确的相关关键词；仍无匹配时只说明没有找到相关已保存信息。"
+                "这不证明全库没有其他信息。不要顺序浏览或展示无关记忆、编号、占位资料、内部状态来填补答案，也不要编造已忘记的事实。",
+            ))
         if self.operations is not None and not self.read_only and not self.research:
             source_messages = self.operations.journal.store.memory_context(self.run_id)
             hint = next((value for item in reversed(source_messages)

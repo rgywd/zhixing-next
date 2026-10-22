@@ -153,3 +153,26 @@ def test_new_readers_detect_correction_or_forget_during_read(tmp_path, monkeypat
     reader.invoke({'query': '林岚'} if reader_name == 'search_personal_memories' else {'memory_id': saved['id']})
     assert store.memory_reset_revision(conversation) == 1
     assert all('陶艺' not in item['content'] for item in store.list_memories()['items'])
+
+
+async def test_specific_missing_fact_never_injects_unrelated_notes_and_stops_broad_browse(tmp_path):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    store.add_memory('无关的紫色占位资料，仅供测试')
+    assert relevant_memories(store, '你还记得岚岚喜欢什么吗？仅根据保存的记忆回答。') == []
+    assert relevant_memories(store, '你记得我什么？')
+    agent_model = ScriptedModel(replies=[
+        AIMessage(content='', tool_calls=[{
+            'name': 'search_personal_memories', 'args': {'query': '岚岚'}, 'id': 'missing', 'type': 'tool_call',
+        }]),
+        AIMessage(content='没有找到相关已保存信息。'),
+    ])
+    await fixture_run_agent(settings, make_run('missing-person', '岚岚喜欢什么？'), persona='',
+                            emit=ignore, controls=no_controls, acknowledge=ignore, model_override=agent_model)
+    assert 'browse_personal_memories' not in agent_model.bound_names
+    assert 'search_personal_memories' in agent_model.bound_names
+    assert '紫色占位资料' not in str(agent_model.seen[-1])
+    next_model = ScriptedModel(replies=[AIMessage(content='可以查看保存的记忆。')])
+    await fixture_run_agent(settings, make_run('broad-person', '你记得我什么？'), persona='',
+                            emit=ignore, controls=no_controls, acknowledge=ignore, model_override=next_model)
+    assert 'browse_personal_memories' in next_model.bound_names
