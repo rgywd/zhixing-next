@@ -69,6 +69,25 @@ async def test_runtime_marks_ambiguous_and_former_titles_without_picking_a_perso
     assert not any("阿岚" in fact["content"] for fact in context["support"])
 
 
+async def test_actual_ambiguous_search_asks_who_instead_of_claiming_missing_memory(tmp_path):
+    settings = make_settings(tmp_path)
+    store = Store(settings)
+    store.add_memory("阿岚是用户的朋友，喜欢陶艺")
+    store.add_memory("小周是用户的朋友，喜欢咖啡")
+    observer = ScriptedModel(replies=[
+        AIMessage(content="", tool_calls=[{
+            "name": "search_personal_memories", "args": {"query": "朋友"},
+            "id": "ambiguous-search", "type": "tool_call",
+        }]),
+        AIMessage(content="你指哪位朋友？"),
+    ])
+    await fixture_run_agent(settings, make_run("ambiguous-search", "我那个朋友喜欢什么？"), persona="",
+                            emit=ignore, controls=no_controls, acknowledge=ignore, model_override=observer)
+    assert "browse_personal_memories" not in observer.bound_names
+    assert "本轮实际记忆搜索发现称谓有歧义" in str(observer.seen[-1])
+    assert "本轮实际记忆搜索没有匹配信息" not in str(observer.seen[-1])
+
+
 async def test_core_read_racing_with_correction_invalidates_next_context(tmp_path, monkeypatch):
     settings = make_settings(tmp_path)
     store = Store(settings)
@@ -155,6 +174,16 @@ def test_qualified_ambiguous_titles_do_not_fall_back_to_generic_likes(tmp_path, 
     store.add_memory("小周是用户的同事")
     context = personal_memory_context(store, query)
     assert context["ambiguous_aliases"]
+    assert context["related"] == [] and context["support"] == []
+
+
+@pytest.mark.parametrize("query", ["我现在的对象有什么爱好？", "我目前的伴侣有什么爱好？", "我的现任伴侣喜欢什么？"])
+def test_current_title_qualifiers_never_reuse_a_former_partners_hobby(tmp_path, query):
+    _, store = setup(tmp_path)
+    store.add_memory("阿岚是用户的前任")
+    store.add_memory("阿岚的爱好是陶艺")
+    context = personal_memory_context(store, query)
+    assert context["blocked_aliases"]
     assert context["related"] == [] and context["support"] == []
 
 

@@ -49,6 +49,7 @@ from .memory import (
     memory_dialogue_hint,
     memory_exposure_versions,
     memory_search_missed,
+    memory_search_resolution_hint,
     personal_memory_context,
 )
 from .models import ModelConfigurationError, configured_model, create_model
@@ -674,10 +675,14 @@ class RunControls(AgentMiddleware):
         from .finance_context import finance_write_model
 
         if memory_miss:
+            lookup_policy = memory_search_resolution_hint(request.messages) or (
+                "本轮实际记忆搜索没有匹配信息。可以尝试更准确的相关关键词；仍无匹配时只说明没有找到相关已保存信息。"
+                "这不证明全库没有其他信息。"
+            )
             prepared = prepared.override(system_message=SystemMessage(
                 content=(_text(prepared.system_message) if prepared.system_message else "")
-                + "\n本轮实际记忆搜索没有匹配信息。可以尝试更准确的相关关键词；仍无匹配时只说明没有找到相关已保存信息。"
-                "这不证明全库没有其他信息。不要顺序浏览或展示无关记忆、编号、占位资料、内部状态来填补答案，也不要编造已忘记的事实。",
+                + "\n" + lookup_policy
+                + "不要顺序浏览或展示无关记忆、编号、占位资料、内部状态来填补答案，也不要编造已忘记的事实。",
             ))
         if self.operations is not None and not self.read_only and not self.research:
             source_messages = self.operations.journal.store.memory_context(self.run_id)

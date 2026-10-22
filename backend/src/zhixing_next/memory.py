@@ -49,8 +49,8 @@ def memory_dialogue_hint(prompt: str) -> str | None:
     )
 
 
-def memory_search_missed(messages) -> bool:
-    """Only a real, successful lookup in this user turn can establish a miss."""
+def memory_search_result(messages) -> dict | None:
+    """Only inspect a genuine successful lookup in the current user turn."""
     for message in reversed(messages):
         if isinstance(message, HumanMessage):
             break
@@ -59,9 +59,24 @@ def memory_search_missed(messages) -> bool:
         try:
             result = json.loads(message.content)
         except (ValueError, TypeError):
-            return False
-        return isinstance(result, dict) and result.get("items") == []
-    return False
+            return None
+        return result if isinstance(result, dict) else None
+    return None
+
+
+def memory_search_missed(messages) -> bool:
+    result = memory_search_result(messages)
+    return result is not None and result.get("items") == []
+
+
+def memory_search_resolution_hint(messages) -> str | None:
+    result = memory_search_result(messages)
+    context = result.get("recall_context", {}) if result else {}
+    if context.get("ambiguous_aliases"):
+        return "本轮实际记忆搜索发现称谓有歧义。不要按最近记录选人，也不要说没有记忆或让用户重述已保存的事实；只简短问用户指哪一位。"
+    if context.get("blocked_aliases"):
+        return "本轮实际记忆搜索中的称谓只有旧关系、否定或冲突的对应。不要当成当前关系，也不要从旧身份猜测当前人物；只在需要时简短确认指谁。"
+    return None
 
 
 def explicit_memory_request(prompt: str) -> bool:
