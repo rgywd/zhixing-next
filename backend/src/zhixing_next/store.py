@@ -48,6 +48,8 @@ def _record(row):
             result["origin"] = "agent_message"
             result["source_conversation_id"] = submitted.get("source_conversation_id")
             result["delivery_id"] = submitted.get("delivery_id")
+        elif submitted.get("origin") == "heartbeat":
+            result["origin"] = "heartbeat"
         elif submitted.get("source_run_id"):
             result["origin"] = "assistant_task"
         if result.get("intent") == "steer" and submitted.get("intent") == "queue":
@@ -86,7 +88,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 14:
+            if version > 15:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -223,6 +225,13 @@ class Store:
                     # user customization. Do not strip arbitrary custom text.
                     db.execute("UPDATE agents SET instructions='',updated_at=? WHERE id='health'", (timestamp(),))
                 db.execute("PRAGMA user_version=14")
+            if version < 15:
+                from .growth import migrate as migrate_growth
+                from .heartbeat import migrate as migrate_heartbeat
+
+                migrate_growth(db)
+                migrate_heartbeat(db)
+                db.execute("PRAGMA user_version=15")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)

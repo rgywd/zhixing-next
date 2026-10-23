@@ -586,8 +586,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return store.update_schedule(schedule_id, body.enabled)
 
     from .finance_routes import create_router as finance_router
+    from .growth_routes import create_router as growth_router
     from .health_routes import create_router as health_router
 
+    router.include_router(growth_router(store))
     router.include_router(finance_router(store))
     router.include_router(health_router(store))
     app.include_router(router)

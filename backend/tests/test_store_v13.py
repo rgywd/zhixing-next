@@ -37,7 +37,7 @@ def test_v12_to_v13_preserves_ledger_dates_and_custom_instructions_idempotently(
     assert {"list_finance_observations", "view_image"} <= set(agent["tools"])
     with migrated._connection() as db:
         row = dict(db.execute("SELECT * FROM finance_transactions WHERE id=?", (record["id"],)).fetchone())
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 15
         assert db.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
         assert db.execute("PRAGMA foreign_key_check").fetchall() == []
     assert row["date_precision"] == "day" and row["date_start"] == row["date_end"] == row["occurred_on"] == "2026-10-15"
