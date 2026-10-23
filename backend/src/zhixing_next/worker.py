@@ -29,6 +29,7 @@ class Worker:
         self.runner = runner
         self.active: dict[str, tuple[str, asyncio.Task]] = {}
         self.memory_task: asyncio.Task | None = None
+        self.heartbeat_task: asyncio.Task | None = None
         self._memory_lock = asyncio.Lock()
         self._last_maintenance = 0.0
 
@@ -109,6 +110,11 @@ class Worker:
             self.store.finish_run(run_id, "failed", error=message)
 
     async def tick(self) -> None:
+        from .heartbeat import HeartbeatService, run_heartbeat
+
+        if self.heartbeat_task and self.heartbeat_task.done():
+            await self.heartbeat_task
+            self.heartbeat_task = None
         if self.memory_task and self.memory_task.done():
             await self.memory_task
             self.memory_task = None
@@ -136,11 +142,20 @@ class Worker:
             if kind not in self.active:
                 run = self.store.claim_next(kind)
                 if run:
+                    # Human work takes priority over an in-flight reflection.
+                    if self.heartbeat_task is not None:
+                        self.heartbeat_task.cancel()
+                        await asyncio.gather(self.heartbeat_task, return_exceptions=True)
+                        self.heartbeat_task = None
                     self.active[kind] = (run["id"], asyncio.create_task(self._execute(run)))
         if self.memory_task is None and "chat" not in self.active:
             pending = self.store.next_memory_run()
             if pending:
                 self.memory_task = asyncio.create_task(self._organize(pending))
+        if not self.active and self.memory_task is None and self.heartbeat_task is None:
+            snapshot = HeartbeatService(self.store).claim()
+            if snapshot:
+                self.heartbeat_task = asyncio.create_task(run_heartbeat(self.settings, self.store, snapshot))
 
     async def run(self, stop: asyncio.Event | None = None) -> None:
         stop = stop or asyncio.Event()
@@ -152,6 +167,9 @@ class Worker:
 
                 await cleanup_orphans(self.settings)
                 self.store.recover_interrupted()
+                from .heartbeat import HeartbeatService
+
+                HeartbeatService(self.store).recover()
                 logger.info("worker started; one chat slot and one execution slot")
                 try:
                     while not stop.is_set():
@@ -164,11 +182,16 @@ class Worker:
                     pending = [task for _, task in self.active.values()]
                     if self.memory_task is not None:
                         pending.append(self.memory_task)
+                    if self.heartbeat_task is not None:
+                        pending.append(self.heartbeat_task)
                     for task in pending:
                         if not task.cancelling():
                             task.cancel()
                     if pending:
-                        await asyncio.gather(*pending)
+                        results = await asyncio.gather(*pending, return_exceptions=True)
+                        for result in results:
+                            if isinstance(result, BaseException) and not isinstance(result, asyncio.CancelledError):
+                                raise result
                     self.active.clear()
         except Timeout as exc:
             raise RuntimeError("Another worker owns this data directory") from exc

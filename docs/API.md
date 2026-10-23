@@ -1,11 +1,11 @@
 # HTTP 与运行接口
 
-状态：2026-10-16，当前源码包含数据库 v14 的工具契约与 Agent 协作。历史安装、部署及验收状态以各版发布说明为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
+状态：2026-10-23，当前源码包含数据库 v15 的人格成长、主动偏好、目标跟进与心跳，保留既有工具契约与 Agent 协作。历史安装、部署及验收状态以各版发布说明为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
 
 ## 交付范围
 
 Python FastAPI + SQLite，API 与 worker 独立进程；React Native 客户端连接真实后端。
-当前产品提供会话、人格、财务／健康子 Agent、消息 Queue/Steer、取消、服务记录与轻量记忆。旧项目、任务和通用计划 API 保留兼容，手机入口及主 Agent 创建这些工作的工具已移除；v12 迁移停用已有通用计划。
+当前产品提供会话、人格及其演化、财务／健康子 Agent、消息 Queue/Steer、取消、服务记录、轻量记忆与个人目标跟进。旧项目、任务和通用计划 API 保留兼容，手机入口及主 Agent 创建这些工作的工具已移除；v12 迁移停用已有通用计划。
 文件/图片的自动记忆提取、外部 harness 与推送通知留作后续。模型未配置时明确失败，不返回模拟助手回复。
 
 ## 公共约定
@@ -15,6 +15,21 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 错误 `{error: {code: string, message: string}}`。请求 ID/消息 ID 由客户端生成；重试相同 ID 与相同内容返回原记录，
 相同 ID 不同内容返回 409。限长与枚举由入口校验；旧列表默认 50，最大 100，新健康列表默认 100、最大 500。
 用户和模型供应商密钥分离；App 只持有服务访问令牌。
+
+## 人格成长与主动跟进
+
+以下接口同样要求服务令牌。用户设置的 `/v1/assistant` 人格与演化记录分开；模型工具使用稳定操作键保存幂等回执，HTTP 修改可通过 `expected_revision` 检查并发更新。修订不匹配返回 `409 revision_conflict`，读取最新状态后再合并，不覆盖其他修改。设计与交付边界见[人格成长与主动服务](MUSE-GROWTH.md)。
+
+- `GET /v1/growth`：返回 `{revision,updated_at,evolved_persona,persona_reason,persona_memory_refs,preferences,learned_skills,understanding,goals,memory_versions}`。引用已删除或旧版本记忆的人格／方法／理解不再返回有效内容。`memory_refs`／`memory_versions` 是记忆 ID 到 `updated_at` 的映射，不包含原始聊天。`goals` 返回现有目标全部状态。
+- `PATCH /v1/growth/preferences`：部分更新 `{expected_revision?,conversation_id?,enabled?,maintenance_enabled?,timezone?,quiet_start?,quiet_end?,daily_limit?,min_interval_minutes?,snooze_until?,topics?,guidance?}`，返回完整偏好和全局 `revision`。`topics` 为主题到 `allow|block|null` 的映射，`guidance` 为情境／表达键到文字或 `null` 的映射；只合并所给键，`null` 删除对应一项，不清空未提及的偏好。每个映射最多 40 项，键最多 80 字，指导文字最多 1000 字。启用主动消息须有实际目标会话；保存偏好不创建跟进。
+- 偏好默认 `enabled=false,maintenance_enabled=true,timezone=Asia/Shanghai,quiet_start=22:00,quiet_end=08:00,daily_limit=3,min_interval_minutes=240,snooze_until=null`。时区须为 IANA 名称；安静时段为 `HH:MM`，跨午夜有效，同时设为 `null` 可清除，起止相等表示不限制。每日上限 1–12，最短间隔 15–10080 分钟；`snooze_until` 须带时区，`null` 清除暂停。设置关闭或暂停不会伪造成功投递。
+- `PUT /v1/growth/persona {content,reason,expected_revision?,memory_refs?}`：更新演化人格，返回 `{evolved_persona,persona_reason,memory_refs,revision}`。HTTP `content` 最多 4000 字，可为空以清除；`reason` 为 1–1000 字。涉及个人事实的内容须引用当前记忆，最多 100 个引用。该接口不修改 `/v1/assistant` 的用户人格。
+- `PUT /v1/growth/skills/{key}`：请求与人格更新相同，保存一条有界方法记录；内容须非空、最多 4000 字，最多保存 50 条。返回 `{key,content,reason,memory_refs,revision,created_at,updated_at}`，其中记录 `revision` 独立递增。`DELETE /v1/growth/skills/{key}?expected_revision=` 删除该方法，返回 `{deleted,revision}`。这里的 `expected_revision` 检查全局成长修订。方法不是可执行插件或工具授权。
+- `POST /v1/growth/goals {id,conversation_id,title,context?,topic?,status?,next_check_at?,interval_seconds?,expected_revision?}`：创建目标并返回 `{id,conversation_id,title,context,topic,status,next_check_at,interval_seconds,revision,created_at,updated_at}`。目标 ID 和方法 key 均为 1–80 个中文／英文字母、数字及 `_.:-`，首字符须为中文／英文字母或数字。标题最多 200 字、上下文最多 4000 字、主题最多 80 字，同时进行中或暂停的目标最多 100 条。
+- `PATCH /v1/growth/goals/{goal_id}`：按相同目标字段部分更新，不能变更 ID 或原会话；`expected_revision` 检查该目标自身修订。`status=active|paused|completed|cancelled`，默认 `active`；暂停保留检查时间而不执行，完成／取消清空 `next_check_at`。下次检查时间须带时区；`interval_seconds` 为 900–31536000 秒，`null` 表示一次性。未提供的字段保持原值。目标保存成功不等于主动消息已经启用或送达。
+- `GET /v1/growth/heartbeat`：返回 `{next_check_at,running,last_success_at,failure_count,last_error,receipts}`；`receipts` 为最多最近 20 项 `{id,status,started_at,finished_at,message_id,topic,reason}`。状态包括 `running|silent|delivered|stale|failed|interrupted`；只有 `delivered` 及实际 `message_id` 表示聊天消息已落库，`silent` 不表示用户目标完成。错误只保存类别，不返回供应商私有错误正文、内部输入哈希或记忆版本快照。
+
+心跳沿用同一个 worker，优先记忆模型并回退聊天默认模型；每次最多提供最近更新的 200 条当前记忆，生成引用须在本次提供范围内。写入前重新检查全库当前记忆版本、成长、目标、模型与主动偏好；消息与回执同事务保存。心跳不创建普通用户运行、不执行图工具，聊天消息保存为 `role=assistant,origin=heartbeat,run_id=null`，按已有消息同步接口读取；客户端不为其请求运行过程或取消运行。该能力没有远程推送；worker 离线时不能执行检查。
 
 ## HTTP 接口
 
@@ -46,7 +61,8 @@ JSON 字段使用 snake_case；创建与更新时间为 UTC ISO 8601。财务业
 - `GET /v1/conversations/{id}`：单个会话及当前 blocked 状态。
 - `PUT /v1/conversations/{id}/model {model_id:string|null,reasoning_effort:auto|none|minimal|low|medium|high|xhigh|max|null}`：主知行与绑定专用助手的会话均可设置聊天模型和思考档位；null 表示继承助手配置或角色默认模型。单次请求模型优先于会话模型，再继承助手配置与角色默认模型。档位必须在模型声明的 `reasoning_levels` 内。设置只影响之后入队的聊天，已提交的运行保留入队时的模型快照。
 - `GET /v1/conversations/{id}/messages?cursor=&limit=`: 按序号升序，消息
-  `{id,conversation_id,role: user|assistant,content,attachments: Resource[],intent: queue|steer,run_id,status: accepted|applied|rejected,created_at,seq}`。
+  `{id,conversation_id,role: user|assistant,content,attachments: Resource[],intent: queue|steer,run_id:string|null,status: accepted|applied|rejected,created_at,seq}`。
+  心跳主动消息额外带 `origin:heartbeat`，`role=assistant,run_id=null`；它是独立消息，没有普通运行过程，不构成新的用户输入或业务授权。
   自动转交的任务输入额外带 `origin:assistant_task`，手机显示为后台任务，不作为用户事实提取记忆；此字段只由服务端设置。内部转交可汇集多次 Steer 的附件，外部每条消息仍最多 8 份。
   原先以 queue 提交、之后通过下方原子操作改为引导的同一消息额外带 `submitted_intent:queue`；`intent:steer` 表示当前投递方式。客户端恢复未收到回执的原始请求时以 `submitted_intent ?? intent` 核对提交方式，不改写本机已保存的请求。
 - `POST /v1/conversations/{id}/messages {id,content?: string,attachments?: string[],intent: queue|steer,kind: chat|task,target_run_id?: string,model_id?: string,reasoning_effort?: auto|none|minimal|low|medium|high|xhigh|max,search_provider_id?: string}`:

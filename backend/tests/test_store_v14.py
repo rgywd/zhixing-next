@@ -57,7 +57,7 @@ def test_v13_to_v14_preserves_ledger_and_only_removes_exact_builtin_default(tmp_
     assert upgraded.get_agent("health")["instructions"] == expected
     assert FinanceService(upgraded).list_transactions(month="2026-10")["items"][0] == transaction
     with upgraded._connection() as db:
-        assert db.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert db.execute("PRAGMA user_version").fetchone()[0] == 15
         assert "origin" in {row[1] for row in db.execute("PRAGMA table_info(runs)")}
         assert all(
             db.execute(

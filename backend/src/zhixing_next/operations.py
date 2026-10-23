@@ -12,6 +12,7 @@ from langchain_core.messages import ToolMessage, message_to_dict, messages_from_
 from langgraph.errors import GraphInterrupt
 from langgraph.types import Command, interrupt
 
+from .growth_tools import GROWTH_WRITE_TOOLS
 from .resources import _atomic_write
 from .store import Store, StoreError, _json, _record, timestamp
 from .tools import FileAccess
@@ -54,6 +55,10 @@ EFFECT_TOOLS.add("send_conversation_message")
 READ_TOOLS.update({"read_conversation_reply", "wait_conversation_replies", "wait_agents"})
 IDEMPOTENT_SERVICE_TOOLS.update({"start_agent", "send_agent", "close_agent"})
 EFFECT_TOOLS.update({"start_agent", "send_agent", "close_agent"})
+
+IDEMPOTENT_SERVICE_TOOLS.update(GROWTH_WRITE_TOOLS)
+EFFECT_TOOLS.update(GROWTH_WRITE_TOOLS)
+READ_TOOLS.add("read_assistant_growth")
 LIMIT = 20 * 1024 * 1024
 
 

@@ -167,17 +167,18 @@ export function ChatPanel({
   } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles, focusMessageSeq: focusAnchor,
     defaultIntent: chatPreferences.defaultIntent, defaultIntentReady: chatPreferences.ready, streamEvents: false });
   const refreshQueuedMessages = useCallback(() => refresh.current(), [refresh]);
-  const replyIds = [...messages.filter((item) => item.role === "assistant" && !item.origin).slice(-20).map((item) => item.run_id),
+  const replyIds = [...messages.filter((item) => item.role === "assistant" && !item.origin).slice(-20).flatMap((item) => item.run_id ? [item.run_id] : []),
     ...visibleRuns.filter((id) => messages.some((item) => item.run_id === id)), ...runs.filter((item) => item.started_at || item.status === "running" || item.phase && item.phase !== "normal").slice(-20).map((item) => item.id)];
   const replyRecords = useReplyProcesses(connection, conversation.id, replyIds, runs, refreshQueuedMessages);
   const rows = conversationReplyRows(messages, runs, replyRecords);
   const goToLatest = () => { nearBottomRef.current = true; setAwayFromLatest(false); list.current?.scrollToEnd({ animated: true }); };
-  const replyStatus = (id: string) => {
+  const replyStatus = (id: string | null) => {
+    if (!id) return undefined;
     const run = runs.find((value) => value.id === id);
     return run && !["running", "queued"].includes(run.status) ? run.status : replyRecords[id]?.status ?? run?.status;
   };
   const actionMessage = (message: Message): Message => message.content || !isPendingReply(message) ? message : { ...message,
-    content: (replyRecords[message.run_id]?.buffer.parts ?? []).filter((part) => part.type === "text" && part.attempt_status !== "failed").map((part) => part.type === "text" ? part.text : "").join("\n\n") };
+    content: (replyRecords[message.run_id ?? ""]?.buffer.parts ?? []).filter((part) => part.type === "text" && part.attempt_status !== "failed").map((part) => part.type === "text" ? part.text : "").join("\n\n") };
   async function copyMessage(message: Message) {
     if (!message.content) { notice.show({ message: "这条回复尚无可复制正文" }); return; }
     try { await Clipboard.setStringAsync(message.content); notice.show({ message: "已复制消息", tone: "success" }); }
@@ -212,7 +213,7 @@ export function ChatPanel({
   const focusHandled = useRef(onFocusHandled);
   useEffect(() => { focusHandled.current = onFocusHandled; }, [onFocusHandled]);
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ViewToken<Message>[] }) => {
-    const ids = [...new Set(viewableItems.filter((item) => item.isViewable && item.item.role === "assistant").map((item) => item.item.run_id))].sort();
+    const ids = [...new Set(viewableItems.filter((item) => item.isViewable && item.item.role === "assistant").flatMap((item) => item.item.run_id ? [item.item.run_id] : []))].sort();
     setVisibleRuns((old) => old.join(",") === ids.join(",") ? old : ids);
     const target = focusState.current;
     if (target.seq === null || target.handled) return;
@@ -337,7 +338,7 @@ export function ChatPanel({
             <View style={[chatStyles.messageIdentity, item.role === "user" && !item.origin && { justifyContent: "flex-end" }]}>
             {item.role === "assistant" ? <View style={chatStyles.assistantMark}><Ionicons name="sparkles" size={13} color={colors.accent} /></View> : null}
             <Text style={[s.muted, item.role === "assistant" && { color: colors.ink, fontWeight: "600" }]}>
-              {item.origin === "agent_message" ? "其他对话的助手 · 只读咨询" : item.origin === "assistant_task" ? "后台任务" : item.role === "assistant" ? assistantName : "你"}
+              {item.origin === "agent_message" ? "其他对话的助手 · 只读咨询" : item.origin === "assistant_task" ? "后台任务" : item.origin === "heartbeat" ? `${assistantName} · 主动跟进` : item.role === "assistant" ? assistantName : "你"}
               {item.role === "user" && !item.origin && item.intent === "queue" && item.status === "rejected"
                 && runs.some((run) => run.id === item.run_id && run.status === "cancelled" && run.started_at === null)
                 ? " · 已撤回" : ""}
@@ -348,14 +349,14 @@ export function ChatPanel({
             </View>
             <View onTouchStart={item.role === "assistant" ? () => { nearBottomRef.current = false; setAwayFromLatest(true); } : undefined}
               style={item.role === "user" && !item.origin ? chatStyles.userBubble : chatStyles.assistantContent}>
-              {item.role === "assistant" && !item.origin ? (() => {
-                const record = replyRecords[item.run_id], run = runs.find((value) => value.id === item.run_id);
+              {item.role === "assistant" && !item.origin && item.run_id ? (() => {
+                const record = replyRecords[item.run_id!], run = runs.find((value) => value.id === item.run_id);
                 const status = replyStatus(item.run_id);
                 return <ReplyContent parts={record?.buffer.parts ?? []} active={status === "running" || status === "queued"}
                   finalText={!isPendingReply(item) || item.content ? item.content : undefined} finalPartId={record?.finalProjection ? record.finalPartId : undefined}
                   status={status} phase={record?.buffer.phase ?? run?.phase} cancelRequested={run?.cancel_requested}
                   connectionIssue={record?.buffer.connectionIssue} truncated={record?.buffer.truncated}
-                  onOpenRun={() => setDetail(item.run_id)} />;
+                  onOpenRun={() => setDetail(item.run_id!)} />;
               })() : <MessageBody>{item.content}</MessageBody>}
               <Attachments connection={connection} items={item.attachments} />
             </View>

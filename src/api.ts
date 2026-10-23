@@ -114,13 +114,13 @@ export type Message = {
   id: string;
   conversation_id: string;
   role: "user" | "assistant";
-  origin?: "assistant_task" | "agent_message";
+  origin?: "assistant_task" | "agent_message" | "heartbeat";
   source_conversation_id?: string;
   delivery_id?: string;
   content: string;
   attachments?: Resource[];
   intent: "queue" | "steer";
-  run_id: string;
+  run_id: string | null;
   status: "accepted" | "applied" | "rejected";
   created_at: string;
   seq: number;

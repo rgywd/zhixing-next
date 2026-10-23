@@ -48,6 +48,8 @@ def _record(row):
             result["origin"] = "agent_message"
             result["source_conversation_id"] = submitted.get("source_conversation_id")
             result["delivery_id"] = submitted.get("delivery_id")
+        elif submitted.get("origin") == "heartbeat":
+            result["origin"] = "heartbeat"
         elif submitted.get("source_run_id"):
             result["origin"] = "assistant_task"
         if result.get("intent") == "steer" and submitted.get("intent") == "queue":
@@ -86,7 +88,7 @@ class Store:
             ]
             db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 14:
+            if version > 15:
                 raise RuntimeError("Database schema is newer than this server")
             if version == 0:
                 # Individual statements keep schema creation and its version in one transaction.
@@ -223,6 +225,13 @@ class Store:
                     # user customization. Do not strip arbitrary custom text.
                     db.execute("UPDATE agents SET instructions='',updated_at=? WHERE id='health'", (timestamp(),))
                 db.execute("PRAGMA user_version=14")
+            if version < 15:
+                from .growth import migrate as migrate_growth
+                from .heartbeat import migrate as migrate_heartbeat
+
+                migrate_growth(db)
+                migrate_heartbeat(db)
+                db.execute("PRAGMA user_version=15")
             db.commit()
         if os.name != "nt":
             self.db_path.chmod(0o600)
@@ -1239,8 +1248,18 @@ class Store:
             # All parts, final-message references and the resume cursor share one read snapshot.
             db.execute("BEGIN")
             self._require(db, "conversations", conversation_id)
+            # v0.2.6 serializes a visible heartbeat's null run_id as an empty ID.
+            # Give that client a terminal display projection so it does not poll
+            # a nonexistent run; the actual heartbeat remains a plain message.
+            empty_heartbeat = "" in identifiers and db.execute(
+                "SELECT 1 FROM messages WHERE conversation_id=? AND role='assistant' "
+                "AND run_id IS NULL AND json_extract(request_json,'$.origin')='heartbeat' LIMIT 1",
+                (conversation_id,),
+            ).fetchone() is not None
+            if "" in identifiers and not empty_heartbeat:
+                raise StoreError("not_found", "Run was not found in this conversation", 404)
             runs = db.execute(f"SELECT id,conversation_id,status,phase FROM runs WHERE id IN ({placeholders})", identifiers).fetchall()
-            if len(runs) != len(identifiers) or any(run["conversation_id"] != conversation_id for run in runs):
+            if len(runs) != len(identifiers) - int(empty_heartbeat) or any(run["conversation_id"] != conversation_id for run in runs):
                 raise StoreError("not_found", "Run was not found in this conversation", 404)
             types = sorted(DISPLAY_TYPES)
             type_placeholders = ",".join("?" for _ in types)
@@ -1263,6 +1282,11 @@ class Store:
             by_id = {run["id"]: run for run in runs}
             items = []
             for identifier in identifiers:
+                if identifier == "":
+                    items.append({"run_id": "", "status": "completed", "phase": "normal", "parts": [],
+                                  "stream_id": None, "final_message_id": None, "final_part_id": None,
+                                  "cursor": 0, "truncated": False})
+                    continue
                 events = grouped[identifier]
                 item = project(by_id[identifier], events, finals.get(identifier))
                 item["cursor"] = cursors.get(identifier, 0)

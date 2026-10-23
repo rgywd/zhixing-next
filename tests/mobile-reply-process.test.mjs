@@ -188,3 +188,12 @@ test("a queued follow-up does not move an earlier reply when its durable final a
   assert.equal(finished[1], final); assert.equal(finished.filter((message) => message.role === "assistant").length, 1);
   assert.deepEqual([first, follow, final].map((message) => message.seq), [1, 2, 3], "display grouping does not rewrite server message order");
 });
+
+test("proactive messages without a run remain ordinary readable chat rows", () => {
+  const proactive = { id: "heartbeat-1", role: "assistant", origin: "heartbeat", run_id: null,
+    conversation_id: "c1", content: "昨天的阅读计划需要帮忙吗？", intent: "queue", status: "applied",
+    created_at: "2026-10-23T08:00:00Z", seq: 2 };
+  assert.equal(replyRowKey(proactive), proactive.id);
+  assert.equal(isPendingReply(proactive), false);
+  assert.deepEqual(conversationReplyRows([proactive], [], {}), [proactive]);
+});
