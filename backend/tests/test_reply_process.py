@@ -15,7 +15,7 @@ from zhixing_next.display_stream import stream_display
 from zhixing_next.live_stream import MAX_EVENT_BYTES, MAX_EVENTS, LiveModelStream
 from zhixing_next.reply_process import MAX_PARTS, MAX_UNITS, project
 from zhixing_next.sqlite_policy import safe_journal_mode
-from zhixing_next.store import Store, StoreError
+from zhixing_next.store import Store, StoreError, timestamp
 
 TOKEN = "isolated-display-test-token-00000"
 
@@ -129,6 +129,90 @@ def test_cross_conversation_and_missing_run_are_rejected_as_a_whole(tmp_path):
         with pytest.raises(StoreError) as error:
             store.reply_processes(conversation["id"], identifiers)
         assert error.value.status == 422
+
+
+def heartbeat_message(store, conversation):
+    with store._connection(write=True) as db:
+        db.execute(
+            "INSERT INTO messages(id,conversation_id,role,content,intent,run_id,status,created_at,request_json) "
+            "VALUES(?,?,'assistant','A proactive follow-up','queue',NULL,'applied',?,?)",
+            (f"heartbeat-{conversation['id']}", conversation["id"], timestamp(), '{"origin":"heartbeat"}'),
+        )
+
+
+def database_contents(store):
+    with store._connection() as db:
+        return tuple(db.iterdump())
+
+
+def test_legacy_empty_heartbeat_process_is_terminal_and_never_creates_run_data(tmp_path):
+    _, store, conversation = setup(tmp_path)
+    run = start(store, conversation, "legacy-heartbeat")
+    ordered_reply(store, run)
+    store.finish_run(run["id"], "completed", result="The final answer")
+    heartbeat_message(store, conversation)
+    actual = store.reply_processes(conversation["id"], [run["id"]])["items"][0]
+    before = database_contents(store)
+    for identifiers in (["", run["id"]], [""], [run["id"], "", ""]):
+        items = store.reply_processes(conversation["id"], identifiers)["items"]
+        assert [item["run_id"] for item in items] == list(dict.fromkeys(identifiers))
+        empty = next(item for item in items if item["run_id"] == "")
+        assert empty == {"run_id": "", "status": "completed", "phase": "normal", "parts": [],
+                         "stream_id": None, "final_message_id": None, "final_part_id": None,
+                         "cursor": 0, "truncated": False}
+        assert all(item == actual for item in items if item["run_id"])
+    assert database_contents(store) == before
+
+
+def test_legacy_empty_process_keeps_missing_and_cross_conversation_rejection(tmp_path):
+    _, store, conversation = setup(tmp_path)
+    run = start(store, conversation, "legacy-owner")
+    store.finish_run(run["id"], "completed", result="Saved answer")
+    other = store.create_conversation("other")
+    other_run = start(store, other, "legacy-other")
+    heartbeat_message(store, other)
+    # A heartbeat in another conversation does not justify an empty projection.
+    before = database_contents(store)
+    for identifiers in ([""], ["", run["id"]]):
+        with pytest.raises(StoreError) as error:
+            store.reply_processes(conversation["id"], identifiers)
+        assert error.value.status == 404
+    assert database_contents(store) == before
+    heartbeat_message(store, conversation)
+    before = database_contents(store)
+    for identifiers in (["", "missing"], ["", run["id"], other_run["id"]]):
+        with pytest.raises(StoreError) as error:
+            store.reply_processes(conversation["id"], identifiers)
+        assert error.value.status == 404
+    assert database_contents(store) == before
+
+
+async def test_http_legacy_heartbeat_projection_preserves_batch_auth_and_boundaries(tmp_path):
+    settings, store, conversation = setup(tmp_path)
+    run = start(store, conversation, "http-legacy-owner")
+    store.finish_run(run["id"], "completed", result="Saved answer")
+    other = store.create_conversation("other")
+    other_run = start(store, other, "http-legacy-other")
+    heartbeat_message(store, conversation)
+    app = create_app(settings)
+    before = database_contents(store)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+        path = f"/v1/conversations/{conversation['id']}/reply-processes"
+        assert (await client.get(path, params={"run_ids": ""})).status_code == 401
+        headers = {"Authorization": f"Bearer {TOKEN}"}
+        for identifiers in (["", run["id"]], [""]):
+            response = await client.get(path, headers=headers, params=[("run_ids", value) for value in identifiers])
+            assert response.status_code == 200
+            items = response.json()["items"]
+            assert [item["run_id"] for item in items] == identifiers
+            assert items[0]["status"] == "completed" and items[0]["parts"] == []
+            assert items[0]["final_message_id"] is None and items[0]["cursor"] == 0
+        for identifiers in (["", "missing"], ["", other_run["id"]]):
+            response = await client.get(path, headers=headers, params=[("run_ids", value) for value in identifiers])
+            assert response.status_code == 404
+        assert (await client.get(f"/v1/conversations/{other['id']}/reply-processes", headers=headers,
+                                 params={"run_ids": ""})).status_code == 404
+    assert database_contents(store) == before
 
 
 def test_process_bound_does_not_truncate_final_message_and_ids_remain_stable(tmp_path):
