@@ -43,6 +43,7 @@ yarn-error.*
 /ios
 /android
 /modules/zhixing-vault/android/build/
+/modules/zhixing-updates/android/build/
 
 # Python backend and local personal data
 .venv/

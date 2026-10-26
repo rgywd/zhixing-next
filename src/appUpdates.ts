@@ -35,7 +35,7 @@ export function compareVersions(left: string, right: string): number | null {
   return 0;
 }
 
-export type AppRelease = { version: string; name: string; notes: string; url: string; apkUrl: string | null };
+export type AppRelease = { version: string; name: string; notes: string; url: string; apkUrl: string | null; apkSize: number | null; apkSha256: string | null };
 export type UpdateResult = { kind: "available" | "current" | "pending"; release: AppRelease } | { kind: "unpublished" };
 
 export class UpdateCheckError extends Error {}
@@ -62,9 +62,11 @@ export function readReleaseResponse(value: unknown, currentVersion: string): Upd
   const apkName = `zhixing-next-${version}-arm64.apk`;
   const expectedApk = `${GITHUB_RELEASES_URL}/download/${value.tag_name}/${apkName}`;
   const asset = value.assets.find((item) => object(item) && item.name === apkName && item.state === "uploaded" && typeof item.size === "number" && Number.isSafeInteger(item.size) && item.size > 0 && item.browser_download_url === expectedApk && isReleaseLink(item.browser_download_url));
+  const digest = asset && typeof asset.digest === "string" && asset.digest.length === 71 ? /^sha256:([a-f0-9]{64})$/i.exec(asset.digest) : null;
   const release: AppRelease = {
     version, name: typeof value.name === "string" && value.name.trim() ? value.name.slice(0, 200) : `知行 Next ${version}`,
     notes: typeof value.body === "string" ? value.body.slice(0, 12000) : "", url, apkUrl: asset ? expectedApk : null,
+    apkSize: asset ? asset.size : null, apkSha256: digest ? digest[1].toLowerCase() : null,
   };
   const comparison = compareVersions(version, currentVersion)!;
   return { kind: comparison > 0 ? (release.apkUrl ? "available" : "pending") : "current", release };
@@ -89,18 +91,38 @@ async function readSource(url: string, currentVersion: string, timeoutMs: number
   }, timeoutMs);
   try {
     return await Promise.race([interrupted, (async (): Promise<ReleaseRead> => {
-      const response = await fetcher(url, { headers: { Accept: url === GITHUB_LATEST_RELEASE_API ? "application/vnd.github+json" : "application/json" }, credentials: "omit", signal: controller.signal });
+      const response = await fetcher(url, { headers: url === GITHUB_LATEST_RELEASE_API
+        ? { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Zhixing-Next-App-Updates" }
+        : { Accept: "application/json" }, credentials: "omit", signal: controller.signal });
       assertActive(signal);
       if (timedOut) throw new UpdateCheckError("检查更新超时，请检查网络后重试。");
       if (response.status === 403 || response.status === 429) {
-        if (url === GITHUB_LATEST_RELEASE_API) {
-          const now = (options.now ?? Date.now)();
+        const now = (options.now ?? Date.now)();
+        const exhausted = response.headers.get("x-ratelimit-remaining") === "0";
+        const retryHeader = response.headers.get("retry-after");
+        const retry = retryHeader && /^\d+(?:\.\d+)?$/.test(retryHeader) ? Number(retryHeader) * 1000
+          : retryHeader ? Math.max(Date.parse(retryHeader) - now, 0) : NaN;
+        let limited = response.status === 429 || exhausted || Number.isFinite(retry);
+        // Error bodies are optional evidence, never text to display. Inspect only
+        // a declared small JSON response within the same source deadline.
+        const length = response.headers.get("content-length");
+        if (!limited && length !== null && /^\d+$/.test(length) && Number(length) <= 16_384
+          && response.headers.get("content-type")?.includes("application/json")) {
+          try {
+            const body: unknown = await response.json();
+            limited = object(body) && typeof body.message === "string" && body.message.length <= 1000
+              && /\b(?:rate limit exceeded|secondary rate limit|abuse detection)\b/i.test(body.message);
+          } catch { /* The HTTP status remains useful when error JSON is absent. */ }
+        }
+        assertActive(signal);
+        if (timedOut) throw new UpdateCheckError("检查更新超时，请检查网络后重试。");
+        if (limited && url === GITHUB_LATEST_RELEASE_API) {
           const reset = Number(response.headers.get("x-ratelimit-reset")) * 1000;
-          const retry = Number(response.headers.get("retry-after")) * 1000;
-          const wait = Math.max(reset - now, retry, 60_000);
+          const wait = Math.max(exhausted && Number.isFinite(reset) ? reset - now : 0,
+            Number.isFinite(retry) ? retry : 0, 60_000);
           options.onRateLimit?.(now + Math.min(Number.isFinite(wait) ? Math.max(wait, 15 * 60_000) : 15 * 60_000, 6 * 60 * 60_000));
         }
-        throw new UpdateCheckError("GitHub 暂时限制访问，请稍后重新检查。");
+        throw new UpdateCheckError(limited ? "GitHub 暂时限制请求频率，请稍后重试。" : "GitHub 拒绝访问（403），请稍后重试。");
       }
       if (response.status === 404) return { result: { kind: "unpublished" }, payload: null };
       if (!response.ok) throw new UpdateCheckError(`GitHub 暂时无法访问（${response.status}），请稍后重试。`);
@@ -121,15 +143,24 @@ async function readSource(url: string, currentVersion: string, timeoutMs: number
 }
 
 async function readLatestRelease(currentVersion: string, signal: AbortSignal | undefined, fetcher: typeof fetch, options: ReadOptions): Promise<ReleaseRead> {
-  let failure: unknown;
+  const diagnostics: string[] = [];
+  let failed = false;
   for (const [url, timeout] of options.skipApi ? [[GITHUB_UPDATE_MANIFEST, UPDATE_MANIFEST_TIMEOUT_MS]] as const
-    : [[GITHUB_LATEST_RELEASE_API, UPDATE_API_TIMEOUT_MS], [GITHUB_UPDATE_MANIFEST, UPDATE_MANIFEST_TIMEOUT_MS]] as const) {
+    : [[GITHUB_UPDATE_MANIFEST, UPDATE_MANIFEST_TIMEOUT_MS], [GITHUB_LATEST_RELEASE_API, UPDATE_API_TIMEOUT_MS]] as const) {
+    const source = url === GITHUB_UPDATE_MANIFEST ? "官方更新清单" : "GitHub API";
     try {
       const read = await readSource(url, currentVersion, timeout, signal, fetcher, options);
       if (read.result.kind !== "unpublished") return read;
-    } catch (error) { assertActive(signal); failure ??= error; }
+      diagnostics.push(`${source}：未找到可用正式版本。`);
+    } catch (error) {
+      assertActive(signal); failed = true;
+      diagnostics.push(`${source}：${error instanceof Error ? error.message : "读取失败，请稍后重试。"}`);
+    }
   }
-  if (failure) throw failure;
+  if (failed) {
+    if (options.skipApi) diagnostics.push("GitHub API：仍在限流冷却期，稍后再试。");
+    throw new UpdateCheckError(diagnostics.join("\n"));
+  }
   return { result: { kind: "unpublished" }, payload: null };
 }
 
@@ -149,7 +180,8 @@ function releasePayload(release: AppRelease, payload: unknown) {
   const asset = object(payload) && Array.isArray(payload.assets) ? payload.assets.find((item) => object(item) && item.name === name
     && item.state === "uploaded" && typeof item.size === "number" && Number.isSafeInteger(item.size) && item.size > 0 && item.browser_download_url === release.apkUrl) : null;
   return { tag_name: tag, draft: false, prerelease: false, html_url: release.url, name: release.name, body: release.notes,
-    assets: release.apkUrl && object(asset) ? [{ name, state: "uploaded", size: asset.size, browser_download_url: release.apkUrl }] : [] };
+    assets: release.apkUrl && object(asset) ? [{ name, state: "uploaded", size: release.apkSize, browser_download_url: release.apkUrl,
+      ...(release.apkSha256 ? { digest: `sha256:${release.apkSha256}` } : {}) }] : [] };
 }
 
 export function createAppUpdateChecker(store: UpdateStore, fetcher: typeof fetch = fetch, now: () => number = Date.now) {
