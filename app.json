@@ -2,7 +2,7 @@
   "expo": {
     "name": "知行 Next",
     "slug": "zhixing-next",
-    "version": "0.2.6",
+    "version": "0.2.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
@@ -27,7 +27,10 @@
         "android.permission.SCHEDULE_EXACT_ALARM",
         "android.permission.READ_MEDIA_IMAGES"
       ],
-      "versionCode": 8
+      "versionCode": 9,
+      "permissions": [
+        "android.permission.REQUEST_INSTALL_PACKAGES"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"

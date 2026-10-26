@@ -9,7 +9,7 @@ import { checkGitHubUpdate, compareVersions, createAppUpdateChecker, GITHUB_LATE
 const release = (version = "0.3.0", extras = {}) => ({ tag_name: `v${version}`, draft: false, prerelease: false,
   name: `知行 Next ${version}`, body: "修复与改进", html_url: `${GITHUB_RELEASES_URL}/tag/v${version}`,
   assets: [{ name: `zhixing-next-${version}-arm64.apk`, state: "uploaded", size: 42,
-    browser_download_url: `${GITHUB_RELEASES_URL}/download/v${version}/zhixing-next-${version}-arm64.apk` }], ...extras });
+    browser_download_url: `${GITHUB_RELEASES_URL}/download/v${version}/zhixing-next-${version}-arm64.apk`, digest: `sha256:${"ab".repeat(32)}` }], ...extras });
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 
 test("updates use SemVer precedence including numeric minor versions and prereleases", () => {
@@ -22,13 +22,26 @@ test("updates use SemVer precedence including numeric minor versions and prerele
 test("only a newer stable release with a complete matching ARM64 APK offers an update", () => {
   const next = readReleaseResponse(release("0.10.0"), "0.9.0");
   assert.equal(next.kind, "available"); assert.match(next.release.apkUrl, /\/v0\.10\.0\/zhixing-next-0\.10\.0-arm64\.apk$/);
+  assert.equal(next.release.apkSize, 42); assert.equal(next.release.apkSha256, "ab".repeat(32));
   for (const installed of ["0.3.0", "0.4.0"]) assert.equal(readReleaseResponse(release(), installed).kind, "current");
   assert.equal(readReleaseResponse(release("0.3.0"), "0.3.0-preview.1").kind, "available");
   for (const metadata of [{ draft: true }, { prerelease: true }, { tag_name: "v0.3.0-preview.1" }]) assert.equal(readReleaseResponse(release("0.3.0", metadata), "0.2.2").kind, "unpublished");
   for (const asset of [null, { state: "new" }, { size: 0 }, { name: "zhixing-next-0.3.0-x86_64.apk" }, { browser_download_url: "https://evil.example/download.apk" }, { browser_download_url: `${GITHUB_RELEASES_URL}/download/v0.2.9/zhixing-next-0.3.0-arm64.apk` }]) {
     const value = release(); value.assets = asset ? [{ ...value.assets[0], ...asset }] : [];
     const result = readReleaseResponse(value, "0.2.2"); assert.equal(result.kind, "pending"); assert.equal(result.release.apkUrl, null);
+    assert.equal(result.release.apkSize, null); assert.equal(result.release.apkSha256, null);
   }
+});
+
+test("download integrity metadata comes only from the matching uploaded APK", () => {
+  for (const digest of [undefined, null, "", "ab".repeat(32), `sha512:${"ab".repeat(32)}`, `sha256:${"ab".repeat(31)}`, `sha256:${"zz".repeat(32)}`, `sha256:${"ab".repeat(32)}\n`]) {
+    const value = release(); value.assets[0].digest = digest;
+    value.assets.push({ ...value.assets[0], name: "unrelated.apk", digest: `sha256:${"cd".repeat(32)}` });
+    const result = readReleaseResponse(value, "0.2.2");
+    assert.equal(result.kind, "available"); assert.equal(result.release.apkSha256, null); assert.equal(result.release.apkSize, 42);
+  }
+  const uppercase = release(); uppercase.assets[0].digest = `sha256:${"AB".repeat(32)}`;
+  assert.equal(readReleaseResponse(uppercase, "0.2.2").release.apkSha256, "ab".repeat(32));
 });
 
 test("malformed release information fails explicitly instead of claiming up to date", () => {
@@ -43,42 +56,54 @@ test("release links are HTTPS and stay inside this repository's release paths", 
   for (const url of ["http://github.com/rgywd/zhixing-next/releases", "https://github.com.evil.example/rgywd/zhixing-next/releases", "https://user:secret@github.com/rgywd/zhixing-next/releases", "https://github.com:8443/rgywd/zhixing-next/releases", "https://github.com/rgywd/other/releases", `${GITHUB_RELEASES_URL}/tag/v0.3.0?redirect=bad`, `${GITHUB_RELEASES_URL}/tag/v0.3.0#bad`, `${GITHUB_RELEASES_URL}/tag/%2e%2e`, `${GITHUB_RELEASES_URL}/download/v0.3.0/file.exe`, "file:///tmp/test.apk"]) assert.equal(isReleaseLink(url), false, url);
 });
 
-test("checking calls only the public latest release endpoint without service credentials", async () => {
+test("checking uses the official manifest first without consuming REST quota or sending credentials", async () => {
   const calls = [];
   const result = await checkGitHubUpdate("0.2.2", undefined, async (...args) => { calls.push(args); return new Response(JSON.stringify(release())); });
   assert.equal(result.kind, "available"); assert.equal(calls.length, 1);
-  assert.equal(calls[0][0], GITHUB_LATEST_RELEASE_API); assert.deepEqual(calls[0][1].headers, { Accept: "application/vnd.github+json" });
+  assert.equal(calls[0][0], GITHUB_UPDATE_MANIFEST); assert.deepEqual(calls[0][1].headers, { Accept: "application/json" });
   assert.equal(calls[0][1].credentials, "omit"); assert.ok(calls[0][1].signal instanceof AbortSignal);
 });
 
-test("API rate limits, network errors and malformed payloads automatically use the official manifest", async () => {
+test("manifest failures automatically fall back to the public API with explicit application headers", async () => {
   for (const failure of [403, 429, 500, 404, "network", "invalid-json", "invalid-release"]) {
     const calls = [];
     const result = await checkGitHubUpdate("0.2.2", undefined, async (url, options) => {
       calls.push([url, options]);
-      if (url === GITHUB_UPDATE_MANIFEST) return new Response(JSON.stringify(release()));
+      if (url === GITHUB_LATEST_RELEASE_API) return new Response(JSON.stringify(release()));
       if (typeof failure === "number") return new Response("", { status: failure });
       if (failure === "network") throw new TypeError("offline");
       return new Response(failure === "invalid-json" ? "nope" : JSON.stringify(release("0.3.0", { html_url: "https://evil.example" })));
     });
     assert.equal(result.kind, "available"); assert.equal(calls.length, 2);
-    assert.equal(calls[1][0], GITHUB_UPDATE_MANIFEST); assert.equal(calls[1][1].headers.Accept, "application/json");
+    assert.equal(calls[0][0], GITHUB_UPDATE_MANIFEST); assert.equal(calls[1][0], GITHUB_LATEST_RELEASE_API);
+    assert.deepEqual(calls[1][1].headers, { Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "Zhixing-Next-App-Updates" });
     assert.equal(calls[1][1].credentials, "omit"); assert.equal("Authorization" in calls[1][1].headers, false);
   }
 });
 
 test("no release needs both official sources to agree; total failures do not claim current", async () => {
   assert.deepEqual(await checkGitHubUpdate("0.2.2", undefined, async () => new Response("", { status: 404 })), { kind: "unpublished" });
-  for (const code of [403, 429]) await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => new Response("", { status: code })), /限制访问/);
+  for (const code of [403, 429]) await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => new Response("", { status: code })), /拒绝访问|限制请求频率/);
   await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => new Response("", { status: 500 })), /500/);
   await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => new Response("invalid-json")), /未能获取/);
   await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async () => { throw new TypeError("network failed"); }), /网络/);
-  await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async (url) => new Response("", { status: url === GITHUB_LATEST_RELEASE_API ? 403 : 404 })), /限制访问/);
+  await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async (url) => new Response("", { status: url === GITHUB_LATEST_RELEASE_API ? 403 : 404 })), /官方更新清单.*未找到[\s\S]*GitHub API.*拒绝访问/);
+});
+
+test("both source failures remain visible and HTTP403 alone is not called a rate limit", async () => {
+  await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async (url) => {
+    if (url === GITHUB_UPDATE_MANIFEST) throw new TypeError("network failure");
+    return new Response("", { status: 403, headers: { "x-ratelimit-remaining": "20" } });
+  }), (error) => /官方更新清单.*网络/.test(error.message) && /GitHub API.*拒绝访问（403）/.test(error.message) && !/限制请求频率/.test(error.message));
+  await assert.rejects(checkGitHubUpdate("0.2.2", undefined, async (url) => {
+    if (url === GITHUB_UPDATE_MANIFEST) return new Response("not-json");
+    return new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } });
+  }), /官方更新清单.*未能获取[\s\S]*GitHub API.*限制请求频率/);
 });
 
 test("the fallback applies the same official release and APK validation", async () => {
   for (const extras of [{ html_url: "https://evil.example/releases" }, { assets: [] }, { assets: [{ ...release().assets[0], browser_download_url: "https://evil.example/app.apk" }] }]) {
-    const fetcher = async (url) => url === GITHUB_LATEST_RELEASE_API ? new Response("", { status: 429 }) : new Response(JSON.stringify(release("0.3.0", extras)));
+    const fetcher = async (url) => url === GITHUB_UPDATE_MANIFEST ? new Response("", { status: 429 }) : new Response(JSON.stringify(release("0.3.0", extras)));
     if (extras.html_url) await assert.rejects(checkGitHubUpdate("0.2.2", undefined, fetcher));
     else { const result = await checkGitHubUpdate("0.2.2", undefined, fetcher); assert.equal(result.kind, "pending"); assert.equal(result.release.apkUrl, null); }
   }
@@ -102,14 +127,14 @@ function timedUpdates() {
 }
 const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
 
-test("API timeout leaves a separate full deadline for a successful manifest", async () => {
+test("manifest timeout leaves a separate full deadline for a successful API fallback", async () => {
   const { exports, timers } = timedUpdates(), old = deferred(), calls = [];
   const checking = exports.checkGitHubUpdate("0.2.2", undefined, async (url, options) => {
     calls.push({ url, signal: options.signal });
-    return url === GITHUB_LATEST_RELEASE_API ? old.promise : new Response(JSON.stringify(release()));
+    return url === GITHUB_UPDATE_MANIFEST ? old.promise : new Response(JSON.stringify(release()));
   });
-  assert.equal(timers[0].duration, UPDATE_API_TIMEOUT_MS); timers[0].callback(); await settle();
-  assert.equal(calls[0].signal.aborted, true); assert.equal(timers[1].duration, UPDATE_MANIFEST_TIMEOUT_MS);
+  assert.equal(timers[0].duration, UPDATE_MANIFEST_TIMEOUT_MS); timers[0].callback(); await settle();
+  assert.equal(calls[0].signal.aborted, true); assert.equal(timers[1].duration, UPDATE_API_TIMEOUT_MS);
   assert.equal((await checking).kind, "available"); assert.ok(timers.every((timer) => timer.cleared));
   old.resolve(new Response(JSON.stringify(release("0.2.2"))));
 });
@@ -141,6 +166,8 @@ test("successful checks persist only verified bounded public metadata and surviv
   const restarted = createAppUpdateChecker(store, async () => { calls++; throw new TypeError("offline"); }, () => now);
   const saved = await restarted.check("0.2.2"); assert.equal(saved.source, "cache"); assert.equal(saved.offline, true);
   assert.equal(saved.verifiedAt, timeStart); assert.equal(saved.result.release.apkUrl, release().assets[0].browser_download_url); assert.equal(calls, 3);
+  assert.equal(saved.result.release.apkSize, 42); assert.equal(saved.result.release.apkSha256, "ab".repeat(32));
+  assert.equal(JSON.parse(store.entries.get(UPDATE_CACHE_KEY)).release.assets[0].digest, `sha256:${"ab".repeat(32)}`);
   const upgraded = await restarted.check("0.3.0"); assert.equal(upgraded.result.kind, "current"); assert.equal(upgraded.source, "cache");
 });
 
@@ -156,20 +183,56 @@ test("recent cache avoids repeated REST quota use; forced checks and expired TTL
 });
 
 test("API cooldown survives restart and forced checks still fetch the official manifest", async () => {
-  let now = timeStart; const calls = [], store = updateStore();
-  const fetcher = async (url) => { calls.push(url); return url === GITHUB_LATEST_RELEASE_API ? new Response("", { status: 429, headers: { "x-ratelimit-reset": String((timeStart + 3_600_000) / 1000) } }) : new Response(JSON.stringify(release())); };
-  const first = createAppUpdateChecker(store, fetcher, () => now); assert.equal((await first.check("0.2.2")).source, "network");
+  let now = timeStart, manifestOnline = false; const calls = [], store = updateStore();
+  const fetcher = async (url) => { calls.push(url);
+    if (url === GITHUB_LATEST_RELEASE_API) return new Response("", { status: 429, headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": String((timeStart + 3_600_000) / 1000) } });
+    if (!manifestOnline) throw new TypeError("manifest temporarily offline");
+    return new Response(JSON.stringify(release())); };
+  const first = createAppUpdateChecker(store, fetcher, () => now); await assert.rejects(first.check("0.2.2"), /限制请求频率/);
+  manifestOnline = true;
   const restarted = createAppUpdateChecker(store, fetcher, () => now); await restarted.check("0.2.2", undefined, true);
-  assert.deepEqual(calls, [GITHUB_LATEST_RELEASE_API, GITHUB_UPDATE_MANIFEST, GITHUB_UPDATE_MANIFEST]);
-  now += 3_600_001; await restarted.check("0.2.2", undefined, true); assert.equal(calls[3], GITHUB_LATEST_RELEASE_API);
+  assert.deepEqual(calls, [GITHUB_UPDATE_MANIFEST, GITHUB_LATEST_RELEASE_API, GITHUB_UPDATE_MANIFEST]);
+  now += 3_600_001; manifestOnline = false; await restarted.check("0.2.2", undefined, true);
+  assert.equal(calls[4], GITHUB_LATEST_RELEASE_API);
 });
 
 test("first-install rate limits can recover after restart without a previously cached release", async () => {
   const store = updateStore(); let online = false; const calls = [];
-  const fetcher = async (url) => { calls.push(url); if (url === GITHUB_LATEST_RELEASE_API) return new Response("", { status: 403 }); if (!online) throw new Error("offline"); return new Response(JSON.stringify(release())); };
+  const fetcher = async (url) => { calls.push(url); if (url === GITHUB_LATEST_RELEASE_API) return new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } }); if (!online) throw new Error("offline"); return new Response(JSON.stringify(release())); };
   await assert.rejects(createAppUpdateChecker(store, fetcher, () => timeStart).check("0.2.2"));
   online = true; const checked = await createAppUpdateChecker(store, fetcher, () => timeStart + 1).check("0.2.2");
-  assert.equal(checked.result.kind, "available"); assert.deepEqual(calls, [GITHUB_LATEST_RELEASE_API, GITHUB_UPDATE_MANIFEST, GITHUB_UPDATE_MANIFEST]);
+  assert.equal(checked.result.kind, "available"); assert.deepEqual(calls, [GITHUB_UPDATE_MANIFEST, GITHUB_LATEST_RELEASE_API, GITHUB_UPDATE_MANIFEST]);
+});
+
+test("only actual rate limit evidence creates a persisted API cooldown", async () => {
+  const message = JSON.stringify({ message: "You have exceeded a secondary rate limit. private-detail-never-display" });
+  for (const response of [
+    () => new Response("", { status: 403, headers: { "x-ratelimit-remaining": "0" } }),
+    () => new Response("", { status: 403, headers: { "retry-after": "120" } }),
+    () => new Response("", { status: 429 }),
+    () => new Response(message, { status: 403, headers: { "content-type": "application/json", "content-length": String(message.length) } }),
+  ]) {
+    const store = updateStore(), calls = [];
+    const fetcher = async (url) => { calls.push(url); if (url === GITHUB_UPDATE_MANIFEST) throw new TypeError("offline"); return response(); };
+    await assert.rejects(createAppUpdateChecker(store, fetcher, () => timeStart).check("0.2.2"), (error) => /限制请求频率/.test(error.message) && !/private-detail/.test(error.message));
+    assert.ok(JSON.parse(store.entries.get(UPDATE_CACHE_KEY)).apiRetryAt > timeStart);
+    await assert.rejects(createAppUpdateChecker(store, fetcher, () => timeStart + 1).check("0.2.2"), /官方更新清单.*网络[\s\S]*GitHub API.*冷却期/);
+    assert.deepEqual(calls, [GITHUB_UPDATE_MANIFEST, GITHUB_LATEST_RELEASE_API, GITHUB_UPDATE_MANIFEST]);
+  }
+  const store = updateStore(), calls = [];
+  const fetcher = async (url) => { calls.push(url); if (url === GITHUB_UPDATE_MANIFEST) throw new TypeError("offline");
+    return new Response("", { status: 403, headers: { "x-ratelimit-remaining": "20", "retry-after": "invalid" } }); };
+  for (let attempt = 0; attempt < 2; attempt++) await assert.rejects(createAppUpdateChecker(store, fetcher, () => timeStart).check("0.2.2"), /拒绝访问（403）/);
+  assert.equal(JSON.parse(store.entries.get(UPDATE_CACHE_KEY)).apiRetryAt, 0);
+  assert.equal(calls.filter((url) => url === GITHUB_LATEST_RELEASE_API).length, 2);
+});
+
+test("older caches without a checksum remain readable without inventing download verification", async () => {
+  const payload = release(); delete payload.assets[0].digest;
+  const store = updateStore(JSON.stringify({ schema: 1, apiRetryAt: 0, verifiedAt: timeStart - 100, release: payload }));
+  const checked = await createAppUpdateChecker(store, async () => { assert.fail("fresh cache should not fetch"); }, () => timeStart).check("0.2.2");
+  assert.equal(checked.source, "cache"); assert.equal(checked.result.release.apkSize, 42);
+  assert.equal(checked.result.release.apkSha256, null);
 });
 
 test("damaged, unsafe or future caches are ignored and valid network metadata replaces them", async () => {
@@ -282,11 +345,14 @@ test("a browser failure after the sheet closes cannot leak into the next check",
 });
 
 const walk = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)];
-function updateScreen(state, os = "android") {
+function updateScreen(state, os = "android", apkState = { phase: "idle" }) {
   if (state.status === "done") state = { verifiedAt: timeStart, source: "network", offline: false, cacheSaved: true, ...state };
   const calls = [], exports = {}, updater = { visible: true, state, opening: false, linkError: "", check(force) { calls.push(force ? "force-check" : "check"); }, close() { calls.push("close"); }, openLink(url) { calls.push(url); } };
+  const apk = { state: apkState, start(release) { calls.push({ action: "apk-start", release }); },
+    cancel() { calls.push("cancel-apk"); }, install() { calls.push("apk-install"); }, openSettings() { calls.push("apk-settings"); } };
   const dependencies = { "react/jsx-runtime": jsxRuntime, "react-native": { ActivityIndicator: "ActivityIndicator", Platform: { OS: os }, ScrollView: "ScrollView", Text: "Text", View: "View" },
     "../package.json": { version: "0.2.2" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, "./appUpdates": { GITHUB_RELEASES_URL }, "./useAppUpdate": { useAppUpdate: () => updater },
+    "./apkUpdate": { hasVerifiedApkMetadata: (value) => value.apkSha256 === "ab".repeat(32) && value.apkSize === 42 }, "./useApkUpdate": { useApkUpdate: () => apk },
     "./ui": { useUi: () => ({ s: {}, colors: {} }), ...Object.fromEntries(["ActionRow", "Button", "SettingsGroup"].map((key) => [key, key])) } };
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/AppUpdateSettings.tsx", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText,
     { exports, require: (name) => { assert.ok(name in dependencies, name); return dependencies[name]; } });
@@ -298,17 +364,53 @@ test("settings results provide only relevant update and retry actions", () => {
   assert.equal(checking.nodes.find((node) => node.type === "ActionRow").props.disabled, true);
   assert.equal(checking.nodes.filter((node) => node.type === "Button").length, 0);
   const available = updateScreen({ status: "done", result: readReleaseResponse(release(), "0.2.2") });
-  available.nodes.find((node) => node.type === "Button" && node.props.children === "下载 Android 安装包").props.onPress();
-  assert.equal(available.calls[0], release().assets[0].browser_download_url);
+  available.nodes.find((node) => node.type === "Button" && node.props.children === "下载并安装更新").props.onPress();
+  assert.equal(available.calls[0].action, "apk-start");
+  assert.deepEqual(available.calls[0].release, readReleaseResponse(release(), "0.2.2").release);
+  assert.equal(available.calls.some((call) => typeof call === "string" && call.endsWith(".apk")), false);
+  available.nodes.find((node) => node.type === "Button" && node.props.children === "查看 GitHub 发布页").props.onPress();
+  assert.equal(available.calls[1], release().html_url);
   const ios = updateScreen({ status: "done", result: readReleaseResponse(release(), "0.2.2") }, "ios");
-  assert.equal(ios.nodes.some((node) => node.type === "Button" && node.props.children === "下载 Android 安装包"), false);
+  assert.equal(ios.nodes.some((node) => node.type === "Button" && node.props.children === "下载并安装更新"), false);
   const current = updateScreen({ status: "done", result: readReleaseResponse(release("0.2.2"), "0.2.2") });
-  assert.ok(current.nodes.find((node) => node.type === "Button" && node.props.children === "下载 Android 安装包"));
-  current.nodes.find((node) => node.type === "Button" && node.props.children === "重新检查").props.onPress(); assert.equal(current.calls[0], "force-check");
+  assert.ok(current.nodes.find((node) => node.type === "Button" && node.props.children === "重新下载安装当前版本"));
+  current.nodes.find((node) => node.type === "Button" && node.props.children === "重新检查").props.onPress();
+  assert.deepEqual(current.calls, ["cancel-apk", "force-check"]);
   for (const state of [{ status: "error", error: "断网" }, { status: "done", result: { kind: "unpublished" } }, { status: "done", result: readReleaseResponse(release("0.3.0", { assets: [] }), "0.2.2") }]) {
     const page = updateScreen(state); assert.ok(page.nodes.find((node) => node.type === "Button" && node.props.children === "重新检查"));
-    assert.equal(page.nodes.some((node) => node.type === "Button" && node.props.children === "下载 Android 安装包"), false);
+    assert.equal(page.nodes.some((node) => node.type === "Button" && /下载安装|下载并安装/.test(node.props.children)), false);
   }
+});
+
+test("settings show permission recovery and cancellable download progress without opening a browser", () => {
+  const state = { status: "done", result: readReleaseResponse(release(), "0.2.2") };
+  const permission = updateScreen(state, "android", { phase: "permission" });
+  permission.nodes.find((node) => node.type === "Button" && node.props.children === "打开安装权限设置").props.onPress();
+  permission.nodes.find((node) => node.type === "Button" && node.props.children === "继续安装").props.onPress();
+  assert.deepEqual(permission.calls, ["apk-settings", "apk-install"]);
+  assert.equal(permission.nodes.some((node) => node.type === "Button" && node.props.children === "下载并安装更新"), false);
+  permission.nodes.find((node) => node.type === "BottomSheet").props.onClose();
+  assert.deepEqual(permission.calls.slice(2), ["cancel-apk", "close"]);
+  const downloading = updateScreen(state, "android", { phase: "downloading", written: 21, total: 42 });
+  const progress = downloading.nodes.find((node) => node.type === "Text" && node.props.accessibilityRole === "progressbar");
+  assert.equal(progress.props.accessibilityValue.now, 21); assert.equal(progress.props.accessibilityValue.max, 42);
+  assert.equal(downloading.nodes.some((node) => node.type === "Button" && node.props.children === "重新检查"), false);
+  downloading.nodes.find((node) => node.type === "Button" && node.props.children === "取消下载").props.onPress();
+  assert.deepEqual(downloading.calls, ["cancel-apk"]);
+});
+
+test("settings prevent dismissal during verification and never claim installer handoff completed installation", () => {
+  const state = { status: "done", result: readReleaseResponse(release(), "0.2.2") };
+  const verifying = updateScreen(state, "android", { phase: "verifying" });
+  assert.equal(verifying.nodes.some((node) => node.type === "Button" && /取消下载|继续安装|下载并安装|重新检查/.test(node.props.children)), false);
+  verifying.nodes.find((node) => node.type === "BottomSheet").props.onClose(); assert.deepEqual(verifying.calls, []);
+  const handedOff = updateScreen(state, "android", { phase: "handed-off" });
+  const text = handedOff.nodes.filter((node) => node.type === "Text").map((node) => JSON.stringify(node.props.children)).join(" ");
+  assert.match(text, /已交给 Android 系统/); assert.match(text, /确认安装/); assert.doesNotMatch(text, /安装成功|更新成功/);
+  const noDigest = release(); delete noDigest.assets[0].digest;
+  const unverified = updateScreen({ status: "done", result: readReleaseResponse(noDigest, "0.2.2") });
+  assert.equal(unverified.nodes.some((node) => node.type === "Button" && node.props.children === "下载并安装更新"), false);
+  assert.match(unverified.nodes.filter((node) => node.type === "Text").map((node) => JSON.stringify(node.props.children)).join(" "), /缺少.*校验信息/);
 });
 
 test("cached results expose the verified APK and timestamp without claiming to be live latest", () => {
@@ -318,7 +420,7 @@ test("cached results expose the verified APK and timestamp without claiming to b
     const text = page.nodes.filter((node) => node.type === "Text").map((node) => JSON.stringify(node.props.children)).join(" ");
     assert.match(text, /核验时间/); assert.match(text, /本机缓存/); assert.doesNotMatch(text, /当前版本无需更新/);
     if (offline) assert.match(text, /可能已有新版本/);
-    assert.ok(page.nodes.find((node) => node.type === "Button" && node.props.children === "下载 Android 安装包"));
+    assert.ok(page.nodes.find((node) => node.type === "Button" && node.props.children === "重新下载安装当前版本"));
   }
 });
 
