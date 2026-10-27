@@ -244,6 +244,17 @@ test("attachment-only steer binds its initial target and that binding survives d
   const restored = harness({ initial: saved, preference: "queue" }); restored.setRuns([run("r2")]); value = await restored.ready();
   assert.equal(value.target, "r1"); await value.send(); assert.equal(restored.calls.filter((v) => v.method === "POST").length, 0); assert.match(restored.render().error, /原目标已经结束/); restored.unmount();
 });
+test("sequential photo attachments preserve draft text, survive restoration and send together without duplicates", async () => {
+  const app = harness({ initial: { text: "帮我整理这两张截图", pending: null } }); app.setRuns([]);
+  let value = await app.ready();
+  const photos = [{ id: "photo-first", mime_type: "image/jpeg" }, { id: "photo-second", mime_type: "image/png" }];
+  for (const resource of photos) await value.attach(resource);
+  await value.attach(photos[0]);
+  const saved = plain(app.stored()); assert.equal(saved.text, "帮我整理这两张截图"); assert.deepEqual(saved.attachments, photos); app.unmount();
+  const restored = harness({ initial: saved }); restored.setRuns([]); value = await restored.ready(); await value.send();
+  const posted = restored.calls.find((call) => call.method === "POST").body;
+  assert.equal(posted.content, saved.text); assert.deepEqual(plain(posted.attachments), photos.map((item) => item.id)); restored.unmount();
+});
 test("legacy text and text begun before preferences load stay queued after the default becomes steer", async () => {
   const legacy = harness({ initial: { text: "Legacy unsent text", pending: null }, preference: "steer" });
   let value = await legacy.ready(); assert.equal(value.intent, "queue"); await value.send();
