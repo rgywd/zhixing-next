@@ -8,7 +8,7 @@
 
 照片使用实际缓存文件格式确定上传扩展名，避免原始 HEIC 名称与 JPEG 字节不一致。PNG/JPEG/WebP/GIF 在大小和像素限制内直接上传；其他照片格式转为 JPEG，超过服务器 2400 万像素或 20 MiB 的照片先按长边 4096 像素适配，转换后仍超过上限则逐项提示失败。转换只处理缓存副本，不修改系统相册原件；文件入口保持原始文件上传语义。模型能否理解图片仍取决于所选模型的图片输入能力。
 
-原生接入依据 [Expo SDK 57 ImagePicker](https://docs.expo.dev/versions/v57.0.0/sdk/imagepicker/) 与 [ImageManipulator](https://docs.expo.dev/versions/v57.0.0/sdk/imagemanipulator/) 官方接口。只开放照片选择，不增加拍照或录音入口；配置关闭这两个权限，保留 Android 全相册读取权限的既有阻止项。新增原生依赖需要重建安装包，本改动不创建正式标签、GitHub Release 或生产部署。
+原生接入依据 [Expo SDK 57 ImagePicker](https://docs.expo.dev/versions/v57.0.0/sdk/imagepicker/) 与 [ImageManipulator](https://docs.expo.dev/versions/v57.0.0/sdk/imagemanipulator/) 官方接口。只开放照片选择，不增加拍照或录音入口；配置关闭这两个权限，保留 Android 全相册读取权限的既有阻止项。新增原生依赖需要重建安装包，正式客户端从 [0.2.8](RELEASE-0.2.8.md) 纳入；本次不改后端或生产部署。
 
 ## 验证
 
@@ -18,4 +18,4 @@
 
 本地门禁为 TypeScript、ESLint、全部移动测试及 Android/iOS JS bundle。额外执行的 `expo install --check` 提示仓库原有 Expo、日历、通知等七个依赖存在更新补丁；本次新增图片依赖符合 SDK 57，未扩大到整体升级。
 
-原生验收使用隔离本地 API 与合成图片，没有启动模型 worker，也没有请求生产服务。调试宿主临时显式设置 `useDevSupport = BuildConfig.DEBUG` 并通过 Metro 加载当前业务源码，绕过当前 SDK 生成模板的调试加载问题；这些测试配置不进入提交。iOS 原生、HEIC 的真实 iPhone 选择、实体 Android 手机及正式签名安装包尚未验收。本地 API 测试不代表真实视觉模型验收；已有 0.2.7 APK 尚不包含本改动。
+上述原生验收使用隔离本地 API 与合成图片，没有启动模型 worker，也没有请求生产服务。调试宿主临时显式设置 `useDevSupport = BuildConfig.DEBUG` 并通过 Metro 加载当前业务源码，绕过当前 SDK 生成模板的调试加载问题；这些测试配置不进入提交。本地 API 测试不代表真实视觉模型验收。iOS 原生、HEIC 的真实 iPhone 选择和实体 Android 手机未覆盖；正式签名 APK 的构建、下载与覆盖升级另以 [0.2.8 发布回执](RELEASE-0.2.8.md) 为准。
