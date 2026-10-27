@@ -9,7 +9,7 @@ import { lightColors, radius, space } from "../src/theme.ts";
 
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value));
-const photo = (name, extra = {}) => ({ uri: `file:///cache/${name}`, fileName: name, mimeType: "image/jpeg", width: 1200, height: 900, ...extra });
+const photo = (name, extra = {}) => ({ uri: `file:///cache/${name}`, fileName: name, name, mimeType: "image/jpeg", width: 1200, height: 900, ...extra });
 const picked = (...assets) => ({ canceled: false, assets });
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function load(file, dependencies, globals = {}) {
@@ -72,19 +72,19 @@ function mount(overrides = {}) {
     unmount() { state.forEach((item) => item?.cleanup?.()); }, timers };
 }
 
-test("photo picker uses remaining attachment slots, cancel is harmless, and duplicate opens are blocked", async () => {
+test("file picker cancel is harmless and duplicate opens are blocked", async () => {
   const result = deferred(); const app = mount({ pick: () => result.promise, props: { attachmentIds: ["existing"] } });
-  const choose = app.control("选择照片"); choose.props.onPress(); choose.props.onPress();
+  const choose = app.control("选择手机文件"); choose.props.onPress(); choose.props.onPress();
   assert.equal(app.picks.length, 1);
-  assert.deepEqual(plain(app.picks[0].options), { mediaTypes: ["images"], allowsMultipleSelection: true, selectionLimit: 7, orderedSelection: true, allowsEditing: false, quality: 1, preferredAssetRepresentationMode: "compatible" });
+  assert.deepEqual(plain(app.picks[0].options), { copyToCacheDirectory: true, multiple: true });
   result.resolve({ canceled: true, assets: null }); await settle();
-  assert.equal(app.control("选择照片").props.disabled, false); assert.equal(app.uploads().length, 0); assert.equal(app.attaches.length, 0);
+  assert.equal(app.control("选择手机文件").props.disabled, false); assert.equal(app.uploads().length, 0); assert.equal(app.attaches.length, 0);
   app.unmount();
 });
 
-test("multiple photos preview, remove, upload in order and attach without individual confirmation", async () => {
+test("file selection previews, removes and uploads files in order", async () => {
   const app = mount({ pick: () => picked(photo("first.jpg"), photo("remove.jpg"), photo("last.jpg")) });
-  await app.press("选择照片"); assert.equal(app.render().filter((node) => node.type === "Image").length, 3);
+  await app.press("选择手机文件"); assert.equal(app.render().filter((node) => node.type === "Image").length, 3);
   await app.press("移除 remove.jpg"); await app.press("上传 2 份并加入草稿");
   assert.deepEqual(app.attaches.map((item) => item.name), ["first.jpg", "last.jpg"]);
   assert.equal(app.render().filter((node) => node.type === "Image").length, 0);
@@ -99,7 +99,7 @@ test("partial failure continues the batch and retries only the failed upload wit
   let failures = 1;
   const app = mount({ pick: () => picked(photo("first.jpg"), photo("failed.jpg"), photo("last.jpg")),
     upload(call) { if (call.url.includes("failed.jpg") && failures-- > 0) return Promise.reject(new Error("网络中断")); } });
-  await app.press("选择照片"); const send = app.control("上传 3 份并加入草稿"); send.props.onPress(); send.props.onPress(); await settle();
+  await app.press("选择手机文件"); const send = app.control("上传 3 份并加入草稿"); send.props.onPress(); send.props.onPress(); await settle();
   assert.deepEqual(app.attaches.map((item) => item.name), ["first.jpg", "last.jpg"]); assert.equal(app.uploads().length, 3);
   assert.ok(app.control("网络中断")); await app.press("重试剩余资料");
   assert.equal(app.uploads().length, 4); assert.equal(app.uploads()[1].url, app.uploads()[3].url);
@@ -110,10 +110,10 @@ test("uploaded receipt survives draft save failure and retry does not reupload o
   let failures = 1; const attached = [];
   const app = mount({ pick: () => picked(photo("saved.jpg")), props: { attachmentIds: Array.from({ length: 7 }, (_, i) => `old-${i}`),
     async attach(resource) { app.props.attachmentIds = [...new Set([...app.props.attachmentIds, resource.id])]; if (failures-- > 0) throw new Error("草稿存储失败"); attached.push(resource); } } });
-  await app.press("选择照片"); await app.press("上传 1 份并加入草稿");
+  await app.press("选择手机文件"); await app.press("上传 1 份并加入草稿");
   assert.ok(app.control("已上传，加入草稿失败：草稿存储失败")); assert.ok(!app.control("重试剩余资料").props.disabled);
   await app.press("重试剩余资料"); assert.equal(app.uploads().length, 1); assert.equal(attached.length, 1);
-  assert.equal(app.control("选择照片").props.disabled, true); app.unmount();
+  assert.equal(app.control("选择手机文件").props.disabled, true); app.unmount();
 });
 
 test("file multiselect rejects an overflowing selection and skips oversized files individually", async () => {
@@ -124,20 +124,20 @@ test("file multiselect rejects an overflowing selection and skips oversized file
   assert.ok(app.control("每条消息最多 8 份资料，本次还可以选择 1 份，请减少后重新选择。")); assert.equal(app.uploads().length, 0);
   app.props.attachmentIds = []; await app.press("选择手机文件"); assert.ok(app.control("huge.pdf：单个文件最多 20 MiB，请选择较小的文件。"));
   await app.press("上传 1 份并加入草稿"); assert.equal(app.attaches[0].name, "one.txt");
-  assets = [photo("locked.jpg")]; app.props.canAttach = false; assert.equal(app.control("选择照片").props.disabled, true); app.unmount();
+  assets = [photo("locked.jpg")]; app.props.canAttach = false; assert.equal(app.control("选择手机文件").props.disabled, true); app.unmount();
 });
 
-test("picker errors and single photo preparation failures preserve usable selections", async () => {
+test("file picker and read failures preserve usable selections", async () => {
   let denied = true;
   const app = mount({ pick() { if (denied) throw new Error("无法打开相册"); return picked(photo("bad.heic"), photo("good.jpg")); },
-    prepare: async (asset) => { if (asset.fileName === "bad.heic") throw new Error("照片无法读取"); return { uri: asset.uri, name: asset.fileName, size: 1024, image: true }; } });
-  await app.press("选择照片"); assert.ok(app.control("无法打开相册")); denied = false; await app.press("选择照片");
-  assert.ok(app.control("bad.heic：照片无法读取")); await app.press("上传 1 份并加入草稿"); assert.equal(app.attaches[0].name, "good.jpg"); app.unmount();
+    size: (uri) => { if (uri.endsWith("bad.heic")) throw new Error("文件无法读取"); return 1024; } });
+  await app.press("选择手机文件"); assert.ok(app.control("无法打开相册")); denied = false; await app.press("选择手机文件");
+  assert.ok(app.control("bad.heic：文件无法读取")); await app.press("上传 1 份并加入草稿"); assert.equal(app.attaches[0].name, "good.jpg"); app.unmount();
 });
 
 test("closing during upload aborts transport, suppresses late attach and stops the remaining batch", async () => {
   const response = deferred(); const app = mount({ pick: () => picked(photo("first.jpg"), photo("second.jpg")), upload: () => response.promise });
-  await app.press("选择照片"); await app.press("上传 2 份并加入草稿"); assert.equal(app.uploads().length, 1);
+  await app.press("选择手机文件"); await app.press("上传 2 份并加入草稿"); assert.equal(app.uploads().length, 1);
   app.unmount(); assert.equal(app.uploads()[0].signal.aborted, true);
   response.resolve({ ok: true, json: async () => ({ id: "late" }) }); await settle();
   assert.equal(app.attaches.length, 0); assert.equal(app.uploads().length, 1); assert.equal(app.timers.size, 0);
@@ -145,15 +145,15 @@ test("closing during upload aborts transport, suppresses late attach and stops t
 
 test("switching conversations ignores a late picker result and clears the old selection", async () => {
   const result = deferred(); const app = mount({ pick: () => result.promise });
-  await app.press("选择照片"); app.props.conversationId = "another"; app.render(); result.resolve(picked(photo("old.jpg"))); await settle();
+  await app.press("选择手机文件"); app.props.conversationId = "another"; app.render(); result.resolve(picked(photo("old.jpg"))); await settle();
   assert.equal(app.render().filter((node) => node.type === "Image").length, 0); assert.equal(app.attaches.length, 0);
-  assert.equal(app.control("选择照片").props.disabled, false); app.unmount();
+  assert.equal(app.control("选择手机文件").props.disabled, false); app.unmount();
 });
 
 test("a timed-out transport that resolves late cannot attach; retry retains the original upload ID", async () => {
   const response = deferred(); let first = true;
   const app = mount({ pick: () => picked(photo("timeout.jpg")), upload() { if (first) { first = false; return response.promise; } } });
-  await app.press("选择照片"); await app.press("上传 1 份并加入草稿");
+  await app.press("选择手机文件"); await app.press("上传 1 份并加入草稿");
   [...app.timers.values()].forEach((timer) => timer()); assert.equal(app.uploads()[0].signal.aborted, true);
   response.resolve({ ok: true, json: async () => ({ id: "late" }) }); await settle(); assert.equal(app.attaches.length, 0);
   assert.ok(app.control("上传超时，请重试。")); await app.press("重试剩余资料");

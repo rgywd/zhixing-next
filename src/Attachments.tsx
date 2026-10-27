@@ -5,7 +5,8 @@ import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Connection, Resource } from "./api";
 
 import { shareResource } from "./resources";
-import { ResourceImage, ResourcePreview } from "./ResourcePreview";
+import { ResourcePreview } from "./ResourcePreview";
+import { MessagePhotos } from "./PhotoAttachments";
 
 export function Attachments({ connection, items = [], remove }: {
   connection: Connection;
@@ -17,14 +18,15 @@ export function Attachments({ connection, items = [], remove }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   if (!items.length) return null;
+  const photos = items.filter((item) => item.mime_type.startsWith("image/"));
+  const files = items.filter((item) => !item.mime_type.startsWith("image/"));
   return <>
-    <ScrollView horizontal style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 8, paddingVertical: 6 }}>
-      {items.map((item) => <View key={item.id} style={{ padding: 8, borderRadius: 12, backgroundColor: colors.blueSoft, maxWidth: 170, minWidth: 130, gap: 4 }}>
-        {item.mime_type.startsWith("image/") ? <Pressable accessibilityRole="button" accessibilityLabel={`查看图片 ${item.name}`} onPress={() => setSelected(item)}>
-          <ResourceImage connection={connection} resource={item} style={{ width: 140, height: 95 }} />
-        </Pressable> : <Pressable accessibilityRole="button" accessibilityLabel={`打开文件 ${item.name}`} onPress={() => setSelected(item)} style={{ minHeight: 44, justifyContent: "center" }}>
+    {photos.length ? <MessagePhotos connection={connection} items={photos} /> : null}
+    {files.length ? <ScrollView horizontal style={{ flexGrow: 0 }} contentContainerStyle={{ gap: 8, paddingVertical: 6 }}>
+      {files.map((item) => <View key={item.id} style={{ padding: 8, borderRadius: 12, backgroundColor: colors.blueSoft, maxWidth: 170, minWidth: 130, gap: 4 }}>
+        <Pressable accessibilityRole="button" accessibilityLabel={`打开文件 ${item.name}`} onPress={() => setSelected(item)} style={{ minHeight: 44, justifyContent: "center" }}>
           <Ionicons name="document-text-outline" size={22} color={colors.blue} />
-        </Pressable>}
+        </Pressable>
         <Pressable accessibilityRole="button" accessibilityLabel={`查看附件 ${item.name}`} onPress={() => setSelected(item)} style={{ minHeight: 44, justifyContent: "center" }}>
           <Text numberOfLines={2} style={s.muted}>{item.name}</Text>
         </Pressable>
@@ -33,7 +35,7 @@ export function Attachments({ connection, items = [], remove }: {
           void shareResource(connection, item).catch((e) => setError(humanError(e))).finally(() => setBusy(false));
         }}>下载分享</ActionLink>}
       </View>)}
-    </ScrollView>
+    </ScrollView> : null}
     {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
     <ResourcePreview connection={connection} resource={selected} onClose={() => setSelected(null)} />
   </>;

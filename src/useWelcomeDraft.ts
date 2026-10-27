@@ -1,10 +1,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useRef, useState } from "react";
-import type { ReasoningEffort } from "./api";
+import { discardDraftPhotos } from "./chatPhotos";
+import type { DraftPhoto, ReasoningEffort } from "./api";
 
 type Kind = "chat" | "task";
 export type WelcomeDraft = {
   text: string;
+  photos?: DraftPhoto[];
   kind: Kind;
   models: Record<Kind, string | null>;
   efforts: Record<Kind, ReasoningEffort | null>;
@@ -18,7 +20,10 @@ export function parseWelcomeDraft(value: string | null): WelcomeDraft {
   if (!parsed || typeof parsed.text !== "string") throw new Error("草稿读取失败。");
   const id = (value: unknown) => typeof value === "string" && value ? value : null;
   const effort = (value: unknown) => typeof value === "string" && choices.has(value) ? value as ReasoningEffort : null;
-  return { text: parsed.text, kind: parsed.kind === "task" ? "task" : "chat",
+  if (parsed.photos !== undefined && (!Array.isArray(parsed.photos) || parsed.photos.some((photo: DraftPhoto) =>
+    !photo || typeof photo.id !== "string" || typeof photo.uri !== "string" || typeof photo.name !== "string")))
+    throw new Error("照片草稿读取失败。");
+  return { text: parsed.text, ...(parsed.photos ? { photos: parsed.photos as DraftPhoto[] } : {}), kind: parsed.kind === "task" ? "task" : "chat",
     models: { chat: id(parsed.models?.chat), task: id(parsed.models?.task) },
     efforts: { chat: effort(parsed.efforts?.chat), task: effort(parsed.efforts?.task) }, searchId: id(parsed.searchId) };
 }
@@ -71,21 +76,29 @@ export function useWelcomeDraft(url: string) {
     current.current = change(current.current);
     setValue(current.current); persist(current.current);
   }
-  async function consumeText(expected: string) {
+  async function consumeText(expected: string, photoIds: string[] = []) {
     const source = current.current;
     if (!readable.current) throw new Error("草稿尚未读取，请先重试读取。");
-    if (source.text.trim() !== expected.trim()) {
-      // A newer edit may still be waiting for storage (or its autosave may have
-      // failed). Ensure it has durably replaced the submitted text as well.
-      await persist(source);
-      return;
-    }
-    const next = { ...source, text: "" };
+    const next = { ...source, text: source.text.trim() === expected.trim() ? "" : source.text,
+      ...(source.photos ? { photos: source.photos.filter((photo) => !photoIds.includes(photo.id)) } : {}) };
     // The caller must await this durable handoff before sending the first message.
     await persist(next);
     if (alive.current && current.current === source) { current.current = next; setValue(next); }
   }
-  return { value, ready, error, consumeText,
+  async function addPhotos(photos: DraftPhoto[]) {
+    if (!readable.current) throw new Error("草稿尚未读取，请先重试读取。");
+    const merged = [...(current.current.photos ?? []), ...photos];
+    if (merged.length > 8) throw new Error("每条消息最多 8 份附件。");
+    current.current = { ...current.current, photos: merged };
+    setValue(current.current); await persist(current.current);
+  }
+  async function removePhoto(id: string) {
+    if (!readable.current) return;
+    const removed = current.current.photos?.filter((photo) => photo.id === id) ?? [];
+    current.current = { ...current.current, photos: current.current.photos?.filter((photo) => photo.id !== id) };
+    setValue(current.current); await persist(current.current); discardDraftPhotos(removed);
+  }
+  return { value, ready, error, consumeText, addPhotos, removePhoto,
     retry: () => { if (readable.current) persist(current.current); else setRevision((old) => old + 1); },
     setText: (text: string | ((old: string) => string)) => update((old) => ({ ...old, text: typeof text === "function" ? text(old.text) : text })),
     setKind: (kind: Kind) => update((old) => ({ ...old, kind })),

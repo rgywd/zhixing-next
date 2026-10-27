@@ -1,15 +1,17 @@
 import type { ThemeColors } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { request, type Connection, type ModelInfo, type ReasoningEffort, type SearchProvider } from "./api";
 import { BrandIcon } from "./BrandIcon";
 import { thinkingLabel } from "./reasoning";
 import { radius, space, typography } from "./theme";
+import { BottomSheet } from "./BottomSheet";
 
 type Props = {
   text: string; placeholder?: string; onText: (text: string) => void; onSend: () => void; onFiles: () => void;
+  onPhotos?: () => void;
   editable: boolean; canSend: boolean; busy: boolean; pending?: boolean; attachmentLocked?: boolean;
   kind: "chat" | "task"; kindLocked?: boolean; onKind: (kind: "chat" | "task") => void;
   connection?: Connection; model?: ModelInfo; depth?: ReasoningEffort; searchId?: string | null;
@@ -21,6 +23,8 @@ type Props = {
 export function ConversationComposer(props: Props) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
+  const [showAttachments, setShowAttachments] = useState(false);
+  const nextAttachment = useRef<(() => void) | null>(null);
   const { text, placeholder, onText, onSend, onFiles, editable, canSend, busy, pending, kind,
     model, depth = "auto", searchId, onModel, onReasoning, onSearch, optionsLocked, children, hint } = props;
   const [providerState, setProvider] = useState<{ connection: Connection; id: string; item: SearchProvider | null } | null>(null);
@@ -55,12 +59,24 @@ export function ConversationComposer(props: Props) {
     <View style={styles.composer}>
       {children ? <View style={styles.attachments}>{children}</View> : null}
       <View style={styles.inputRow}>
-        <Pressable accessibilityRole="button" accessibilityLabel="添加资料" accessibilityState={{ disabled: props.attachmentLocked }} disabled={props.attachmentLocked} onPress={onFiles} style={[styles.files, props.attachmentLocked && styles.disabled]}><Ionicons name="add" size={26} color={colors.ink} /></Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="添加资料" accessibilityState={{ disabled: props.attachmentLocked }} disabled={props.attachmentLocked} onPress={() => { if (props.onPhotos) setShowAttachments(true); else onFiles(); }} style={[styles.files, props.attachmentLocked && styles.disabled]}><Ionicons name="add" size={26} color={colors.ink} /></Pressable>
         <TextInput accessibilityLabel="消息" multiline maxLength={20000} placeholder={placeholder ?? "说说你的想法…"} placeholderTextColor={colors.muted} value={text} editable={editable} onChangeText={onText} style={styles.input} />
         <Pressable accessibilityRole="button" accessibilityLabel={props.stopping ? props.stopDisabled ? "正在停止回复" : "停止回复" : pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: props.stopping ? props.stopDisabled || busy : !canSend }} disabled={props.stopping ? props.stopDisabled || busy : !canSend} onPress={props.stopping ? props.onStop : onSend} style={[styles.send, (props.stopping ? props.stopDisabled : !canSend) && styles.sendDisabled]}>{busy ? <ActivityIndicator size="small" color={colors.onInk} /> : <Ionicons name={props.stopping ? "stop" : pending ? "refresh" : "arrow-up"} size={25} color={colors.onInk} />}</Pressable>
       </View>
       {hint ? <View style={styles.hint}>{hint}</View> : null}
     </View>
+    <BottomSheet visible={showAttachments} title="添加到消息" onClose={() => setShowAttachments(false)} onDismiss={() => {
+      const next = nextAttachment.current; nextAttachment.current = null; next?.();
+    }}>
+      <View style={styles.addOptions}>
+        {props.onPhotos ? <Pressable accessibilityRole="button" accessibilityLabel="选择照片" style={styles.addOption} onPress={() => { nextAttachment.current = props.onPhotos!; setShowAttachments(false); }}>
+          <Ionicons name="images-outline" size={28} color={colors.ink} /><Text style={styles.addLabel}>照片</Text>
+        </Pressable> : null}
+        <Pressable accessibilityRole="button" accessibilityLabel="选择文件" style={styles.addOption} onPress={() => { nextAttachment.current = onFiles; setShowAttachments(false); }}>
+          <Ionicons name="document-attach-outline" size={28} color={colors.ink} /><Text style={styles.addLabel}>文件</Text>
+        </Pressable>
+      </View>
+    </BottomSheet>
   </View>;
 }
 
@@ -89,4 +105,7 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   attachments: { paddingHorizontal: space.xs, paddingTop: space.xs },
   hint: { paddingHorizontal: space.sm, paddingBottom: space.xs },
   disabled: { opacity: 0.4 },
+  addOptions: { flexDirection: "row", gap: space.md, paddingHorizontal: space.lg, paddingBottom: space.lg },
+  addOption: { flex: 1, minHeight: 88, borderRadius: radius.item, backgroundColor: colors.surfaceRaised, alignItems: "center", justifyContent: "center", gap: space.sm },
+  addLabel: { ...typography.body, color: colors.ink },
 });

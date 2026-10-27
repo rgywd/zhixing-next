@@ -45,6 +45,8 @@ import { Attachments } from "./Attachments";
 import { ApprovalCards } from "./ApprovalCards";
 import { RunReport } from "./RunReport";
 import { FilesPanel } from "./FilesPanel";
+import { DraftAttachments } from "./PhotoAttachments";
+import { usePhotoPicker } from "./usePhotoPicker";
 import { SearchPicker } from "./SearchPicker";
 import { QueuedMessages } from "./QueuedMessages";
 import { useQueuedMessages } from "./useQueuedMessages";
@@ -65,6 +67,8 @@ export function ChatPanel({
   onFocusHandled,
   startWithFiles = false,
   onFilesOpened,
+  startWithSend = false,
+  onSendStarted,
   onConversationChanged,
   onComposerContext,
   onRefresh,
@@ -91,6 +95,8 @@ export function ChatPanel({
   onFocusHandled?: (seq: number) => void;
   startWithFiles?: boolean;
   onFilesOpened?: () => void;
+  startWithSend?: boolean;
+  onSendStarted?: () => void;
   onConversationChanged: (conversation: Conversation) => void;
   onComposerContext?: (value: { conversationId: string; modelId: string | null; kind: "chat" | "task" }) => void;
   onRefresh: () => void;
@@ -161,11 +167,20 @@ export function ChatPanel({
     abandonPending,
     attach,
     removeAttachment,
+    addPhotos,
+    removePhoto,
+    sendingPhoto,
     speak,
     pendingRuns,
     updateDraft,
   } = useChat({ connection, conversation, onRefresh, initialKind, startWithFiles, focusMessageSeq: focusAnchor,
     defaultIntent: chatPreferences.defaultIntent, defaultIntentReady: chatPreferences.ready, streamEvents: false });
+  const photoPicker = usePhotoPicker({
+    scope: `${connection.url}\n${connection.token}\n${conversation.id}`,
+    ids: [...(draft.attachments ?? []).map((item) => item.id), ...(draft.photos ?? []).map((photo) => photo.id)],
+    locked: !draftReady || !!draft.pending || busy, add: addPhotos, onError: setError,
+  });
+  const initialSendHandled = useRef(false);
   const refreshQueuedMessages = useCallback(() => refresh.current(), [refresh]);
   const replyIds = [...messages.filter((item) => item.role === "assistant" && !item.origin).slice(-20).flatMap((item) => item.run_id ? [item.run_id] : []),
     ...visibleRuns.filter((id) => messages.some((item) => item.run_id === id)), ...runs.filter((item) => item.started_at || item.status === "running" || item.phase && item.phase !== "normal").slice(-20).map((item) => item.id)];
@@ -190,7 +205,7 @@ export function ChatPanel({
     try {
       const text = [draft.text, addition].filter(Boolean).join("\n\n");
       if (text.length > 20000) { notice.show({ message: "内容超过草稿长度，可先复制并选取需要的部分", tone: "warning" }); return; }
-      await updateDraft({ ...draft, text, pending: null });
+      await updateDraft((current) => ({ ...current, text, pending: null }));
       setMessageMenu(null); notice.show({ message: "已放入草稿，可修改后发送" });
     } catch (e) { setError(humanError(e)); }
   }
@@ -245,6 +260,13 @@ export function ChatPanel({
   const model = catalog?.items.find((item) => item.id === modelId);
   useEffect(() => { onComposerContext?.({ conversationId: conversation.id, modelId, kind }); }, [conversation.id, modelId, kind, onComposerContext]);
   const depth = (kind === "task" ? taskPreference.effort : chatPreference.effort) ?? model?.default_reasoning_effort ?? "auto";
+  useEffect(() => {
+    if (!startWithSend || initialSendHandled.current || !draftReady || !chatPreferences.ready || loading) return;
+    initialSendHandled.current = true; onSendStarted?.();
+    void send({ ...(kind === "task" && taskPreference.modelId ? { model_id: taskPreference.modelId } : {}),
+      ...(kind === "task" && taskPreference.effort ? { reasoning_effort: taskPreference.effort } : {}),
+      ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) });
+  }, [startWithSend, draftReady, chatPreferences.ready, loading, kind, taskPreference.modelId, taskPreference.effort, searchProviderId, onSendStarted, send]);
   const currentRun = running ?? pendingRuns[0];
   const staleTarget = intent === "steer" && running?.id !== target;
   async function updateModel(model_id: string | null, reasoning_effort: ReasoningEffort | null) {
@@ -400,12 +422,13 @@ export function ChatPanel({
           onSteer={queuedMessages.steer} onOpenRun={setDetail} /> : undefined}
         placeholder={`和${assistantName}聊聊，或交代一件事…`}
         text={draft.text} editable={draftReady && !draft.pending && !busy}
-        onText={(text) => { void updateDraft({ ...draft, text, pending: null }).catch((e) => setError(humanError(e))); }}
-        stopping={!!running && !draft.text.trim() && !draft.attachments?.length && !draft.pending}
+        onText={(text) => { void updateDraft((current) => ({ ...current, text, pending: null })).catch((e) => setError(humanError(e))); }}
+        stopping={!!running && !draft.text.trim() && !draft.attachments?.length && !draft.photos?.length && !draft.pending}
         stopDisabled={!!running?.cancel_requested}
         onStop={() => { if (running) void cancel(running).catch(() => undefined); }}
-        canSend={draftReady && (chatPreferences.ready || !!draft.pending) && !busy && !modelBusy && !!(draft.text.trim() || draft.attachments?.length)} busy={busy} pending={!!draft.pending}
-        attachmentLocked={!draftReady || !!draft.pending || busy} onFiles={() => setShowFiles(true)}
+        canSend={draftReady && (chatPreferences.ready || !!draft.pending) && !busy && !photoPicker.picking && !modelBusy && !!(draft.text.trim() || draft.attachments?.length || draft.photos?.length)} busy={busy} pending={!!draft.pending}
+        attachmentLocked={!draftReady || !!draft.pending || busy || photoPicker.picking} onFiles={() => setShowFiles(true)} onPhotos={() => { void photoPicker.pick(); }}
+        hint={sendingPhoto ? <Text style={s.small}>正在发送照片 {sendingPhoto.index}/{sendingPhoto.total}…</Text> : undefined}
         kind={kind} onKind={setKind} kindLocked={intent === "steer"}
         connection={connection} model={model} depth={depth} searchId={searchProviderId}
         optionsLocked={!catalog || modelBusy || busy || !!draft.pending || intent === "steer"}
@@ -414,7 +437,9 @@ export function ChatPanel({
         onSearch={() => setShowSearch(true)}
         onSend={() => { void send({ ...(kind === "task" && taskPreference.modelId ? { model_id: taskPreference.modelId } : {}), ...(kind === "task" && taskPreference.effort ? { reasoning_effort: taskPreference.effort } : {}), ...(searchProviderId ? { search_provider_id: searchProviderId } : {}) }); }}
       >
-        <Attachments connection={connection} items={draft.attachments} remove={!draftReady || draft.pending || busy ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }} />
+        <DraftAttachments connection={connection} attachments={draft.attachments} photos={draft.photos} sendingId={sendingPhoto?.id}
+          remove={!draftReady || draft.pending || busy ? undefined : (id) => { void removeAttachment(id).catch((e) => setError(humanError(e))); }}
+          removePhoto={!draftReady || draft.pending || busy ? undefined : (id) => { void removePhoto(id).catch((e) => setError(humanError(e))); }} />
       </ConversationComposer>
       {draftLoadError ? <View style={{ marginHorizontal: 18, marginBottom: 6 }}>
         <Text accessibilityRole="alert" style={s.error}>草稿暂时无法读取：{draftLoadError}</Text>
@@ -430,7 +455,7 @@ export function ChatPanel({
           {currentRun ? <ActionLink icon="receipt-outline" onPress={() => setDetail(currentRun.id)}>查看运行进度</ActionLink> : null}
           {running ? <Button secondary danger disabled={running.cancel_requested} onPress={() => { void cancel(running).catch(() => undefined); }}>{running.cancel_requested ? "已请求取消" : "取消当前运行"}</Button> : null}
           <Text style={s.muted}>本条发送方式：{intent === "steer" ? "补充当前回复" : "接着处理"}</Text>
-          {running && !!(draft.text.trim() || draft.attachments?.length) ? <View style={s.stack}>
+          {running && !!(draft.text.trim() || draft.attachments?.length || draft.photos?.length) ? <View style={s.stack}>
             {(["queue", "steer"] as const).map((value) => <Pressable key={value} accessibilityRole="radio"
               accessibilityLabel={value === "queue" ? "本条接着处理" : "本条补充当前回复"}
               accessibilityState={{ checked: intent === value && (value === "queue" || target === running.id), disabled: !!draft.pending || busy }}
@@ -504,7 +529,7 @@ export function ChatPanel({
             conversationId={conversation.id}
             attach={attach}
             canAttach={draftReady && !draft.pending && !busy}
-            attachmentIds={(draft.attachments ?? []).map((item) => item.id)}
+            attachmentIds={[...(draft.attachments ?? []).map((item) => item.id), ...(draft.photos ?? []).map((photo) => photo.id)]}
             close={() => setShowFiles(false)}
           />
         ) : null}

@@ -1,3 +1,4 @@
+import { DraftAttachments } from "./PhotoAttachments";
 import type { ThemeColors } from "./theme";
 import { useUi, ActionLink } from "./ui";
 import { useThemedStyles } from "./ThemeProvider";
@@ -6,7 +7,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { ConversationComposer } from "./ConversationComposer";
 import { ReasoningPicker } from "./ReasoningPicker";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import { type Connection, type ModelCatalog, type ReasoningEffort } from "./api";
+import { type Connection, type DraftPhoto, type ModelCatalog, type ReasoningEffort } from "./api";
 import { ModelPicker } from "./ModelPicker";
 import { SearchPicker } from "./SearchPicker";
 
@@ -41,6 +42,10 @@ export function AiHome({
   onEffort,
   onSearchProviderId,
   onFiles,
+  onPhotos,
+  photos = [],
+  onRemovePhoto,
+  pickingPhotos = false,
   onSend,
 }: {
   name: string;
@@ -61,6 +66,10 @@ export function AiHome({
   onEffort: (value: ReasoningEffort | null) => void;
   onSearchProviderId: (id: string | null) => void;
   onFiles: () => void;
+  onPhotos?: () => void;
+  photos?: DraftPhoto[];
+  onRemovePhoto?: (id: string) => void;
+  pickingPhotos?: boolean;
   onSend: () => void;
 }) {
   const { s, colors } = useUi();
@@ -112,7 +121,9 @@ export function AiHome({
           <Ionicons name="chevron-forward" size={17} color={colors.muted} />
         </Pressable>
       </ScrollView>
-      <ConversationComposer text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!locked} onText={(text) => { if (!locked) onDraft(text); }} onSend={() => { if (!locked && draft.trim()) onSend(); }} onFiles={() => { if (!locked) onFiles(); }} attachmentLocked={locked} canSend={!locked && !!draft.trim()} busy={busy} kind="chat" onKind={() => { if (!locked) onKind("chat"); }} kindLocked={locked} connection={connection} model={model} depth={depth} searchId={searchProviderId} optionsLocked={locked || !catalog} onModel={() => { if (!locked && catalog) setShowModels(true); }} onReasoning={() => { if (!locked && catalog) setShowReasoning(true); }} onSearch={() => { if (!locked && catalog) setShowSearch(true); }} />
+      <ConversationComposer text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!locked} onText={(text) => { if (!locked) onDraft(text); }} onSend={() => { if (!locked && !pickingPhotos && (draft.trim() || photos.length)) onSend(); }} onFiles={() => { if (!locked) onFiles(); }} onPhotos={onPhotos} attachmentLocked={locked || pickingPhotos} canSend={!locked && !pickingPhotos && !!(draft.trim() || photos.length)} busy={busy} kind="chat" onKind={() => { if (!locked) onKind("chat"); }} kindLocked={locked} connection={connection} model={model} depth={depth} searchId={searchProviderId} optionsLocked={locked || !catalog} onModel={() => { if (!locked && catalog) setShowModels(true); }} onReasoning={() => { if (!locked && catalog) setShowReasoning(true); }} onSearch={() => { if (!locked && catalog) setShowSearch(true); }}>
+        <DraftAttachments connection={connection} photos={photos} removePhoto={locked ? undefined : onRemovePhoto} />
+      </ConversationComposer>
       {draftError ? <View style={styles.draftError}>
         <Text accessibilityRole="alert" style={s.error}>{draftError}</Text>
         {onRetryDraft ? <ActionLink icon="refresh-outline" onPress={onRetryDraft}>{draftReady ? "重试保存草稿" : "重新读取草稿"}</ActionLink> : null}

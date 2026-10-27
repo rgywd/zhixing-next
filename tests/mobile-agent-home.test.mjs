@@ -11,7 +11,7 @@ function harness(overrides = {}) {
   const slots = [], calls = [], exports = {}; let cursor = 0;
   const native = { ...Object.fromEntries(["View", "Text", "ScrollView", "Pressable"].map((key) => [key, key])), StyleSheet: { hairlineWidth: 0.5, create: (value) => value } };
   const dependencies = {
-    "react/jsx-runtime": jsxRuntime,
+    "react/jsx-runtime": jsxRuntime, "./PhotoAttachments": { DraftAttachments: "DraftAttachments" },
     react: { useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = initial; return [slots[i], (next) => { slots[i] = next; }]; } },
     "react-native": native,
     "./ui": { useUi: () => ({ s: {}, colors: theme.darkColors }), ActionLink: "ActionLink" },

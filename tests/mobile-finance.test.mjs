@@ -91,6 +91,8 @@ function chatHarness(state = {}, options = {}) {
     "react-native": { ...native, StyleSheet: { create: (styles) => styles } },
     "react-native-safe-area-context": { SafeAreaView: "SafeAreaView" },
     "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
+    "./PhotoAttachments": { DraftAttachments: "DraftAttachments" },
+    "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) },
     "./providerEditing": { availablePreference },
     "./theme": theme,
     "./ThemeProvider": { useThemedStyles: (factory) => factory(theme.darkColors) },
@@ -406,7 +408,7 @@ test("main, finance and health conversations use the same composer contract with
     assert.equal(Object.hasOwn(composer.props, "appearance"), false);
     assert.equal(composer.props.placeholder, `和${name}聊聊，或交代一件事…`);
     assert.equal(composer.props.model.id, "assigned");
-    assert.equal(composer.props.children.type, "Attachments");
+    assert.equal(composer.props.children.type, "DraftAttachments");
     for (const action of ["onText", "onSend", "onFiles", "onModel", "onReasoning", "onSearch"]) assert.equal(typeof composer.props[action], "function");
   }
 });
@@ -577,7 +579,7 @@ test("terminal partial replies retain copying, draft quotation and their own pro
     const parts = [{ id: "thought", type: "reasoning", text: "Private provider thought" }, { id: "before", type: "text", text: "First explanation" },
       { id: "tool", type: "tool", name: "query_finance", status: "completed" }, { id: "attempt", type: "text", text: "Failed attempt", attempt_status: "failed" }, { id: "last", type: "text", text: "Partial answer" }];
     const app = chatHarness({ messages: [{ id: "question", role: "user", run_id: run.id, seq: 1, content: "Question" }], runs: [run],
-      updateDraft: async (value) => changed.push(value), setDetail: (id) => opened.push(id) },
+      updateDraft: async (value) => changed.push(typeof value === "function" ? value(app.chat.draft) : value), setDetail: (id) => opened.push(id) },
     { replyRecords: { [run.id]: { buffer: { parts, phase: status }, status, finalPartId: null, finalProjection: true } }, copy: async (value) => copied.push(value) });
     let nodes = app.render(), list = nodes.find((node) => node.type === "FlatList");
     const row = list.props.data.find((message) => message.role === "assistant"), body = walk(list.props.renderItem({ item: row }));

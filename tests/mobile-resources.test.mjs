@@ -38,6 +38,7 @@ function mount(module, name, props, extra = {}) {
       ...Object.fromEntries(["ActionLink", "Empty", "IconAction", "PageHeading", "PageScrollView", "SheetHeader"].map((key) => [key, key])) },
     "./api": { mergeById, request: (_connection, path, options) => { const task = deferred(); calls.push({ path, options, ...task }); return task.promise; } },
     "./MessageBody": { MessageBody: "MessageBody" },
+    "./PhotoAttachments": { MessagePhotos: "MessagePhotos" },
     "./resources": { shareResource: async (...args) => { downloads.push(args); } },
     "./ResourcePreview": { ResourceImage: "ResourceImage", ResourcePreview: "ResourcePreview", resourceDetail: (item) => `${item.size} B` },
     ...extra,

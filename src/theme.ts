@@ -85,3 +85,6 @@ export const typography = {
   detail: { fontSize: 12, lineHeight: 19 },
   small: { fontSize: 10, lineHeight: 15 },
 } as const;
+
+// Photos keep neutral surroundings and legible controls in both app themes.
+export const mediaColors = { background: "#101010", foreground: "#FFFFFF", control: "rgba(0,0,0,0.74)", controlBorder: "rgba(255,255,255,0.5)", loading: "rgba(0,0,0,0.35)" };
