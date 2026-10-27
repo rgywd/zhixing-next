@@ -176,6 +176,18 @@ test("finance attachment-only sends and pending retries keep edits and controls 
   }
 });
 
+test("main, finance and health photo panels receive current draft attachments and locking state", () => {
+  for (const agent_id of [null, "finance", "health"]) {
+    const attach = async () => {};
+    const app = chatHarness({ showFiles: true, attach, draft: { text: "保留草稿", attachments: [{ id: "one" }, { id: "two" }], pending: null } });
+    const props = { conversation: { id: `chat-${agent_id}`, agent_id } };
+    let panel = app.render(props).find((node) => node.type === "FilesPanel");
+    assert.deepEqual(Array.from(panel.props.attachmentIds), ["one", "two"]); assert.equal(panel.props.attach, attach); assert.equal(panel.props.canAttach, true);
+    app.chat.draft.pending = { id: "pending" };
+    panel = app.render(props).find((node) => node.type === "FilesPanel"); assert.equal(panel.props.canAttach, false);
+  }
+});
+
 test("finance forwards navigation and search targets, reflects the active model, and keeps empty guidance short", () => {
   for (const colors of [theme.lightColors, theme.darkColors]) {
     const app = financeHarness(colors);

@@ -504,6 +504,7 @@ export function ChatPanel({
             conversationId={conversation.id}
             attach={attach}
             canAttach={draftReady && !draft.pending && !busy}
+            attachmentIds={(draft.attachments ?? []).map((item) => item.id)}
             close={() => setShowFiles(false)}
           />
         ) : null}

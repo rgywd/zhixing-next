@@ -40,6 +40,14 @@
       "expo-sharing",
       "expo-system-ui",
       [
+        "expo-image-picker",
+        {
+          "photosPermission": "选择照片并上传到当前对话，供知行理解和处理。",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ],
+      [
         "expo-notifications",
         {
           "defaultChannel": "zhixing-updates"
