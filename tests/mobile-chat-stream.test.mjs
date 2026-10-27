@@ -68,7 +68,7 @@ function load(file, deps, globals = {}) {
   const code = ts.transpileModule(readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   runInNewContext(code, { exports, AbortController, setTimeout, clearTimeout, ...globals, require(id) { assert.ok(id in deps, id); return deps[id]; } }); return exports;
 }
-function harness({ initial = { text: "", pending: null }, preference = "queue", preferenceReady = true, read, events = async () => ({ items: [], next_cursor: null }) } = {}) {
+function harness({ initial = { text: "", pending: null }, preference = "queue", preferenceReady = true, read, transfer, discard = () => {}, events = async () => ({ items: [], next_cursor: null }) } = {}) {
   const lifecycle = hooks(), calls = [], timers = new Map(), listeners = new Set(); let sequence = 0, stored = plain(initial), currentRuns = [run()], messages = [];
   const appState = { currentState: "active", addEventListener(_name, f) { listeners.add(f); return { remove: () => listeners.delete(f) }; } };
   const later = (fn, ms) => { const id = ++sequence; timers.set(id, { fn, ms }); return id; };
@@ -77,7 +77,7 @@ function harness({ initial = { text: "", pending: null }, preference = "queue", 
   const { useChat } = load("useChat.ts", {
     react: lifecycle.react, "react-native": { AppState: appState, Alert: { alert() {} } }, "expo-crypto": { randomUUID: () => `out-${++sequence}` }, "expo-speech": { stop: async () => {} },
     "./liveRun": live, "./ConnectionStatus": { useSyncStatus: () => sync }, "./ui": { humanError: (e) => e.message },
-    "./steerableRun": steerableRun,
+    "./steerableRun": steerableRun, "./chatPhotos": { discardDraftPhotos: discard, sendDraftPhoto: transfer },
     "./storage": { draftKey: (url, id) => `${url}:${id}`, readDraft: async () => plain(stored), saveDraft: async (_key, value) => { stored = plain(value); }, clearDraft: async () => { stored = { text: "", pending: null }; } },
     "./api": { ...api, request: async (connection, path, options = {}) => {
       const call = { connection, path, ...options }; calls.push(call);
@@ -307,4 +307,47 @@ test("legacy live entry point delegates to the shared reply renderer without dup
     assert.equal(ended.props.status, status); assert.equal(ended.props.active, false); assert.equal(ended.props.finalText, "Partial answer");
   }
   assert.equal(LiveRunView({ value: null }), null);
+});
+
+const draftPhoto = (id) => ({ id, uri: `file:///document/chat-photos/${id}/original.jpg`, name: `${id}.jpg`, width: 800, height: 600 });
+const transferPhoto = async (_connection, conversationId, photo, save) => {
+  const next = { ...photo, resource: { id: photo.id, conversation_id: conversationId, mime_type: "image/jpeg", name: photo.name } };
+  await save(next); return next;
+};
+test("one Send transfers all selected photos and submits a single message with its text", async () => {
+  const order = [], removed = [];
+  const app = harness({ initial: { text: "two receipts", photos: [draftPhoto("p1"), draftPhoto("p2")], pending: null },
+    transfer: async (...args) => { order.push(args[2].id); return transferPhoto(...args); }, discard: (photos) => removed.push(...photos) });
+  const chat = await app.ready(); assert.equal(order.length, 0, "selection and restoration never upload");
+  await chat.send(); const posts = app.calls.filter((call) => call.method === "POST");
+  assert.deepEqual(order, ["p1", "p2"]); assert.equal(posts.length, 1);
+  assert.equal(posts[0].body.content, "two receipts"); assert.deepEqual(plain(posts[0].body.attachments), ["p1", "p2"]);
+  assert.equal(app.render().draft.text, ""); assert.deepEqual(removed.map((photo) => photo.id), ["p1", "p2"]); app.unmount();
+});
+test("a failed second photo retains the whole draft, sends no partial message, and retry skips its received first photo", async () => {
+  const attempts = []; let failed = false;
+  const app = harness({ initial: { text: "keep my text", photos: [draftPhoto("p1"), draftPhoto("p2")], pending: null },
+    transfer: async (...args) => { attempts.push(args[2].id); if (args[2].id === "p2" && !failed) { failed = true; throw new Error("offline"); } return transferPhoto(...args); } });
+  await (await app.ready()).send(); let chat = app.render();
+  assert.equal(app.calls.filter((call) => call.method === "POST").length, 0); assert.equal(chat.draft.text, "keep my text");
+  assert.equal(chat.draft.photos[0].resource.id, "p1"); assert.equal(chat.draft.photos[1].error, "offline");
+  assert.equal(app.stored().photos.length, 2); await chat.send();
+  assert.deepEqual(attempts, ["p1", "p2", "p2"]); assert.equal(app.calls.filter((call) => call.method === "POST").length, 1); app.unmount();
+});
+test("photo-only drafts send, while an unknown message receipt retries its immutable payload without reuploading", async () => {
+  const uploads = []; let offline = true;
+  const app = harness({ initial: { text: "", photos: [draftPhoto("p1")], pending: null },
+    transfer: async (...args) => { uploads.push(args[2].id); return transferPhoto(...args); },
+    read: (call) => { if (call.method === "POST" && offline) { offline = false; return Promise.reject(new Error("receipt lost")); } } });
+  await (await app.ready()).send(); const pending = plain(app.stored().pending); assert.ok(pending.id);
+  await app.render().send(); const posts = app.calls.filter((call) => call.method === "POST");
+  assert.deepEqual(plain(posts[1].body), pending); assert.deepEqual(uploads, ["p1"]); app.unmount();
+});
+test("leaving during photo transfer aborts and a late result cannot submit or clear the durable draft", async () => {
+  const late = deferred(); let signal;
+  const app = harness({ initial: { text: "keep", photos: [draftPhoto("p1")], pending: null },
+    transfer: async (...args) => { signal = args[4]; await late.promise; return transferPhoto(...args); } });
+  const task = (await app.ready()).send(); await settle(); app.unmount(); assert.equal(signal.aborted, true);
+  late.resolve(); await task; assert.equal(app.stored().text, "keep"); assert.equal(app.stored().photos.length, 1);
+  assert.equal(app.calls.filter((call) => call.method === "POST").length, 0);
 });

@@ -15,6 +15,7 @@ function hooks() {
   const slots = []; let cursor = 0, effects = [];
   const changed = (old, next) => !old || next.some((value, index) => value !== old[index]);
   return { react: {
+    useRef(initial) { const index = cursor++; return slots[index] ??= { current: initial }; },
     useState(initial) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], (next) => { slots[index] = next; }]; },
     useEffect(callback, dependencies) { const index = cursor++, previous = slots[index]; if (changed(previous?.dependencies, dependencies)) { slots[index] = { dependencies }; effects.push(() => { previous?.cleanup?.(); slots[index].cleanup = callback(); }); } },
   }, render(callback) { cursor = 0; effects = []; const result = callback(); effects.forEach((effect) => effect()); return result; }, unmount() { slots.forEach((slot) => slot?.cleanup?.()); } };
@@ -24,7 +25,7 @@ function harness({ colors = darkColors, request = async () => ({ items: [] }), .
   const lifecycle = hooks(), exports = {}, actions = [];
   const props = { text: "草稿", onText: (value) => actions.push(["text", value]), onSend: () => actions.push("send"), onFiles: () => actions.push("files"), onModel: () => actions.push("model"), onReasoning: () => actions.push("reasoning"), onSearch: () => actions.push("search"), editable: true, canSend: true, busy: false, kind: "chat", onKind() {}, model, depth: "high", searchId: null, ...initial };
   const dependencies = {
-    "react/jsx-runtime": jsxRuntime, react: lifecycle.react,
+    "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "./BottomSheet": { BottomSheet: "BottomSheet" },
     "react-native": { ...Object.fromEntries(["ActivityIndicator", "Pressable", "ScrollView", "Text", "TextInput", "View"].map((name) => [name, name])), StyleSheet: { create: (styles) => styles } },
     "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./api": { request }, "./BrandIcon": { BrandIcon: "BrandIcon" }, "./reasoning": { thinkingLabel }, "./theme": theme,
     "./ThemeProvider": { useTheme: () => ({ colors }), useThemedStyles: (factory) => factory(colors) },
@@ -106,7 +107,7 @@ test("queued content floats above the model viewport without adding a persistent
   assert.equal(anchor.props.children[1].type, "ScrollView");
   const empty = app.render({ floating: undefined });
   assert.equal(empty[0].props.children[0].props.children[0], null);
-  assert.equal(empty[0].props.children.length, 2);
+  assert.equal(empty[0].props.children.filter((node) => node.type !== "BottomSheet").length, 2);
   app.unmount();
 });
 
@@ -139,4 +140,14 @@ test("search provider labels never carry over across connections and late reques
   app.render({ searchId: "late" }); app.render({ searchId: null }); assert.equal(calls[2].options.signal.aborted, true);
   calls[2].resolve({ items: [{ id: "late", name: "不应出现的旧响应", kind: "tavily" }] }); await settle();
   const off = control(app.render(), "联网搜索"); assert.equal(content(off), "联网搜索"); assert.match(off.props.accessibilityLabel, /已关闭/); assert.doesNotMatch(content(off), /旧响应/); assert.equal(off.props.accessibilityState.selected, false); app.unmount();
+});
+
+test("the photo action opens the native picker only after its sheet is dismissed, without navigating to files", () => {
+  let picked = 0; const app = harness({ onPhotos: () => picked++ });
+  control(app.render(), "添加资料").props.onPress();
+  let nodes = app.render(); assert.equal(nodes.find((node) => node.type === "BottomSheet").props.visible, true);
+  control(nodes, "选择照片").props.onPress(); assert.equal(picked, 0);
+  nodes = app.render(); const sheet = nodes.find((node) => node.type === "BottomSheet");
+  assert.equal(sheet.props.visible, false); sheet.props.onDismiss(); sheet.props.onDismiss();
+  assert.equal(picked, 1); assert.equal(app.actions.includes("files"), false); app.unmount();
 });

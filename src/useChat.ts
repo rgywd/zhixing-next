@@ -13,6 +13,7 @@ import {
   type Page,
   type Run,
   type Resource,
+  type DraftPhoto,
   type RunEvent,
 } from "./api";
 import { liveRunFinished, liveRunView, mergeLiveRunEvents, newLiveRun, type LiveRunBuffer } from "./liveRun";
@@ -26,6 +27,7 @@ import {
 import { useSyncStatus } from "./ConnectionStatus";
 import { humanError } from "./ui";
 import { isSteerableUserRun } from "./steerableRun";
+import { discardDraftPhotos, sendDraftPhoto } from "./chatPhotos";
 
 export function useChat({
   connection,
@@ -49,6 +51,9 @@ export function useChat({
   streamEvents?: boolean;
 }) {
   const streamScope = `${connection.url}\n${connection.token}\n${conversation.id}`;
+  const currentScope = useRef(streamScope);
+  const sendController = useRef<AbortController | null>(null);
+  const [sendingPhoto, setSendingPhoto] = useState<{ id: string; index: number; total: number } | null>(null);
   const [runScope, setRunScope] = useState(streamScope);
   const loadedScope = useRef(streamScope);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -90,6 +95,11 @@ export function useChat({
   const list = useRef<FlatList<Message>>(null);
   const nearBottomRef = useRef(focusMessageSeq === null);
   const key = draftKey(connection.url, conversation.id);
+  const [draftScope, setDraftScope] = useState(streamScope);
+  if (draftScope !== streamScope) {
+    setDraftScope(streamScope); setDraftReady(false); setDraftLoadError("");
+    setDraft({ text: "", pending: null }); setBusy(false); setSendingPhoto(null);
+  }
   const refresh = useRef<() => void>(() => undefined);
   const refreshLive = useRef<() => void>(() => undefined);
   const reportSync = useSyncStatus(() => refresh.current());
@@ -111,7 +121,7 @@ export function useChat({
         if (active) {
           if (!value.pending) {
             // Legacy drafts have no trustworthy original running target. Keep them queued.
-            value = { ...value, delivery: value.text.trim() || value.attachments?.length ? value.delivery?.intent === "steer"
+            value = { ...value, delivery: value.text.trim() || value.attachments?.length || value.photos?.length ? value.delivery?.intent === "steer"
               ? { intent: "steer", ...(typeof value.delivery.target_run_id === "string" ? { target_run_id: value.delivery.target_run_id } : {}) }
               : { intent: "queue" } : undefined };
           }
@@ -136,11 +146,18 @@ export function useChat({
       alive.current = false;
       void Speech.stop();
     };
-  }, [key, draftRevision]);
+  }, [key, streamScope, draftRevision]);
 
-  function updateDraft(value: Draft) {
+  useEffect(() => {
+    currentScope.current = streamScope;
+    sending.current = false;
+    return () => { sendController.current?.abort(); sendController.current = null; };
+  }, [streamScope]);
+
+  function updateDraft(change: Draft | ((old: Draft) => Draft)) {
+    let value = typeof change === "function" ? change(draftRef.current) : change;
     if (!value.pending) {
-      const hasContent = !!value.text.trim() || !!value.attachments?.length;
+      const hasContent = !!value.text.trim() || !!value.attachments?.length || !!value.photos?.length;
       const bound = value.delivery ?? draftRef.current.delivery;
       const delivery = hasContent ? bound ?? { intent: currentRunning && defaultIntentReady ? defaultIntent : "queue",
         ...(currentRunning && defaultIntentReady && defaultIntent === "steer" ? { target_run_id: currentRunning.id } : {}) } : undefined;
@@ -165,7 +182,9 @@ export function useChat({
   const settleDraft = useCallback((id: string) => {
     const existing = clearing.current.get(id);
     if (existing) return existing;
+    const photos = draftRef.current.pending?.id === id ? draftRef.current.photos ?? [] : [];
     const pending = clearDraft(key, id).then(() => {
+      discardDraftPhotos(photos);
       // A late receipt must never erase text edited after abandoning that request.
       if (!alive.current || draftRef.current.pending?.id !== id) return;
       draftRef.current = { text: "", pending: null };
@@ -341,53 +360,63 @@ export function useChat({
   }
 
   async function send(options: Pick<MessageInput, "model_id" | "reasoning_effort" | "search_provider_id"> = {}) {
-    const source = draftRef.current;
-    if (sending.current || busy || !draftReady || runScope !== streamScope || (!source.text.trim() && !source.attachments?.length)) return;
+    let source = draftRef.current;
+    if (sending.current || busy || !draftReady || runScope !== streamScope || (!source.text.trim() && !source.attachments?.length && !source.photos?.length)) return;
     if (!source.pending && !defaultIntentReady) return;
     sending.current = true;
+    const controller = new AbortController(); sendController.current = controller;
+    const active = () => alive.current && currentScope.current === streamScope && sendController.current === controller;
+    const savePhoto = async (photo: DraftPhoto) => {
+      if (!active() || controller.signal.aborted) throw new Error("照片发送已中断，草稿已保留。");
+      await updateDraft((current) => ({ ...current, photos: current.photos?.map((item) => item.id === photo.id ? photo : item) }));
+    };
     let received = false;
-    let payload: MessageInput;
+    let payload: MessageInput | undefined;
+    setBusy(true); setError("");
     try {
-      payload = prepareMessage(
-        source,
-        source.delivery?.intent ?? (currentRunning ? defaultIntent : "queue"),
-        kind,
-        source.delivery?.target_run_id ?? target,
-        currentRunning?.id ?? null,
-        Crypto.randomUUID,
-      );
+      if (!source.pending && source.photos?.length) {
+        await updateDraft(source);
+        for (const [index, selected] of source.photos.entries()) {
+          if (!active()) return;
+          const photo = draftRef.current.photos?.find((item) => item.id === selected.id);
+          if (!photo || photo.resource) continue;
+          setSendingPhoto({ id: photo.id, index: index + 1, total: source.photos.length });
+          let timedOut = false;
+          const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 120000);
+          try { await sendDraftPhoto(connection, conversation.id, photo, savePhoto, controller.signal); }
+          catch (e) {
+            if (!active()) return;
+            const message = timedOut ? "照片发送超时，请重试发送。" : humanError(e);
+            await updateDraft((current) => ({ ...current, photos: current.photos?.map((item) => item.id === photo.id ? { ...item, error: message } : item) }));
+            throw new Error(message);
+          } finally { clearTimeout(timeout); }
+        }
+        if (!active()) return;
+        source = draftRef.current;
+      }
+      payload = prepareMessage(source, source.delivery?.intent ?? (currentRunning ? defaultIntent : "queue"),
+        kind, source.delivery?.target_run_id ?? target, currentRunning?.id ?? null, Crypto.randomUUID);
       if (!source.pending && payload.intent === "queue") payload = { ...payload, ...options };
-    } catch (e) {
-      sending.current = false;
-      setError(humanError(e));
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      // Persist the immutable request before any network I/O; retries after app restart reuse it.
+      // The sole Send action transfers photos, then persists one immutable message.
       await updateDraft({ ...source, pending: payload });
-      const receipt = await request<{ message: Message; run: Run }>(
-        connection,
-        `/conversations/${conversation.id}/messages`,
-        { method: "POST", body: payload },
-      );
+      if (!active()) return;
+      const receipt = await request<{ message: Message; run: Run }>(connection,
+        `/conversations/${conversation.id}/messages`, { method: "POST", body: payload, signal: controller.signal });
       received = true;
       acknowledged.current.add(payload.id);
       await settleDraft(payload.id);
-      if (!alive.current) return;
-      setMessages((old) =>
-        mergeById(old, [receipt.message]).sort((a, b) => a.seq - b.seq),
-      );
+      if (!active()) return;
+      setMessages((old) => mergeById(old, [receipt.message]).sort((a, b) => a.seq - b.seq));
       setRuns((old) => mergeById(old, [receipt.run]));
       nearBottomRef.current = true;
-      refresh.current();
-      onRefresh();
+      refresh.current(); onRefresh();
     } catch (e) {
-      if (alive.current && (received || !acknowledged.current.has(payload.id))) setError(humanError(e));
+      if (active() && (received || !payload || !acknowledged.current.has(payload.id))) setError(humanError(e));
     } finally {
-      sending.current = false;
-      if (alive.current) setBusy(false);
+      if (sendController.current === controller) {
+        sending.current = false; sendController.current = null;
+        if (alive.current && currentScope.current === streamScope) { setBusy(false); setSendingPhoto(null); }
+      }
     }
   }
 
@@ -439,12 +468,25 @@ export function useChat({
     if (draftRef.current.pending)
       throw new Error("先处理待确认消息，再添加文件。");
     const attachments = mergeById(draftRef.current.attachments ?? [], [resource]);
-    if (attachments.length > 8) throw new Error("每条消息最多 8 份资料。");
+    if (new Set([...attachments.map((item) => item.id), ...(draftRef.current.photos ?? []).map((item) => item.id)]).size > 8) throw new Error("每条消息最多 8 份附件。");
     await updateDraft({ ...draftRef.current, attachments, pending: null });
   }
   async function removeAttachment(id: string) {
     if (draftRef.current.pending) return;
     await updateDraft({ ...draftRef.current, attachments: draftRef.current.attachments?.filter((item) => item.id !== id) });
+  }
+  async function addPhotos(photos: DraftPhoto[]) {
+    if (draftRef.current.pending || sending.current || !draftReady) throw new Error("请先等待当前消息发送完成。");
+    const next = mergeById(draftRef.current.photos ?? [], photos);
+    if (new Set([...(draftRef.current.attachments ?? []).map((item) => item.id), ...next.map((item) => item.id)]).size > 8)
+      throw new Error("每条消息最多 8 份附件。");
+    await updateDraft((current) => ({ ...current, photos: next }));
+  }
+  async function removePhoto(id: string) {
+    if (draftRef.current.pending || sending.current) return;
+    const removed = draftRef.current.photos?.filter((photo) => photo.id === id) ?? [];
+    await updateDraft((current) => ({ ...current, photos: current.photos?.filter((photo) => photo.id !== id) }));
+    discardDraftPhotos(removed);
   }
   async function speak(message: Message) {
     await Speech.stop();
@@ -511,6 +553,9 @@ export function useChat({
     abandonPending,
     attach,
     removeAttachment,
+    addPhotos,
+    removePhoto,
+    sendingPhoto,
     speak,
     pendingRuns,
     updateDraft,

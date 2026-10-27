@@ -18,8 +18,8 @@ export function resourceDetail(resource: Resource) {
   return `${type && type !== resource.name.toUpperCase() ? type : "文件"} · ${size}`;
 }
 
-export function ResourceImage({ connection, resource, style, contain = false }: {
-  connection: Connection; resource: Resource; style?: StyleProp<ViewStyle>; contain?: boolean;
+export function ResourceImage({ connection, resource, style, contain = false, label }: {
+  connection: Connection; resource: Resource; style?: StyleProp<ViewStyle>; contain?: boolean; label?: string;
 }) {
   const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
@@ -35,13 +35,13 @@ export function ResourceImage({ connection, resource, style, contain = false }: 
   }, [source]);
   return <View style={[styles.imageFrame, style]}>
     {/* RN 0.86 Android forwards request headers only through its array-source branch. */}
-    <Image key={`${resource.id}:${attempt}`} source={[source]} accessibilityLabel={resource.name}
+    <Image key={`${resource.id}:${attempt}`} source={[source]} accessibilityLabel={label ?? resource.name}
       resizeMode={contain ? "contain" : "cover"} style={StyleSheet.absoluteFill}
       onLoad={() => setImageState({ source, status: "loaded" })} onError={() => setImageState({ source, status: "error" })} />
-    {status === "loading" ? <View pointerEvents="none" style={styles.imageStatus} accessibilityLabel={`正在加载图片 ${resource.name}`}>
+    {status === "loading" ? <View pointerEvents="none" style={styles.imageStatus} accessibilityLabel={`正在加载${label ?? `图片 ${resource.name}`}`}>
       <ActivityIndicator color={colors.blue} />
     </View> : null}
-    {status === "error" ? <Pressable accessibilityRole="button" accessibilityLabel={`重试加载图片 ${resource.name}`}
+    {status === "error" ? <Pressable accessibilityRole="button" accessibilityLabel={`重试加载${label ?? `图片 ${resource.name}`}`}
       style={styles.imageStatus} onPress={(event) => { event.stopPropagation(); setAttempt((value) => value + 1); }}>
       <Ionicons name="refresh-outline" size={20} color={colors.blue} />
       <Text style={s.small}>重试图片</Text>

@@ -28,6 +28,7 @@ import {
   type Assistant,
   type Agent,
   type Connection,
+  type DraftPhoto,
   type Conversation,
   type MessageInput,
   type ModelCatalog,
@@ -48,6 +49,7 @@ import { ProvidersPanel } from "./ProvidersPanel";
 import { ResourcePreview } from "./ResourcePreview";
 import { useHomePreferences } from "./useHomePreferences";
 import { useWelcomeDraft } from "./useWelcomeDraft";
+import { usePhotoPicker } from "./usePhotoPicker";
 import { targetKey } from "./homeEntries";
 import { TodayHomePanel as HomePanel } from "./TodayHomePanel";
 import { useTodayDeviceContext } from "./useTodayDeviceContext";
@@ -271,9 +273,12 @@ function ConnectedSession({
   const { text: welcomeDraft, models: welcomeModels, efforts: welcomeEfforts, searchId: welcomeSearchId } = welcome.value;
   const welcomeKind = "chat" as const;
   const { setText: setWelcomeDraft, setKind: setWelcomeKind, setSearch: setWelcomeSearchId } = welcome;
-  const [chatStart, setChatStart] = useState<{ id: string; kind: "chat" | "task"; taskModelId: string | null; taskEffort: ReasoningEffort | null; searchId: string | null; files: boolean } | null>(null);
+  const [chatStart, setChatStart] = useState<{ id: string; kind: "chat" | "task"; taskModelId: string | null; taskEffort: ReasoningEffort | null; searchId: string | null; files: boolean; send?: boolean } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const welcomePhotoPicker = usePhotoPicker({ scope: `${connection.url}\n${connection.token}\nwelcome`,
+    ids: (welcome.value.photos ?? []).map((photo) => photo.id), locked: !welcome.ready || busy,
+    add: welcome.addPhotos, onError: setError });
   const creatingConversation = useRef(false);
   const creationReceipt = useRef<{ key: string; conversation: Conversation } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -443,7 +448,7 @@ function ConnectedSession({
     explore = false,
     agentId: string | null = null,
     quick = false,
-    initial?: { text: string; kind: "chat" | "task"; modelId: string | null; effort: ReasoningEffort | null; searchId: string | null; filesOnly?: boolean },
+    initial?: { text: string; kind: "chat" | "task"; modelId: string | null; effort: ReasoningEffort | null; searchId: string | null; filesOnly?: boolean; photos?: DraftPhoto[] },
   ) {
     if (creatingConversation.current || busy) return;
     creatingConversation.current = true;
@@ -466,9 +471,9 @@ function ConnectedSession({
           method: "PUT", body: { model_id: initial.modelId, reasoning_effort: initial.effort },
         });
       }
-      if (initial?.filesOnly) {
-        await saveDraft(draftKey(connection.url, conversation.id), { text: initial.text, pending: null });
-        await welcome.consumeText(initial.text);
+      if (initial?.filesOnly || initial?.photos?.length) {
+        await saveDraft(draftKey(connection.url, conversation.id), { text: initial.text, photos: initial.photos, pending: null });
+        await welcome.consumeText(initial.text, initial.photos?.map((photo) => photo.id));
       } else if (explore || initial) {
         const payload: MessageInput = {
           id: Crypto.randomUUID(),
@@ -507,7 +512,7 @@ function ConnectedSession({
       selectedRef.current = conversation.id;
       setShowAiDrawer(false);
       setShowWelcome(false);
-      setChatStart(initial ? { id: conversation.id, kind: initial.kind, taskModelId: initial.kind === "task" ? initial.modelId : null, taskEffort: initial.kind === "task" ? initial.effort : null, searchId: initial.searchId, files: !!initial.filesOnly } : null);
+      setChatStart(initial ? { id: conversation.id, kind: initial.kind, taskModelId: initial.kind === "task" ? initial.modelId : null, taskEffort: initial.kind === "task" ? initial.effort : null, searchId: initial.searchId, files: !!initial.filesOnly, send: !initial.filesOnly && !!initial.photos?.length } : null);
       if (tab !== "chat") setChatReturn({ tab, lifePage });
       setTab("chat");
       refresh();
@@ -523,15 +528,18 @@ function ConnectedSession({
   const welcomeStatus = lastSyncFailed ? "重新连接" : !status || !catalog ? "连接中" : !status.worker_online ? "服务离线" : (!welcomePreference.modelId && !status.model_ready) || !welcomeModel?.ready ? "未就绪" : busy ? "处理中" : "待命中";
   function submitWelcome() {
     const text = welcomeDraft.trim();
-    if (text && welcome.ready && !busy) void newConversation(false, null, true, { text, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
+    if ((text || welcome.value.photos?.length) && welcome.ready && !busy && !welcomePhotoPicker.picking) void newConversation(false, null, true, { text, photos: welcome.value.photos, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
   }
   const welcomeControls = {
     connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchProviderId: welcomeSearchId,
     draftReady: welcome.ready, draftError: welcome.error, onRetryDraft: welcome.retry,
+    photos: welcome.value.photos, pickingPhotos: welcomePhotoPicker.picking,
+    onPhotos: () => { void welcomePhotoPicker.pick(); },
+    onRemovePhoto: (id: string) => { void welcome.removePhoto(id).catch((e) => setError(humanError(e))); },
     onModelId: (id: string | null) => welcome.setModel(welcomeKind, id),
     onEffort: (value: ReasoningEffort | null) => welcome.setEffort(welcomeKind, value),
     onSearchProviderId: setWelcomeSearchId,
-    onFiles: () => { if (welcome.ready && !busy) void newConversation(false, null, true, { text: welcomeDraft, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId, filesOnly: true }); },
+    onFiles: () => { if (welcome.ready && !busy) void newConversation(false, null, true, { text: welcomeDraft, photos: welcome.value.photos, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId, filesOnly: true }); },
   };
   function openAgent(agentId: string) {
     const existing = [...conversations].reverse().find((item) => item.agent_id === agentId);
@@ -630,6 +638,8 @@ function ConnectedSession({
               initialTaskModelId={chatStart?.id === selected.id ? chatStart.taskModelId : null}
               initialTaskEffort={chatStart?.id === selected.id ? chatStart.taskEffort : null}
               initialSearchId={chatStart?.id === selected.id ? chatStart.searchId : null}
+              startWithSend={chatStart?.id === selected.id && chatStart.send}
+              onSendStarted={() => setChatStart((old) => old ? { ...old, send: false } : null)}
               startWithFiles={chatStart?.id === selected.id && chatStart.files}
               onFilesOpened={() => setChatStart((old) => old ? { ...old, files: false } : null)}
               onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))}

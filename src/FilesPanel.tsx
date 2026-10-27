@@ -3,12 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { Image, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import * as DocumentPicker from "expo-document-picker";
-import * as ImagePicker from "expo-image-picker";
 import * as Crypto from "expo-crypto";
 import * as Sharing from "expo-sharing";
 import { Directory, File, Paths } from "expo-file-system";
 import { fetch as expoFetch } from "expo/fetch";
-import { preparePhoto } from "./photoUploads";
 import { useThemedStyles } from "./ThemeProvider";
 import { radius, space, type ThemeColors } from "./theme";
 import {
@@ -110,7 +108,7 @@ export function FilesPanel({
       if (current(session)) setError(humanError(e));
     }
   }
-  async function pick(source: "photos" | "files") {
+  async function pick() {
     if (working.current || !canAttach || !slots) return;
     working.current = true;
     setBusy(true);
@@ -118,13 +116,7 @@ export function FilesPanel({
     setError("");
     setNotice("");
     try {
-      const result = source === "photos"
-        ? await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ["images"], allowsMultipleSelection: true, selectionLimit: slots,
-          orderedSelection: true, allowsEditing: false, quality: 1,
-          preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-        })
-        : await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: true });
+      const result = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: true });
       if (result.canceled || !current(session)) return;
       if (result.assets.length > slots) throw new Error(`每条消息最多 8 份资料，本次还可以选择 ${slots} 份，请减少后重新选择。`);
       const selected: Upload[] = [];
@@ -133,18 +125,15 @@ export function FilesPanel({
         const id = Crypto.randomUUID();
         setProgress(`正在准备 ${selected.length + failures.length + 1}/${result.assets.length}`);
         try {
-          const item = source === "photos"
-            ? await preparePhoto(asset as ImagePicker.ImagePickerAsset, `照片-${id}.jpg`)
-            : { uri: asset.uri, name: (asset as DocumentPicker.DocumentPickerAsset).name,
-              size: new File(asset.uri).size, image: asset.mimeType?.startsWith("image/") ?? false };
+          const item = { uri: asset.uri, name: asset.name,
+            size: new File(asset.uri).size, image: asset.mimeType?.startsWith("image/") ?? false };
           if (!current(session)) return;
           if (!item.size) throw new Error("文件暂时无法读取，请重新选择。");
           if (item.size > MAX_FILE_BYTES) throw new Error("单个文件最多 20 MiB，请选择较小的文件。");
           selected.push({ id, ...item });
         } catch (e) {
           if (!current(session)) return;
-          const name = "name" in asset ? asset.name : asset.fileName || "照片";
-          failures.push(`${name}：${humanError(e)}`);
+          failures.push(`${asset.name}：${humanError(e)}`);
         }
       }
       setUploads((items) => [...items, ...selected]);
@@ -276,13 +265,12 @@ export function FilesPanel({
           当前会话的持久工作目录。上传资料后，在消息里说明要做什么；处理结果也会出现在这里。
         </Text>
         <View style={s.card}>
-          <CardHeader icon="cloud-upload-outline" title="添加资料" tone="blue" />
+          <CardHeader icon="document-outline" title="添加文件" tone="blue" />
           <Text style={s.muted}>
-            照片和文件都可以多选，每条消息最多 8 份资料，每份最多 20 MiB。
+            文件支持多选，每条消息最多 8 份附件，每份最多 20 MiB。发照片可从对话输入框直接选择。
           </Text>
           <View style={styles.actions}>
-            <Button icon="images-outline" disabled={busy || !canAttach || !slots} onPress={() => { void pick("photos"); }}>选择照片</Button>
-            <Button secondary icon="document-outline" disabled={busy || !canAttach || !slots} onPress={() => { void pick("files"); }}>选择手机文件</Button>
+            <Button icon="document-outline" disabled={busy || !canAttach || !slots} onPress={() => { void pick(); }}>选择手机文件</Button>
           </View>
           {uploads.length ? <>
             <Text style={s.label}>待上传 {uploads.length} 份 · 还可选择 {slots} 份</Text>

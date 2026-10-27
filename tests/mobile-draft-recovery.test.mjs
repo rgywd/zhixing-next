@@ -44,6 +44,7 @@ function hooks() {
     unmount() { slots.forEach((slot) => slot?.cleanup?.()); } };
 }
 function load(name, dependencies, suffix = "") {
+  dependencies = { "./chatPhotos": { discardDraftPhotos() {} }, "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, ...dependencies };
   const exports = {};
   runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8") + suffix, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -307,4 +308,24 @@ test("welcome clear failure stops first-message submission and retry can reset t
   assert.deepEqual(modelCalls.map((call) => call.body.model_id), ["model", null]);
   assert.equal(app.calls.filter((call) => call.path === "/conversations" && call.method === "POST").length, 1);
   assert.equal(app.calls.filter((call) => call.path.endsWith("/messages")).length, 1); app.unmount();
+});
+
+test("welcome photos survive a restart and are removed only after durable handoff to the new conversation", async () => {
+  const photo = { id: "p1", uri: "file:///documents/chat-photos/p1/original.jpg", name: "123.jpg", width: 800, height: 600 };
+  const app = welcomeHarness(); app.render(); await settle(); await app.render().addPhotos([photo]); app.render().setText("receipt"); await settle(); app.unmount();
+  const restored = welcomeHarness({ stored: app.stored }); restored.render(); await settle();
+  assert.deepEqual(plain(restored.render().value.photos), [photo]);
+  await restored.render().consumeText("receipt", [photo.id]);
+  assert.equal(restored.render().value.text, ""); assert.equal(restored.render().value.photos.length, 0); restored.unmount();
+});
+test("welcome photo-only Send durably transfers photos before opening the normal composer for automatic send", async () => {
+  const saved = [], consumed = [], handoff = deferred();
+  const app = welcomeSendHarness({ saveDraft: async (_key, draft) => { saved.push(plain(draft)); await handoff.promise; }, consumeText: async (...args) => consumed.push(args) });
+  app.welcome.value.text = ""; app.welcome.value.photos = [{ id: "p1", uri: "file:///photo.jpg", name: "123.jpg" }];
+  app.render(); await settle(); app.render().find((node) => node.type === "HomePanel").props.onChat();
+  app.render().find((node) => node.type === "AiHome").props.onSend(); await settle();
+  assert.equal(saved[0].photos[0].id, "p1"); assert.equal(consumed.length, 0);
+  assert.equal(app.calls.filter((call) => call.path.endsWith("/messages") && call.method === "POST").length, 0);
+  handoff.resolve(); await settle(); const panel = app.render().find((node) => node.type === "ChatPanel");
+  assert.equal(panel.props.startWithSend, true); assert.deepEqual(plain(consumed), [["", ["p1"]]]); app.unmount();
 });

@@ -145,7 +145,11 @@ export type Approval = {
   state: string;
   details: { title: string; description?: string; path?: string; bytes?: number; preview?: string; task?: string; tool?: string; arguments?: Record<string, unknown> };
 };
-export type Draft = { text: string; attachments?: Resource[]; pending: MessageInput | null;
+export type DraftPhoto = {
+  id: string; uri: string; name: string; width: number; height: number;
+  prepared?: { uri: string; name: string; size: number }; resource?: Resource; error?: string;
+};
+export type Draft = { text: string; attachments?: Resource[]; photos?: DraftPhoto[]; pending: MessageInput | null;
   delivery?: { intent: "queue" | "steer"; target_run_id?: string } };
 export type Schedule = {
   id: string;
@@ -292,14 +296,16 @@ export function prepareMessage(
   newId: () => string,
 ): MessageInput {
   if (draft.pending) return draft.pending;
-  if (!draft.text.trim() && !draft.attachments?.length) throw new Error("先写下要说的话或添加资料。");
-  if ((draft.attachments?.length ?? 0) > 8) throw new Error("每条消息最多 8 份资料。");
+  if (draft.photos?.some((photo) => !photo.resource)) throw new Error("照片还未发送完成，请重试发送。");
+  const attachments = [...new Set([...(draft.attachments ?? []).map((item) => item.id), ...(draft.photos ?? []).map((photo) => photo.resource!.id)])];
+  if (!draft.text.trim() && !attachments.length) throw new Error("先写下要说的话或添加照片。");
+  if (attachments.length > 8) throw new Error("每条消息最多 8 份附件。");
   if (intent === "steer" && (!target || target !== runningId))
     throw new Error("原目标已经结束。请选择排队发送，或重新选择当前运行。");
   return {
     id: newId(),
     content: draft.text.trim(),
-    ...(draft.attachments?.length ? { attachments: draft.attachments.map((item) => item.id) } : {}),
+    ...(attachments.length ? { attachments } : {}),
     intent,
     kind,
     ...(intent === "steer" && target ? { target_run_id: target } : {}),

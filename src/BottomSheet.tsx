@@ -1,19 +1,24 @@
 import type { ThemeColors } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AccessibilityInfo, Animated, Easing, Keyboard, KeyboardAvoidingView, Modal, PanResponder, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { radius, space, typography } from "./theme";
 
-export function BottomSheet({ visible, title, subtitle, onClose, children, tall = false }: {
-  visible: boolean; title: string; subtitle?: string; onClose: () => void; children: ReactNode; tall?: boolean;
+export function BottomSheet({ visible, title, subtitle, onClose, onDismiss, children, tall = false }: {
+  visible: boolean; title: string; subtitle?: string; onClose: () => void; onDismiss?: () => void; children: ReactNode; tall?: boolean;
 }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
   const { height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(visible);
+  const wasMounted = useRef(mounted);
+  useEffect(() => {
+    if (wasMounted.current && !mounted && Platform.OS !== "ios") onDismiss?.();
+    wasMounted.current = mounted;
+  }, [mounted, onDismiss]);
   const [reduceMotion, setReduceMotion] = useState(false);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
   const [progress] = useState(() => new Animated.Value(0));
@@ -56,7 +61,7 @@ export function BottomSheet({ visible, title, subtitle, onClose, children, tall 
   }), [dismiss, drag]);
   const keyboardInset = keyboardHeight ? keyboardHeight + insets.bottom : 0;
   const availableHeight = Math.max(160, height - keyboardInset - insets.top - 24);
-  return <Modal visible={mounted} transparent animationType="none" statusBarTranslucent onRequestClose={dismiss}>
+  return <Modal visible={mounted} transparent animationType="none" statusBarTranslucent onRequestClose={dismiss} onDismiss={Platform.OS === "ios" ? onDismiss : undefined}>
     <View style={styles.root}>
       <Animated.View style={[StyleSheet.absoluteFill, { opacity: progress, backgroundColor: colors.overlay }]}>
         <Pressable style={StyleSheet.absoluteFill} accessibilityRole="button" accessibilityLabel={`关闭${title}`} onPress={dismiss} />
