@@ -335,3 +335,29 @@ test("system calendar viewer failure remains visible and rejects for Home's noti
   assert.match(app.controller.snapshot.calendarError, /无法打开系统日历/);
   assert.equal(app.controller.snapshot.events.length, 1);
 });
+
+test("phone context restores today's cache before slow reads, keeps weather on network failure, and removes it on revoked permission", async () => {
+  let saved;
+  const first = controllerHarness({ setSnapshot: async (value) => { saved = value; } }, enabled);
+  await first.start(); first.controller.dispose();
+  assert.ok(saved);
+  const delayed = deferred();
+  const restored = controllerHarness({ getSnapshot: async () => saved, readPlace: () => delayed.promise, readCalendar: () => delayed.promise,
+    weather: async () => { throw new Error("offline"); } }, enabled);
+  await restored.start();
+  assert.equal(restored.controller.snapshot.weather.temperature, 20); assert.equal(restored.controller.snapshot.events[0].id, "event1");
+  delayed.resolve(place); await flush();
+  assert.equal(restored.controller.snapshot.weather.temperature, 20); assert.equal(restored.controller.snapshot.weatherState, "ready");
+  assert.match(restored.controller.snapshot.weatherError, /暂未更新/); restored.controller.dispose();
+  const deniedApp = controllerHarness({ getSnapshot: async () => saved, locationPermission: async () => blocked, calendarPermission: async () => blocked }, enabled);
+  await deniedApp.start(); assert.equal(deniedApp.controller.snapshot.weather, null); assert.equal(deniedApp.controller.snapshot.events.length, 0); deniedApp.controller.dispose();
+});
+
+test("yesterday's phone context is never restored as today's calendar or weather", async () => {
+  let saved;
+  const first = controllerHarness({ setSnapshot: async (value) => { saved = value; } }, enabled); await first.start(); first.controller.dispose();
+  const delayed = deferred();
+  const next = controllerHarness({ getSnapshot: async () => saved, readPlace: () => delayed.promise, readCalendar: () => delayed.promise }, enabled);
+  next.time(baseNow + 24 * 3600000); await next.start();
+  assert.equal(next.controller.snapshot.weather, null); assert.equal(next.controller.snapshot.events.length, 0); next.controller.dispose();
+});

@@ -1,4 +1,5 @@
 import { availablePreference } from "./providerEditing";
+import { useSessionData } from "./useSessionData";
 import { ThemeProvider } from "./ThemeProvider";
 import { AgentChatHeader } from "./AgentChatHeader";
 import { ChatPreferencesProvider } from "./chatPreferences";
@@ -7,7 +8,6 @@ import { useUi, ActionLink, BackLink, Button, humanError, PageHeading, PageScrol
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  AppState,
   BackHandler,
   Image,
   Keyboard,
@@ -25,20 +25,16 @@ import {
   mergeById,
   normalizeServerUrl,
   request,
-  type Assistant,
-  type Agent,
   type Connection,
   type DraftPhoto,
   type Conversation,
   type MessageInput,
-  type ModelCatalog,
   type Page,
   type ReasoningEffort,
   type Resource,
   type Run,
-  type ServiceStatus,
 } from "./api";
-import { ConnectionStatusProvider, ServiceStatusNotice, useSyncStatus } from "./ConnectionStatus";
+import { ConnectionStatusProvider, ServiceStatusNotice } from "./ConnectionStatus";
 import { NoticeProvider } from "./Notice";
 import { ChatPanel } from "./ChatPanel";
 import { AiHome } from "./AiHome";
@@ -249,23 +245,14 @@ function ConnectedSession({
   const [settingsView, setSettingsView] = useState<"overview" | Exclude<SettingsDestination, "search">>("overview");
   const navigation = useRef(0);
   const [resourceReturnTab, setResourceReturnTab] = useState<Tab>("settings");
-  const [recentResources, setRecentResources] = useState<Resource[]>([]);
   const [previewResource, setPreviewResource] = useState<Resource | null>(null);
   const home = useHomePreferences(connection.url);
+  const { assistant, setAssistant, status, lastSyncFailed, conversations, setConversations, agents, catalog, setCatalog,
+    recentResources, selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive } = useSessionData(connection);
   const [showSearchSettings, setShowSearchSettings] = useState(false);
-  const [assistant, setAssistant] = useState<Assistant | null>(null);
-  const [status, setStatus] = useState<ServiceStatus | null>(null);
-  const [lastSyncFailed, setLastSyncFailed] = useState(false);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [catalog, setCatalog] = useState<ModelCatalog | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number } | null>(null);
-  const selectedRef = useRef(selectedId);
-  const [conversationCursor, setConversationCursor] = useState<string | null>(
-    null,
-  );
   const [showAiDrawer, setShowAiDrawer] = useState(false);
+
   const [chatSettingsFor, setChatSettingsFor] = useState<string | null>(null);
   const [chatPreferencesReturn, setChatPreferencesReturn] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
@@ -281,12 +268,7 @@ function ConnectedSession({
     add: welcome.addPhotos, onError: setError });
   const creatingConversation = useRef(false);
   const creationReceipt = useRef<{ key: string; conversation: Conversation } | null>(null);
-  const [loading, setLoading] = useState(true);
   const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
-  const refreshRef = useRef<() => void>(() => undefined);
-  const alive = useRef(true);
-  const refresh = useCallback(() => refreshRef.current(), []);
-  const reportSync = useSyncStatus(refresh);
   const selected = conversations.find((item) => item.id === selectedId) ?? null;
   const selectedAgent = agents.find((item) => item.id === selected?.agent_id);
   const chatAssistantName = selected?.agent_id ? selectedAgent?.name ?? (selected.agent_id === "finance" ? "财务助手" : selected.agent_id === "health" ? "健康助手" : "专属助手") : assistant?.name ?? "知行";
@@ -373,76 +355,6 @@ function ConnectedSession({
     } catch (e) { if (alive.current && requestId === navigation.current) setError(humanError(e)); }
   }
   function focusHandled(seq: number) { setFocusMessage((old) => old?.seq === seq ? null : old); }
-  useEffect(() => {
-    selectedRef.current = selectedId;
-  }, [selectedId]);
-
-  useEffect(() => {
-    let active = true;
-    let polling = false;
-    let initial = true;
-    alive.current = true;
-    const controller = new AbortController();
-    async function poll() {
-      if (!active || polling || AppState.currentState === "background") return;
-      polling = true;
-      try {
-        const [health, person, chats, agentPage, modelPage, current, resources, recentChats] = await Promise.all([
-          request<ServiceStatus>(connection, "/status", { signal: controller.signal }),
-          request<Assistant>(connection, "/assistant", { signal: controller.signal }),
-          request<Page<Conversation>>(connection, "/conversations?latest=true&limit=100", { signal: controller.signal }),
-          request<Page<Agent>>(connection, "/agents", { signal: controller.signal }),
-          request<ModelCatalog>(connection, "/models", { signal: controller.signal }).catch(() => null),
-          selectedRef.current ? request<Conversation>(connection, `/conversations/${selectedRef.current}`, { signal: controller.signal }) : Promise.resolve(null),
-          request<Page<Resource>>(connection, "/resources?latest=true&limit=10", { signal: controller.signal }).catch(() => null),
-          request<Page<Conversation>>(connection, "/conversations/recent?limit=10", { signal: controller.signal }).catch(() => null),
-        ]);
-        if (!active) return;
-        setStatus(health);
-        setLastSyncFailed(!modelPage);
-        setAssistant(person);
-        if (resources) setRecentResources(resources.items);
-        setConversations((old) =>
-          mergeById(old, [...chats.items, ...(recentChats?.items ?? []), ...(current ? [current] : [])]),
-        );
-        setAgents(agentPage.items);
-        if (modelPage) setCatalog(modelPage);
-        if (initial) {
-          setConversationCursor(chats.previous_cursor ?? null);
-          initial = false;
-        }
-        setSelectedId(
-          (old) => old ?? [...chats.items].reverse().find((item) => !item.agent_id)?.id ?? null,
-        );
-        reportSync();
-      } catch (e) {
-        if (active) {
-          setLastSyncFailed(true);
-          reportSync(e);
-        }
-      } finally {
-        polling = false;
-        if (active) setLoading(false);
-      }
-    }
-    refreshRef.current = () => {
-      void poll();
-    };
-    void poll();
-    const timer = setInterval(() => {
-      void poll();
-    }, 5000);
-    const listener = AppState.addEventListener("change", (state) => {
-      if (state === "active") void poll();
-    });
-    return () => {
-      active = false;
-      alive.current = false;
-      clearInterval(timer);
-      controller.abort();
-      listener.remove();
-    };
-  }, [connection, reportSync]);
 
   async function newConversation(
     explore = false,

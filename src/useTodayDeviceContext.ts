@@ -7,10 +7,12 @@ import { fetchTodayWeather } from "./todayWeather";
 import type { TodayCalendarEvent, TodayDeviceSnapshot, TodayPlace, TodayWeather } from "./todayTypes";
 
 export const TODAY_PREFERENCES_KEY = "zhixing.today-device.v1";
+export const TODAY_SNAPSHOT_KEY = "zhixing.today-snapshot.v1";
 export const TODAY_WEATHER_INTERVAL = 15 * 60 * 1000;
 export const TODAY_CALENDAR_INTERVAL = 60 * 1000;
 type Preferences = { locationEnabled: boolean; calendarEnabled: boolean };
 type Domain = "location" | "calendar";
+type DeviceCache = { date: string; place: TodayPlace | null; weather: TodayWeather | null; events: TodayCalendarEvent[]; calendarReady: boolean };
 type Dependencies = {
   getPreferences: () => Promise<string | null>; setPreferences: (value: string) => Promise<void>;
   locationPermission: (request?: boolean) => Promise<TodayPermission>;
@@ -19,6 +21,7 @@ type Dependencies = {
   readCalendar: (now: number, signal: AbortSignal) => Promise<TodayCalendarEvent[]>;
   weather: (place: TodayPlace, signal: AbortSignal) => Promise<TodayWeather>;
   networkLocation: () => Promise<void>; openEvent: (event: TodayCalendarEvent) => Promise<void>; now: () => number;
+  getSnapshot?: () => Promise<string | null>; setSnapshot?: (value: string) => Promise<void>;
 };
 export function parseTodayPreferences(value: string | null): Preferences {
   if (value === null) return { locationEnabled: false, calendarEnabled: false };
@@ -44,6 +47,7 @@ export class TodayDeviceController {
   private readVersion = 0;
   private writeVersion = 0;
   private writes = Promise.resolve();
+  private cacheWrites = Promise.resolve();
   private locationRequest: AbortController | null = null;
   private calendarRequest: AbortController | null = null;
   private lastLocation = -Infinity;
@@ -63,9 +67,29 @@ export class TodayDeviceController {
     try {
       const saved = parseTodayPreferences(await this.deps.getPreferences());
       if (!this.alive || version !== this.readVersion) return;
-      this.patch({ ...saved, preferencesReady: true, preferenceError: "" });
+      // Verify current OS permission before exposing persisted device information.
+      let restored: Partial<TodayDeviceSnapshot> = {};
+      try {
+        const raw = await this.deps.getSnapshot?.();
+        const cached: DeviceCache | null = raw ? JSON.parse(raw) : null;
+        if (cached?.date === day(this.deps.now())) {
+          const [location, calendar] = await Promise.all([
+            saved.locationEnabled ? this.deps.locationPermission(false) : null,
+            saved.calendarEnabled ? this.deps.calendarPermission(false) : null,
+          ]);
+          if (location?.granted && cached.place && cached.weather) restored = { ...restored, place: cached.place, weather: cached.weather, locationState: "ready", weatherState: "ready" };
+          if (calendar?.granted && cached.calendarReady && Array.isArray(cached.events)) restored = { ...restored, events: cached.events, calendarState: "ready" };
+        }
+      } catch { /* A disposable snapshot must not prevent reading current phone data. */ }
+      if (!this.alive || version !== this.readVersion) return;
+      this.patch({ ...saved, ...restored, preferencesReady: true, preferenceError: "" });
       void this.refreshLocation(); void this.refreshCalendar();
     } catch { if (this.alive && version === this.readVersion) this.patch({ preferencesReady: false, preferenceError: "首页开关暂时无法读取，请重试。" }); }
+  }
+  private persistSnapshot() {
+    const { place, weather, events, calendarState } = this.snapshot;
+    const value: DeviceCache = { date: day(this.deps.now()), place, weather, events, calendarReady: calendarState === "ready" };
+    this.cacheWrites = this.cacheWrites.catch(() => undefined).then(() => this.deps.setSnapshot?.(JSON.stringify(value))).then(() => undefined).catch(() => undefined);
   }
   private persist() {
     const value = JSON.stringify({ locationEnabled: this.snapshot.locationEnabled, calendarEnabled: this.snapshot.calendarEnabled });
@@ -106,6 +130,7 @@ export class TodayDeviceController {
     const message = permission.canAskAgain ? `未允许${name}，需要时可点击启用。` : `${name}权限已关闭，请在系统设置中允许。`;
     if (domain === "location") this.patch({ place: null, weather: null, locationState: state, weatherState: "idle", locationError: message, weatherError: "" });
     else this.patch({ events: [], calendarState: state, calendarError: message });
+    this.persistSnapshot();
   }
   private async enable(domain: Domain) {
     if (!this.active || this.enabling[domain]) return;
@@ -128,11 +153,13 @@ export class TodayDeviceController {
   disableLocation = () => {
     this.cancelLocation(); this.lastLocation = -Infinity;
     this.patch({ locationEnabled: false, place: null, weather: null, locationState: "idle", weatherState: "idle", locationError: "", weatherError: "" });
+    this.persistSnapshot();
     if (this.snapshot.preferencesReady) void this.persist();
   };
   disableCalendar = () => {
     this.cancelCalendar(); this.lastCalendar = -Infinity;
     this.patch({ calendarEnabled: false, events: [], calendarState: "idle", calendarError: "" });
+    this.persistSnapshot();
     if (this.snapshot.preferencesReady) void this.persist();
   };
   private failed(domain: Domain, error: unknown) {
@@ -151,17 +178,20 @@ export class TodayDeviceController {
       if (!valid()) return;
       if (!permission.granted) { this.permissionDenied("location", permission); return; }
       if (!force && this.deps.now() - this.lastLocation < TODAY_WEATHER_INTERVAL) return;
-      this.patch({ locationState: "loading", locationError: "", weatherState: "loading", weatherError: "" });
+      this.patch({ locationState: this.snapshot.place ? "ready" : "loading", locationError: "", weatherState: this.snapshot.weather ? "ready" : "loading", weatherError: "" });
       const place = await this.deps.readPlace(controller.signal);
       if (!valid()) return;
-      this.patch({ place, weather: null, locationState: "ready" });
+      const previous = this.snapshot.place;
+      const sameArea = previous && Math.abs(previous.latitude - place.latitude) < 0.01 && Math.abs(previous.longitude - place.longitude) < 0.01;
+      this.patch({ place, weather: sameArea ? this.snapshot.weather : null, locationState: "ready" });
       try {
         const weather = await this.deps.weather(place, controller.signal);
         if (!valid()) return;
         this.lastLocation = this.deps.now();
         this.patch({ weather, weatherState: "ready", weatherError: "" });
+        this.persistSnapshot();
       } catch (error) {
-        if (valid()) this.patch({ weather: null, weatherState: "error", weatherError: error instanceof Error && /^天气/.test(error.message) ? error.message : "天气暂不可用，请检查网络后刷新。" });
+        if (valid()) this.patch({ weatherState: this.snapshot.weather ? "ready" : "error", weatherError: error instanceof Error && /^天气/.test(error.message) ? error.message : "天气暂未更新，请检查网络后刷新。" });
         // Avoid retrying a failed network request on every minute tick.
         if (valid()) this.lastLocation = this.deps.now();
       }
@@ -177,7 +207,7 @@ export class TodayDeviceController {
       if (!valid()) return;
       if (!permission.granted) { this.permissionDenied("calendar", permission); return; }
       if (!force && this.deps.now() - this.lastCalendar < TODAY_CALENDAR_INTERVAL) return;
-      this.patch({ calendarState: "loading", calendarError: "" });
+      this.patch({ calendarState: this.snapshot.calendarState === "ready" ? "ready" : "loading", calendarError: "" });
       const now = this.deps.now();
       const events = await this.deps.readCalendar(now, controller.signal);
       if (!valid()) return;
@@ -185,6 +215,7 @@ export class TodayDeviceController {
       if (day(now) !== day(this.deps.now())) { this.lastCalendar = -Infinity; this.patch({ events: [], calendarState: "idle" }); return; }
       this.lastCalendar = this.deps.now();
       this.patch({ events, calendarState: "ready", calendarError: "" });
+      this.persistSnapshot();
     } catch (error) { if (valid()) this.failed("calendar", error); }
     finally { if (this.calendarRequest === controller) this.calendarRequest = null; }
   };
@@ -210,6 +241,7 @@ export class TodayDeviceController {
 
 const nativeDependencies: Dependencies = {
   getPreferences: () => AsyncStorage.getItem(TODAY_PREFERENCES_KEY), setPreferences: (value) => AsyncStorage.setItem(TODAY_PREFERENCES_KEY, value),
+  getSnapshot: () => AsyncStorage.getItem(TODAY_SNAPSHOT_KEY), setSnapshot: (value) => AsyncStorage.setItem(TODAY_SNAPSHOT_KEY, value),
   locationPermission: todayLocationPermission, calendarPermission: todayCalendarPermission,
   readPlace: readTodayPlace, readCalendar: readTodayCalendar, weather: fetchTodayWeather,
   networkLocation: enableTodayNetworkLocation, openEvent: openTodayCalendarEvent, now: Date.now,
