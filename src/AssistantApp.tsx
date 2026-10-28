@@ -212,8 +212,8 @@ function DisconnectedShell({ onConnect, error }: { onConnect: (value: Connection
   const selectTab = (next: Tab) => { setTab(next); if (next === "life") setLifePage("overview"); if (next === "settings") setLocalSettings("overview"); };
   const showTabs = (tab !== "life" || lifePage === "overview") && (tab !== "settings" || localSettings === "overview");
   return <View style={s.body}>
-    {tab === "home" ? <HomePanel device={todayDevice} conversations={[]} promptReady={false} onChat={connect} onOpenConversation={connect} onLife={() => selectTab("life")} onWork={() => selectTab("work")}
-      onFinance={() => { setLifePage("finance"); setTab("life"); }} onHealth={() => { setLifePage("health"); setTab("life"); }} onRecordExpense={connect} />
+    {tab === "home" ? <HomePanel device={todayDevice} conversations={[]} promptReady={false} onOpenConversation={connect} onLife={() => selectTab("life")} onWork={() => selectTab("work")}
+      onFinance={() => { setLifePage("finance"); setTab("life"); }} onHealth={() => { setLifePage("health"); setTab("life"); }} />
       : tab === "work" ? <ConstructionPage />
       : tab === "life" ? lifePage === "overview" ? <LifePanel onFinance={() => setLifePage("finance")} onHealth={() => setLifePage("health")} onChat={connect} />
         : <><BackLink label="生活" onPress={() => setLifePage("overview")} /><PageScrollView><PageHeading title={lifePage === "finance" ? "财务" : "健康"} description="连接服务后，记录收支与饮食，继续自己的目标。" /><Button onPress={connect}>连接服务</Button></PageScrollView></>
@@ -595,9 +595,9 @@ function ConnectedSession({
           loading={loading || !catalog} syncFailed={lastSyncFailed} onPrompt={homeChat} promptReady={welcome.ready && !busy}
           preferences={{ ...home.preferences, pins: home.preferences.pins.filter((item) => item.kind !== "project"), visited: home.preferences.visited?.filter((item) => item.kind !== "project") ?? [] }}
           preferencesReady={home.ready} preferenceError={home.error} onPreferenceRetry={home.retry} onTogglePin={home.toggle}
-          onOpenResource={openResource} onResources={openResources} onChat={openMainChat} onOpenConversation={openConversation}
+          onOpenResource={openResource} onResources={openResources} onOpenConversation={openConversation}
           onLife={() => selectTab("life")} onWork={() => selectTab("work")}
-          onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} onRecordExpense={() => openAgent("finance")} />
+          onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} />
       ) : tab === "work" ? (
         <ConstructionPage />
       ) : tab === "life" ? lifePage === "overview" ? (

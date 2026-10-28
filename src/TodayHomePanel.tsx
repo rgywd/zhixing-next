@@ -36,12 +36,11 @@ export function TodayHomePanel({ device, connection, refreshKey = 0, status, loa
     else setContextOpen(true);
   }
   function begin(text: string) {
-    if (homeProps.promptReady === false) return;
-    if (onPrompt) onPrompt(todayChatPrompt(text, snapshot));
-    else homeProps.onChat();
+    if (homeProps.promptReady === false || !onPrompt) return;
+    onPrompt(todayChatPrompt(text, snapshot));
   }
   return <>
-    <HomePanel {...homeProps} today={view} onTodaySettings={() => setContextOpen(true)} onTodayCalendar={openCalendar} onTodayPrompt={begin} />
+    <HomePanel {...homeProps} today={view} onTodaySettings={() => setContextOpen(true)} onTodayCalendar={openCalendar} onTodayPrompt={onPrompt ? begin : undefined} />
     <BottomSheet visible={contextOpen} title="今日信息" subtitle="按需启用，帮助安排今天。" onClose={() => setContextOpen(false)}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 24, gap: 16 }}>
         {snapshot.preferenceError ? <View style={s.stack}><Text accessibilityRole="alert" style={s.error}>{snapshot.preferenceError}</Text><ActionLink icon="refresh-outline" onPress={device.retryPreferences}>重新读取设置</ActionLink></View> : null}

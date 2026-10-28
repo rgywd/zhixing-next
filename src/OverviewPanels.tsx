@@ -9,7 +9,7 @@ import { TodayHomeView } from "./TodayHomeView";
 import type { TodayHomeView as TodayView } from "./todayTypes";
 import { emptyHomePreferences, homeEntries, targetKey, type HomePreferences, type HomeTarget } from "./homeEntries";
 
-export function HomePanel({ conversations, projects = [], resources = [], preferences = emptyHomePreferences, preferencesReady = false, preferenceError, onPreferenceRetry, onTogglePin, onChat, onOpenConversation, onOpenProject, onOpenResource, onResources, onLife, intro, today, onTodaySettings, onTodayCalendar, onTodayPrompt, onFinance, onHealth, onRecordExpense, promptReady }: {
+export function HomePanel({ conversations, projects = [], resources = [], preferences = emptyHomePreferences, preferencesReady = false, preferenceError, onPreferenceRetry, onTogglePin, onOpenConversation, onOpenProject, onOpenResource, onResources, onLife, intro, today, onTodaySettings, onTodayCalendar, onTodayPrompt, onFinance, onHealth, promptReady }: {
   conversations: Conversation[];
   projects?: Project[];
   resources?: Resource[];
@@ -18,7 +18,6 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
   preferenceError?: string;
   onPreferenceRetry?: () => void;
   onTogglePin?: (target: HomeTarget) => void;
-  onChat: () => void;
   onOpenConversation: (id: string) => void;
   onOpenProject?: (id: string) => void;
   onOpenResource?: (id: string) => void;
@@ -32,7 +31,6 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
   onTodayPrompt?: (text: string) => void;
   onFinance?: () => void;
   onHealth?: () => void;
-  onRecordExpense?: () => void;
   promptReady?: boolean;
 }) {
   const { s } = useUi();
@@ -51,7 +49,7 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
   return (
     <PageScrollView tabs>
       <TodayHomeView today={today} onSettings={onTodaySettings} onCalendar={onTodayCalendar} onPrompt={onTodayPrompt} promptReady={promptReady}
-        onFinance={onFinance ?? onLife} onHealth={onHealth ?? onLife} onRecordExpense={onRecordExpense ?? onFinance ?? onLife} onChat={onChat}
+        onFinance={onFinance ?? onLife} onHealth={onHealth ?? onLife}
         onManage={onTogglePin ? () => setManaging(true) : undefined} manageReady={preferencesReady} />
       {intro}
       {pins.length ? <>
