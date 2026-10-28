@@ -26,7 +26,7 @@ function fixture() {
 }
 function todayHarness(overrides = {}) {
   const lifecycle = runtime(), calls = []; const loaded = load("TodayHomeView", dependencies(lifecycle));
-  const props = { today: fixture(), promptReady: true, manageReady: true, ...Object.fromEntries(["Settings", "Calendar", "Prompt", "Finance", "Health", "RecordExpense", "Chat", "Manage"].map((key) => [`on${key}`, (...args) => calls.push([key, ...args])])), ...overrides };
+  const props = { today: fixture(), promptReady: true, manageReady: true, ...Object.fromEntries(["Settings", "Calendar", "Prompt", "Finance", "Health", "Manage"].map((key) => [`on${key}`, (...args) => calls.push([key, ...args])])), ...overrides };
   return { ...loaded, calls, props, render: () => lifecycle.render(() => loaded.TodayHomeView(props)) };
 }
 const text = (nodes) => nodes.filter((node) => node.type === "Text").map((node) => [node.props.children].flat(Infinity).filter((value) => typeof value === "string" || typeof value === "number").join("")).join(" ");
@@ -58,29 +58,26 @@ test("Today prompts forward typed text once and never overwrite an Agent draft o
   assert.equal(app.render().find((node) => node.type === "TextInput").props.value, "");
   app.render().find((node) => node.props.accessibilityLabel === "开始梳理今日安排").props.onPress();
   assert.match(app.calls[1][1], /1月2日 周四 14:20/); assert.match(app.calls[1][1], /没有已确认/);
-  assert.equal(app.calls.some(([kind]) => kind === "Chat"), false);
+  assert.equal(app.calls.length, 2);
 });
 
-test("quick thought preparation preserves locally typed text and draft readiness locks both prompt actions", () => {
-  const app = todayHarness();
-  app.render().find((node) => node.type === "TextInput").props.onChangeText("还没写完的想法");
-  app.render().find((node) => node.props.accessibilityLabel === "梳理乱序思路").props.onPress();
-  assert.match(app.calls[0][1], /^还没写完的想法\n\n帮我梳理/);
+test("draft readiness locks the Today input and start action", () => {
   const locked = todayHarness({ promptReady: false }); const nodes = locked.render();
   assert.equal(nodes.find((node) => node.type === "TextInput").props.editable, false);
-  for (const label of ["开始梳理今日安排", "梳理乱序思路"]) { const action = nodes.find((node) => node.props.accessibilityLabel === label); assert.equal(action.props.disabled, true); action.props.onPress(); }
+  const action = nodes.find((node) => node.props.accessibilityLabel === "开始梳理今日安排");
+  assert.equal(action.props.disabled, true); action.props.onPress();
   assert.deepEqual(locked.calls, []);
 });
 
-test("Today context, calendar, service modules, expense entry, and management keep distinct callbacks", () => {
+test("Today context, calendar, service modules, and management keep distinct callbacks", () => {
   const app = todayHarness(); const nodes = app.render();
-  for (const label of ["今日位置、天气与日历设置", "连接或查看系统日历", "打开财务", "打开健康", "记一笔开销", "整理常用"]) nodes.find((node) => node.props.accessibilityLabel === label).props.onPress();
-  assert.deepEqual(app.calls.map(([kind]) => kind), ["Settings", "Calendar", "Finance", "Health", "RecordExpense", "Manage"]);
+  for (const label of ["今日位置、天气与日历设置", "连接或查看系统日历", "打开财务", "打开健康", "整理常用"]) nodes.find((node) => node.props.accessibilityLabel === label).props.onPress();
+  assert.deepEqual(app.calls.map(([kind]) => kind), ["Settings", "Calendar", "Finance", "Health", "Manage"]);
 });
 
 test("Home keeps pin management, existing targets, recent resource callbacks, and an actual visible count", () => {
   const lifecycle = runtime(), calls = []; const { HomePanel } = load("OverviewPanels", dependencies(lifecycle));
-  const props = { conversations: [{ id: "conversation", title: "已有对话", updated_at: "2031-01-02T12:00:00Z" }], resources: [{ id: "resource", name: "已有资料", created_at: "2031-01-02T13:00:00Z" }], preferences: { pins: [{ kind: "conversation", id: "conversation", title: "已有对话" }], visited: [], opened: {} }, preferencesReady: true, onChat() {}, onLife() {}, onWork() {}, onOpenConversation: (id) => calls.push(["conversation", id]), onOpenResource: (id) => calls.push(["resource", id]), onResources: () => calls.push(["resources"]), onTogglePin: (item) => calls.push(["toggle", item.id]) };
+  const props = { conversations: [{ id: "conversation", title: "已有对话", updated_at: "2031-01-02T12:00:00Z" }], resources: [{ id: "resource", name: "已有资料", created_at: "2031-01-02T13:00:00Z" }], preferences: { pins: [{ kind: "conversation", id: "conversation", title: "已有对话" }], visited: [], opened: {} }, preferencesReady: true, onLife() {}, onWork() {}, onOpenConversation: (id) => calls.push(["conversation", id]), onOpenResource: (id) => calls.push(["resource", id]), onResources: () => calls.push(["resources"]), onTogglePin: (item) => calls.push(["toggle", item.id]) };
   const render = () => lifecycle.render(() => HomePanel(props)); let nodes = render();
   assert.match(text(nodes), /2 条记录/);
   nodes.find((node) => node.type === "ActionRow" && node.props.title === "已有对话").props.onPress();

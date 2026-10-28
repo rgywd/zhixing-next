@@ -3,7 +3,7 @@ import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { AppearanceControl } from "./AppearanceControl";
 import { useThemedStyles } from "./ThemeProvider";
-import { layout, radius, space, typography, type ThemeColors } from "./theme";
+import { radius, space, typography, type ThemeColors } from "./theme";
 import type { TodayHomeModule, TodayHomeView as TodayView } from "./todayTypes";
 import { useUi } from "./ui";
 
@@ -19,9 +19,9 @@ export function emptyTodayView(now = new Date()): TodayView {
   };
 }
 
-export function TodayHomeView({ today: supplied, onSettings, onCalendar, onPrompt, onFinance, onHealth, onRecordExpense, onChat, onManage, manageReady, promptReady = true }: {
+export function TodayHomeView({ today: supplied, onSettings, onCalendar, onPrompt, onFinance, onHealth, onManage, manageReady, promptReady = true }: {
   today?: TodayView; onSettings?: () => void; onCalendar?: () => void; onPrompt?: (text: string) => void;
-  onFinance: () => void; onHealth: () => void; onRecordExpense: () => void; onChat: () => void;
+  onFinance: () => void; onHealth: () => void;
   onManage?: () => void; manageReady: boolean; promptReady?: boolean;
 }) {
   const { colors, s } = useUi();
@@ -30,9 +30,9 @@ export function TodayHomeView({ today: supplied, onSettings, onCalendar, onPromp
   const today = supplied ?? emptyTodayView();
   const promptLocked = !promptReady || !onPrompt;
   const statusColor = today.statusTone === "green" ? colors.green : today.statusTone === "gold" ? colors.gold : colors.muted;
-  function start(prompt?: string) {
+  function start() {
     if (promptLocked) return;
-    const text = prompt ? `${input.trim() ? `${input.trim()}\n\n` : ""}${prompt}` : input.trim() || `请结合今天（${today.dateLabel} ${today.clockLabel}）的信息帮我梳理日常节奏：${today.briefing} ${today.calendar.hasEvent ? `下一项日程：${today.calendar.title}，${today.calendar.description}。` : "目前没有已确认的下一项日程信息。"}先一起明确接下来可以做的一件事。`;
+    const text = input.trim() || `请结合今天（${today.dateLabel} ${today.clockLabel}）的信息帮我梳理日常节奏：${today.briefing} ${today.calendar.hasEvent ? `下一项日程：${today.calendar.title}，${today.calendar.description}。` : "目前没有已确认的下一项日程信息。"}先一起明确接下来可以做的一件事。`;
     onPrompt?.(text);
     setInput("");
   }
@@ -85,16 +85,12 @@ export function TodayHomeView({ today: supplied, onSettings, onCalendar, onPromp
 
     <View style={v.sectionRow}><Text accessibilityRole="header" style={v.sectionTitle}>常用模块</Text>{onManage ? <Pressable accessibilityRole="button" accessibilityLabel="整理常用" disabled={!manageReady} onPress={onManage} style={({ pressed }) => [v.manageButton, !manageReady && v.disabled, pressed && s.pressed]}><Ionicons name="options-outline" size={17} color={colors.gold} /><Text style={v.moduleDetail}>整理</Text></Pressable> : null}</View>
     <View style={v.moduleGrid}>{module("财务", "wallet-outline", today.finance, onFinance)}{module("健康", "heart-outline", today.health, onHealth)}</View>
-    <View style={v.quickRow}>
-      <Pressable accessibilityRole="button" accessibilityLabel="记一笔开销" onPress={onRecordExpense} style={({ pressed }) => [v.quickButton, pressed && s.pressed]}><Ionicons name="add" size={16} color={colors.gold} /><Text style={v.quickText}>记一笔开销</Text></Pressable>
-      <Pressable accessibilityRole="button" accessibilityLabel="梳理乱序思路" disabled={Boolean(onPrompt) && !promptReady} onPress={() => { if (onPrompt) start("帮我梳理现在杂乱的想法，先一起明确事情的轻重和下一步："); else onChat(); }} style={({ pressed }) => [v.quickButton, Boolean(onPrompt) && !promptReady && v.disabled, pressed && s.pressed]}><Ionicons name="bulb-outline" size={16} color={colors.gold} /><Text style={v.quickText}>梳理乱序思路</Text></Pressable>
-    </View>
   </>;
 }
 
 const createStyles = (colors: ThemeColors) => StyleSheet.create({
-  contextBar: { flexDirection: "row", alignItems: "center", borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, paddingLeft: space.md, paddingRight: space.xs, minHeight: 44, gap: space.xs },
-  contextContent: { flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: space.md, rowGap: 2, minHeight: 44, paddingVertical: space.xs },
+  contextBar: { flexDirection: "row", alignItems: "center", marginTop: space.md, borderRadius: radius.pill, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, paddingLeft: space.md, paddingRight: space.xs, minHeight: 44, gap: space.xs },
+  contextContent: { flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", alignContent: "center", columnGap: space.md, rowGap: 2, minHeight: 44, paddingVertical: space.xs },
   contextRow: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: space.xs, maxWidth: "100%", flexShrink: 1 },
   place: { ...typography.detail, color: colors.ink, flexShrink: 1 }, weather: { ...typography.detail, color: colors.muted, flexShrink: 1 }, contextSeparator: { ...typography.small, color: colors.muted, marginHorizontal: 2 },
   dateLabel: { ...typography.caption, color: colors.muted }, contextHint: { ...typography.small, color: colors.muted, marginTop: -space.sm, paddingHorizontal: space.sm },
@@ -109,5 +105,5 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   calendar: { flexDirection: "row", alignItems: "center", gap: space.md, backgroundColor: colors.surface, borderRadius: radius.card, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, padding: space.md, minHeight: 76 }, calendarDate: { minWidth: 42, borderRadius: radius.control, paddingHorizontal: space.sm, paddingVertical: 5, alignItems: "center", backgroundColor: colors.surfaceRaised, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line }, calendarMonth: { ...typography.small, fontWeight: "700", color: colors.gold }, calendarDay: { ...typography.item, fontSize: 19, lineHeight: 25, color: colors.ink }, calendarCopy: { flex: 1, minWidth: 0, gap: space.xs }, calendarTitleRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: space.sm }, calendarTitle: { ...typography.item, color: colors.ink, flexShrink: 1 }, calendarBadge: { ...typography.small, color: colors.gold, backgroundColor: colors.goldSoft, borderRadius: radius.small, paddingHorizontal: 6, paddingVertical: 2 }, calendarDescription: { ...typography.caption, color: colors.muted },
   sectionRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: space.sm, minHeight: 34 }, sectionTitle: { ...typography.section, color: colors.ink }, manageButton: { flexDirection: "row", gap: space.xs, minHeight: 44, alignItems: "center", paddingHorizontal: space.xs },
   moduleGrid: { flexDirection: "row", flexWrap: "wrap", gap: space.md }, module: { width: "45%", flexGrow: 1, minWidth: 0, backgroundColor: colors.surface, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, borderRadius: radius.card, padding: space.md, gap: space.sm }, moduleTop: { flexDirection: "row", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: space.sm }, moduleIcon: { width: 34, height: 34, borderRadius: radius.control, borderWidth: StyleSheet.hairlineWidth, alignItems: "center", justifyContent: "center" }, moduleBadge: { borderRadius: 5, paddingHorizontal: 5, paddingVertical: 2 }, moduleBadgeText: { ...typography.small }, moduleLabel: { ...typography.caption, color: colors.muted }, moduleValue: { ...typography.title, fontSize: 21, lineHeight: 29, color: colors.ink, fontVariant: ["tabular-nums"] }, moduleDetail: { ...typography.small, color: colors.muted }, moduleFooter: { marginTop: "auto", borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.line, paddingTop: space.sm, gap: space.xs }, progressTrack: { height: 6, borderRadius: radius.pill, overflow: "hidden", backgroundColor: colors.neutral }, progressFill: { height: "100%", borderRadius: radius.pill }, footerLabels: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", columnGap: space.xs, rowGap: 2 }, footerValue: { ...typography.caption, color: colors.ink, fontWeight: "600", flexShrink: 1 },
-  quickRow: { flexDirection: "row", flexWrap: "wrap", gap: space.md }, quickButton: { flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "center", gap: 5, minHeight: layout.touchTarget, backgroundColor: colors.surface, borderRadius: radius.item, borderWidth: StyleSheet.hairlineWidth, borderColor: colors.line, paddingHorizontal: space.sm, paddingVertical: space.sm }, quickText: { ...typography.detail, color: colors.ink, flexShrink: 1 }, disabled: { opacity: 0.45 },
+  disabled: { opacity: 0.45 },
 });

@@ -26,7 +26,7 @@ function panel(overrides = {}, propOverrides = {}) {
   };
   const exports = {};
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/TodayHomePanel.tsx", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, { exports, Date, Promise, require(name) { assert.ok(name in dependencies, name); return dependencies[name]; } });
-  const props = { connection: { url: "https://example.test", token: "not-real" }, device, conversations: [], onChat() {}, onOpenConversation() {}, onLife() {}, onWork() {}, promptReady: true, onPrompt: (text) => calls.push(["prompt", text]), ...propOverrides };
+  const props = { connection: { url: "https://example.test", token: "not-real" }, device, conversations: [], onOpenConversation() {}, onLife() {}, onWork() {}, promptReady: true, onPrompt: (text) => calls.push(["prompt", text]), ...propOverrides };
   const nodes = walk(exports.TodayHomePanel(props));
   return { calls, notices, device, linking, nodes, home: nodes.find((node) => node.type === "HomePanel") };
 }
@@ -145,6 +145,8 @@ test("home forwards device context only to a prepared editable draft and honors 
   assert.match(page.calls[0][1], /^先帮我想一想/); assert.match(page.calls[0][1], /手机读取的今日信息/);
   const locked = panel({}, { promptReady: false }); locked.home.props.onTodayPrompt("不能覆盖");
   assert.deepEqual(locked.calls, []);
+  const unavailable = panel({}, { onPrompt: undefined });
+  assert.equal(unavailable.home.props.onTodayPrompt, undefined);
 });
 
 test("system calendar open errors surface through the shared notice", async () => {

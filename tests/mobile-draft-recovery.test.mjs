@@ -256,15 +256,15 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
   dependencies["./useHealthReminders"] = { useHealthReminders() {} };
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
   dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };
-  const { ConnectedSession } = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession };\n");
+  const { ConnectedSession, BottomTabs } = load("AssistantApp.tsx", dependencies, "\nexport { ConnectedSession, BottomTabs };\n");
   const args = { connection: { url: "https://example.test", token: "test" }, onConnect() {}, onDisconnect() {}, connectionError: "" };
   const render = () => walk(lifecycle.render(() => ConnectedSession(args)));
-  return { render, calls, welcome, unmount: lifecycle.unmount };
+  return { render, calls, welcome, openChat() { render().find((node) => node.type === BottomTabs).props.onChange("chat"); }, unmount: lifecycle.unmount };
 }
 
 test("welcome rapid taps create one conversation even before React renders busy", async () => {
   const create = deferred(), app = welcomeSendHarness({ post: () => create.promise });
-  app.render(); await settle(); app.render().find((node) => node.type === "HomePanel").props.onChat();
+  app.render(); await settle(); app.openChat();
   const welcome = app.render().find((node) => node.type === "AiHome");
   welcome.props.onSend(); welcome.props.onSend(); await settle();
   assert.equal(app.calls.filter((call) => call.path === "/conversations" && call.method === "POST").length, 1);
@@ -273,7 +273,7 @@ test("welcome rapid taps create one conversation even before React renders busy"
 
 test("welcome retry reuses a received conversation when its subsequent model update fails", async () => {
   const app = welcomeSendHarness({ failModel: true }); app.render(); await settle();
-  app.render().find((node) => node.type === "HomePanel").props.onChat();
+  app.openChat();
   app.render().find((node) => node.type === "AiHome").props.onSend(); await settle();
   app.render().find((node) => node.type === "AiHome").props.onSend(); await settle();
   assert.equal(app.calls.filter((call) => call.path === "/conversations" && call.method === "POST").length, 1);
@@ -286,7 +286,7 @@ test("welcome cannot submit until both its original request and cleared welcome 
   const app = welcomeSendHarness({ saveDraft: async () => { order.push("request-saved"); },
     consumeText: async () => { order.push("clearing"); await clear.promise; order.push("welcome-cleared"); },
     submit: () => { order.push("submitted"); return sent.promise; } });
-  app.render(); await settle(); app.render().find((node) => node.type === "HomePanel").props.onChat();
+  app.render(); await settle(); app.openChat();
   app.render().find((node) => node.type === "AiHome").props.onSend(); await settle();
   assert.deepEqual(order, ["request-saved", "clearing"]);
   assert.equal(app.calls.filter((call) => call.path.endsWith("/messages")).length, 0);
@@ -299,7 +299,7 @@ test("welcome cannot submit until both its original request and cleared welcome 
 test("welcome clear failure stops first-message submission and retry can reset the created model to default", async () => {
   let attempt = 0;
   const app = welcomeSendHarness({ consumeText: async () => { if (++attempt === 1) throw new Error("storage unavailable"); } });
-  app.render(); await settle(); app.render().find((node) => node.type === "HomePanel").props.onChat();
+  app.render(); await settle(); app.openChat();
   app.render().find((node) => node.type === "AiHome").props.onSend(); await settle();
   assert.equal(app.calls.filter((call) => call.path.endsWith("/messages")).length, 0);
   app.welcome.value.models.chat = null;
@@ -322,7 +322,7 @@ test("welcome photo-only Send durably transfers photos before opening the normal
   const saved = [], consumed = [], handoff = deferred();
   const app = welcomeSendHarness({ saveDraft: async (_key, draft) => { saved.push(plain(draft)); await handoff.promise; }, consumeText: async (...args) => consumed.push(args) });
   app.welcome.value.text = ""; app.welcome.value.photos = [{ id: "p1", uri: "file:///photo.jpg", name: "123.jpg" }];
-  app.render(); await settle(); app.render().find((node) => node.type === "HomePanel").props.onChat();
+  app.render(); await settle(); app.openChat();
   app.render().find((node) => node.type === "AiHome").props.onSend(); await settle();
   assert.equal(saved[0].photos[0].id, "p1"); assert.equal(consumed.length, 0);
   assert.equal(app.calls.filter((call) => call.path.endsWith("/messages") && call.method === "POST").length, 0);
