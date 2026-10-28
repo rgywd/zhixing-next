@@ -125,6 +125,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     router = APIRouter(prefix="/v1", dependencies=[Depends(authenticate)])
 
+    @router.get("/business/schema")
+    def business_schema():
+        """Describe data APIs for the DSH plugin without exposing the legacy AI runtime."""
+        prefixes = ("/v1/finance", "/v1/health", "/v1/life", "/v1/memories", "/v1/resources")
+        # FastAPI owns included-router expansion; app.routes may contain lazy routers.
+        schema = app.openapi()
+        paths = {path: value for path, value in schema["paths"].items()
+                 if any(path == prefix or path.startswith(prefix + "/") for prefix in prefixes)}
+
+        def references(value):
+            if isinstance(value, dict):
+                ref = value.get("$ref", "")
+                found = {ref.removeprefix("#/components/schemas/")} if ref.startswith("#/components/schemas/") else set()
+                return found.union(*(references(child) for child in value.values()))
+            if isinstance(value, list):
+                return set().union(*(references(child) for child in value))
+            return set()
+
+        definitions = schema.get("components", {}).get("schemas", {})
+        needed, selected = references(paths), {}
+        while needed:
+            name = needed.pop()
+            if name in selected or name not in definitions:
+                continue
+            selected[name] = definitions[name]
+            needed.update(references(definitions[name]) - selected.keys())
+        return {"openapi": schema["openapi"], "info": {"title": "知行业务数据", "version": "1"},
+                "paths": paths, "components": {"schemas": selected,
+                "securitySchemes": schema.get("components", {}).get("securitySchemes", {})}}
+
     def check_window(cursor, before, latest):
         if (cursor and (latest or before is not None)) or (latest and before is not None):
             raise StoreError("validation_error", "Use cursor, before, or latest individually", 422)

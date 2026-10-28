@@ -88,6 +88,15 @@ test("session restores conversation list before a blocked network read; offline 
   assert.equal(value.conversations[0].id, "c1"); assert.equal(value.lastSyncFailed, true);
   offline.unmount(); assert.equal(offline.intervals.size, 0); assert.equal(offline.listeners.size, 0);
 });
+test("DSH outlet selection survives offline restore without claiming the host is online", async () => {
+  const cache = cacheHarness();
+  const online = session(cache, path => path === "/status" ? { runtime: "dsh", worker_online: true, model_ready: true } : response(path));
+  assert.equal((await online.ready()).runtime, "dsh"); online.unmount();
+  const offline = session(cache, async () => { throw new Error("offline"); });
+  const value = await offline.ready();
+  assert.equal(value.runtime, "dsh"); assert.equal(value.status, null); assert.equal(value.lastSyncFailed, true);
+  offline.unmount();
+});
 
 test("a failed ancillary endpoint does not suppress a new conversation or overwrite the last good section", async () => {
   const cache = cacheHarness();

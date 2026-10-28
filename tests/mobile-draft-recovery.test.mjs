@@ -250,8 +250,8 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "BottomSheet", "FinancePage", "FinanceDashboard", "HealthPage", "LifeSummary", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ProjectsPanel", "ResourcePreview", "OverviewPanels", "LifePanel", "SchedulesPanel", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) {
-    dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "WorkPanel", "ConstructionPage", "ConnectionForm", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((component) => [component, component]));
+  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "DshChatPanel", "AiHome", "AiDrawer", "BottomSheet", "FinancePage", "FinanceDashboard", "HealthPage", "LifeSummary", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ProjectsPanel", "ResourcePreview", "OverviewPanels", "LifePanel", "SchedulesPanel", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) {
+    dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "WorkPanel", "ConstructionPage", "ConnectionForm", "ConnectionSettingsPanel", "PersonaSettingsPanel", "DshHostSettings"].map((component) => [component, component]));
   }
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./chatPreferences"] = { ChatPreferencesProvider: "ChatPreferencesProvider" };

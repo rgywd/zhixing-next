@@ -10,6 +10,7 @@ import { radius, space, typography } from "./theme";
 import { BottomSheet } from "./BottomSheet";
 
 type Props = {
+  unlimitedText?: boolean;
   text: string; placeholder?: string; onText: (text: string) => void; onSend: () => void; onFiles: () => void;
   onPhotos?: () => void;
   editable: boolean; canSend: boolean; busy: boolean; pending?: boolean; attachmentLocked?: boolean;
@@ -60,7 +61,7 @@ export function ConversationComposer(props: Props) {
       {children ? <View style={styles.attachments}>{children}</View> : null}
       <View style={styles.inputRow}>
         <Pressable accessibilityRole="button" accessibilityLabel="添加资料" accessibilityState={{ disabled: props.attachmentLocked }} disabled={props.attachmentLocked} onPress={() => { if (props.onPhotos) setShowAttachments(true); else onFiles(); }} style={[styles.files, props.attachmentLocked && styles.disabled]}><Ionicons name="add" size={26} color={colors.ink} /></Pressable>
-        <TextInput accessibilityLabel="消息" multiline maxLength={20000} placeholder={placeholder ?? "说说你的想法…"} placeholderTextColor={colors.muted} value={text} editable={editable} onChangeText={onText} style={styles.input} />
+        <TextInput accessibilityLabel="消息" multiline maxLength={props.unlimitedText ? undefined : 20000} placeholder={placeholder ?? "说说你的想法…"} placeholderTextColor={colors.muted} value={text} editable={editable} onChangeText={onText} style={styles.input} />
         <Pressable accessibilityRole="button" accessibilityLabel={props.stopping ? props.stopDisabled ? "正在停止回复" : "停止回复" : pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: props.stopping ? props.stopDisabled || busy : !canSend }} disabled={props.stopping ? props.stopDisabled || busy : !canSend} onPress={props.stopping ? props.onStop : onSend} style={[styles.send, (props.stopping ? props.stopDisabled : !canSend) && styles.sendDisabled]}>{busy ? <ActivityIndicator size="small" color={colors.onInk} /> : <Ionicons name={props.stopping ? "stop" : pending ? "refresh" : "arrow-up"} size={25} color={colors.onInk} />}</Pressable>
       </View>
       {hint ? <View style={styles.hint}>{hint}</View> : null}

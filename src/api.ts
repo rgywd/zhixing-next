@@ -20,6 +20,9 @@ export type Agent = {
   visible: boolean;
 };
 export type ServiceStatus = {
+  runtime?: "dsh";
+  business_connected?: boolean;
+  web_url?: string | null;
   model_ready: boolean;
   worker_online: boolean;
   execution_available: boolean;

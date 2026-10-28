@@ -37,6 +37,8 @@ import {
 import { ConnectionStatusProvider, ServiceStatusNotice } from "./ConnectionStatus";
 import { NoticeProvider } from "./Notice";
 import { ChatPanel } from "./ChatPanel";
+import { DshChatPanel, DshHostSettings } from "./DshChatPanel";
+import { BottomSheet } from "./BottomSheet";
 import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
 import { ResourcesPanel } from "./ResourcesPanel";
@@ -247,9 +249,10 @@ function ConnectedSession({
   const [resourceReturnTab, setResourceReturnTab] = useState<Tab>("settings");
   const [previewResource, setPreviewResource] = useState<Resource | null>(null);
   const home = useHomePreferences(connection.url);
-  const { assistant, setAssistant, status, lastSyncFailed, conversations, setConversations, agents, catalog, setCatalog,
+  const { assistant, setAssistant, status, runtime, lastSyncFailed, conversations, setConversations, agents, catalog, setCatalog,
     recentResources, selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive } = useSessionData(connection);
   const [showSearchSettings, setShowSearchSettings] = useState(false);
+  const dsh = runtime === "dsh";
   const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number } | null>(null);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
 
@@ -265,7 +268,7 @@ function ConnectedSession({
   const [busy, setBusy] = useState(false);
   const welcomePhotoPicker = usePhotoPicker({ scope: `${connection.url}\n${connection.token}\nwelcome`,
     ids: (welcome.value.photos ?? []).map((photo) => photo.id), locked: !welcome.ready || busy,
-    add: welcome.addPhotos, onError: setError });
+    add: welcome.addPhotos, onError: setError, maxAttachments: dsh ? null : 8 });
   const creatingConversation = useRef(false);
   const creationReceipt = useRef<{ key: string; conversation: Conversation } | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
@@ -443,6 +446,7 @@ function ConnectedSession({
     if ((text || welcome.value.photos?.length) && welcome.ready && !busy && !welcomePhotoPicker.picking) void newConversation(false, null, true, { text, photos: welcome.value.photos, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
   }
   const welcomeControls = {
+    dsh,
     connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchProviderId: welcomeSearchId,
     draftReady: welcome.ready, draftError: welcome.error, onRetryDraft: welcome.retry,
     photos: welcome.value.photos, pickingPhotos: welcomePhotoPicker.picking,
@@ -536,6 +540,15 @@ function ConnectedSession({
           />
           {showWelcome ? (
             <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />
+          ) : selected && dsh ? (
+            <DshChatPanel key={selected.id} connection={connection} conversation={selected} assistantName={chatAssistantName}
+              catalog={catalog} onRefresh={serviceChanged} webUrl={status?.web_url}
+              onConversationChanged={updated => setConversations(old => mergeById(old, [updated]))}
+              startWithFiles={chatStart?.id === selected.id && chatStart.files}
+              onFilesOpened={() => setChatStart(old => old ? { ...old, files: false } : null)}
+              startWithSend={chatStart?.id === selected.id && chatStart.send}
+              onSendStarted={() => setChatStart(old => old ? { ...old, send: false } : null)}
+              settingsOpen={chatSettingsFor === selected.id} onSettingsClose={() => setChatSettingsFor(null)} />
           ) : selected ? (
             <ChatPanel
               key={selected.id}
@@ -576,7 +589,9 @@ function ConnectedSession({
       ) : (
         <>
           <BackLink label={settingsView === "chat" && chatPreferencesReturn ? "对话" : settingsView === "resources" && resourceReturnTab === "home" ? "首页" : "设置"} onPress={() => { navigation.current++; setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); if (settingsView === "chat" && chatPreferencesReturn) { setChatPreferencesReturn(false); setTab("chat"); } }} />
-          {settingsView === "chat" ? (
+          {dsh && ["models", "providers", "agents", "persona"].includes(settingsView) ? (
+            <DshHostSettings webUrl={status?.web_url} />
+          ) : settingsView === "chat" ? (
             <ChatSettingsPanel />
           ) : settingsView === "device" ? (
             <DeviceCapabilitiesPanel onUseLocation={(text) => {
@@ -618,8 +633,8 @@ function ConnectedSession({
         onNew={() => { setShowAiDrawer(false); openMainChat(); }}
       />
       <ResourcePreview connection={connection} resource={previewResource} onClose={() => setPreviewResource(null)} />
-      <SearchPicker visible={showSearchSettings} connection={connection} management selectedId={welcomeSearchId} onSelect={setWelcomeSearchId}
-        onRemoved={(id) => setChatStart((old) => old?.searchId === id ? { ...old, searchId: null } : old)} onClose={() => setShowSearchSettings(false)} />
+      {dsh ? <BottomSheet visible={showSearchSettings} title="搜索能力" onClose={() => setShowSearchSettings(false)}><DshHostSettings webUrl={status?.web_url} /></BottomSheet> : <SearchPicker visible={showSearchSettings} connection={connection} management selectedId={welcomeSearchId} onSelect={setWelcomeSearchId}
+        onRemoved={(id) => setChatStart((old) => old?.searchId === id ? { ...old, searchId: null } : old)} onClose={() => setShowSearchSettings(false)} />}
 
     </View>
   );

@@ -7,11 +7,11 @@ type Reporter = { report: (id: string, error?: unknown) => void; register: (id: 
 const Context = createContext<Reporter | null>(null);
 
 /** Server readiness is a floating status too; it must never push the page down. */
-export function ServiceStatusNotice({ status }: { status: Pick<ServiceStatus, "model_ready" | "worker_online"> | null }) {
+export function ServiceStatusNotice({ status }: { status: Pick<ServiceStatus, "model_ready" | "worker_online" | "runtime"> | null }) {
   const { show, dismiss } = useNotice();
   const noticeId = useId();
   const message = !status ? null : !status.model_ready
-    ? "服务已连接，模型尚未配置。请在设置中添加供应商并选择默认模型。"
+    ? status.runtime === "dsh" ? "服务已连接，请在 DSH 中配置可用的默认模型。" : "服务已连接，模型尚未配置。请在设置中添加供应商并选择默认模型。"
     : !status.worker_online ? "知行暂时无法回复。已提交消息仍保留，手工记录仍可使用。" : null;
   useEffect(() => {
     if (message) show({ id: noticeId, message, icon: "cloud-offline-outline", tone: "warning", duration: null });

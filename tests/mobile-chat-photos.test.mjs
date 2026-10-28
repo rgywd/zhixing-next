@@ -37,6 +37,14 @@ test("native photo selection uses the remaining slots and immediately adds all i
   await app.render().pick(); assert.deepEqual(plain(app.calls[0]), { mediaTypes: ["images"], allowsMultipleSelection: true, selectionLimit: 7, orderedSelection: true, allowsEditing: false, quality: 1, preferredAssetRepresentationMode: "compatible" });
   assert.deepEqual(app.saved.map((p) => p.uri), ["file:///one", "file:///two"]); assert.equal(app.render().picking, false); app.unmount();
 });
+test("DSH photo selection leaves attachment admission to the host", async () => {
+  const app = pickerHarness({ choose: () => ({ canceled: false, assets: Array.from({ length: 10 }, (_, i) => ({ uri: `file:///image${i}` })) }) });
+  app.props.maxAttachments = null;
+  app.props.ids = Array.from({ length: 8 }, (_, i) => String(i));
+  await app.render().pick();
+  assert.equal(app.calls[0].selectionLimit, undefined);
+  assert.equal(app.saved.length, 10); assert.equal(app.errors.length, 0); app.unmount();
+});
 test("cancel, duplicate opens and a late picker result after changing conversations never alter another draft", async () => {
   const result = deferred(), app = pickerHarness({ choose: () => result.promise }); const first = app.render().pick(), duplicate = app.render().pick();
   assert.equal(app.calls.length, 1); app.props.scope = "other"; app.render(); result.resolve({ canceled: false, assets: [{ uri: "old" }] }); await first; await duplicate;
