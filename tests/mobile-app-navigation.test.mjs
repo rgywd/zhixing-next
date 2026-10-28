@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { cacheHarness } from "./helpers/local-cache.mjs";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
@@ -22,11 +23,11 @@ function hooks() {
   }, render(fn) { cursor = 0; effects = []; const result = fn(); effects.forEach((effect) => effect()); return result; }, unmount() { slots.forEach((slot) => slot?.cleanup?.()); } };
 }
 function load(filename, dependencies, suffix = "") {
-  dependencies = { "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, "./PhotoAttachments": { DraftAttachments: "DraftAttachments" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, ...dependencies };
+  dependencies = { "./localCache": cacheHarness(), "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, "./PhotoAttachments": { DraftAttachments: "DraftAttachments" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, ...dependencies };
   const exports = {};
   runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/${filename}`, import.meta.url), "utf8") + suffix, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
     exports, AbortController, Error, Date, encodeURIComponent, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
-    require(name) { if (name.startsWith("../assets/")) return name; assert.ok(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name]; },
+    require(name) { if (name === "./useSessionData") return load("useSessionData.ts", dependencies); if (name.startsWith("../assets/")) return name; assert.ok(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name]; },
   });
   return exports;
 }

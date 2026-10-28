@@ -3,6 +3,7 @@ import { randomUUID } from "expo-crypto";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, type Connection } from "./api";
 import { mutateService, type FinanceCommitment, type ServiceMutation } from "./serviceApi";
+import { cacheRevision, readCache, serviceCacheKey, writeCache } from "./localCache";
 
 export const localDate = (value = new Date()) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}-${String(value.getDate()).padStart(2, "0")}`;
 export const localTime = (value = new Date()) => `${String(value.getHours()).padStart(2, "0")}:${String(value.getMinutes()).padStart(2, "0")}`;
@@ -159,38 +160,39 @@ export function useServiceEditor(connection: Connection, service: string, onSave
 
 /** Cache the last server result so a connection failure never looks like a fresh, empty ledger. */
 export function useServiceSnapshot<T>(connection: Connection, scope: string, read: () => Promise<T>, refreshKey?: number) {
-  const key = `zhixing.service-summary.v1:${encodeURIComponent(connection.url)}:${scope}`;
-  const [data, setData] = useState<T | null>(null);
+  const key = serviceCacheKey(scope);
+  const identity = `${connection.url}\n${connection.token}\n${key}`;
+  const [stored, setStored] = useState<{ identity: string; data: T | null }>({ identity, data: null });
+  const data = stored.identity === identity ? stored.data : null;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const generation = useRef(0);
-  const loadedScope = useRef(key);
   const reload = useCallback(async () => {
     const own = ++generation.current;
+    const version = cacheRevision();
     setLoading(true);
     try {
       const result = await read();
       if (own !== generation.current) return;
-      setData(result); setError("");
-      void persist(key, result).catch(() => undefined);
+      setStored({ identity, data: result }); setError("");
+      void writeCache(connection, key, result, version).catch(() => undefined);
     } catch (reason) {
       if (own === generation.current) setError(reason instanceof Error ? reason.message : "摘要暂时无法更新。");
     } finally { if (own === generation.current) setLoading(false); }
-  }, [key, read]);
+  }, [connection, identity, key, read]);
   useEffect(() => {
     let active = true;
     const versions = generation;
     const own = ++versions.current;
     Promise.resolve().then(() => {
       if (active && own === versions.current) {
-        if (loadedScope.current !== key) { loadedScope.current = key; setData(null); }
         setLoading(true); setError("");
       }
-      return AsyncStorage.getItem(key);
+      return readCache<T>(connection, key);
     }).then((cached) => {
-      if (active && own === generation.current && cached) setData(JSON.parse(cached));
+      if (active && own === generation.current && cached) { setStored({ identity, data: cached }); setLoading(false); }
     }).catch(() => undefined).finally(() => { if (active && own === generation.current) void reload(); });
     return () => { active = false; versions.current++; };
-  }, [key, reload, refreshKey]);
+  }, [connection, identity, key, reload, refreshKey]);
   return { data, loading, error, reload };
 }

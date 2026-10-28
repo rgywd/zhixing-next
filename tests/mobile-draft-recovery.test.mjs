@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { cacheHarness } from "./helpers/local-cache.mjs";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
@@ -44,11 +45,12 @@ function hooks() {
     unmount() { slots.forEach((slot) => slot?.cleanup?.()); } };
 }
 function load(name, dependencies, suffix = "") {
-  dependencies = { "./chatPhotos": { discardDraftPhotos() {} }, "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, ...dependencies };
+  dependencies = { "./localCache": cacheHarness(), "./chatPhotos": { discardDraftPhotos() {} }, "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, ...dependencies };
   const exports = {};
   runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/${name}`, import.meta.url), "utf8") + suffix, {
     compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
   }).outputText, { exports, AbortController, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {}, require: (id) => {
+    if (id === "./useSessionData") return load("useSessionData.ts", dependencies);
     assert.ok(id in dependencies, `Unexpected dependency: ${id}`); return dependencies[id];
   } });
   return exports;

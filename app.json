@@ -75,7 +75,8 @@
           "isAndroidMotionActivityEnabled": false
         }
       ],
-      "./plugins/withAndroidReleaseSigning.cjs"
+      "./plugins/withAndroidReleaseSigning.cjs",
+      "expo-sqlite"
     ]
   }
 }

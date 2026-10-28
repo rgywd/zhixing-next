@@ -28,6 +28,7 @@ import { useSyncStatus } from "./ConnectionStatus";
 import { humanError } from "./ui";
 import { isSteerableUserRun } from "./steerableRun";
 import { discardDraftPhotos, sendDraftPhoto } from "./chatPhotos";
+import { readCache, writeCache, validCachedChat, type CachedChat } from "./localCache";
 
 export function useChat({
   connection,
@@ -56,6 +57,8 @@ export function useChat({
   const [sendingPhoto, setSendingPhoto] = useState<{ id: string; index: number; total: number } | null>(null);
   const [runScope, setRunScope] = useState(streamScope);
   const loadedScope = useRef(streamScope);
+  const historyKey = `chat:${conversation.id}:${focusMessageSeq ?? "latest"}`;
+  const historyRef = useRef<CachedChat>({ messages: [], previous: null, cursor: 0 });
   const [messages, setMessages] = useState<Message[]>([]);
   const pendingStatusRef = useRef<number | null>(null);
   useEffect(() => {
@@ -207,11 +210,12 @@ export function useChat({
   useEffect(() => {
     let active = true;
     let initial = true;
+    let hydrated = false;
     let lastSeq = 0;
     let catchUpTimer: ReturnType<typeof setTimeout> | undefined;
     let controller: AbortController | null = null;
     async function poll() {
-      if (!active || controller || AppState.currentState !== "active") return;
+      if (!active || !hydrated || controller || AppState.currentState !== "active") return;
       const batch = new AbortController(); controller = batch;
       const valid = () => active && !batch.signal.aborted && controller === batch && AppState.currentState === "active";
       let hasMore = false;
@@ -241,28 +245,26 @@ export function useChat({
               ),
         ]);
         if (!valid()) return;
-        const sameScope = loadedScope.current === streamScope;
-        setMessages((previous) => {
-          const old = sameScope ? previous : [];
-          const known = new Set(old.map((message) => message.id));
-          const updated =
-            receipts?.items.filter((message) => known.has(message.id)) ?? [];
-          return mergeById(mergeById(old, updated), history.items).sort(
-            (a, b) => a.seq - b.seq,
-          );
-        });
-        if (history.items.length)
-          lastSeq = history.items[history.items.length - 1].seq;
+        const old = historyRef.current.messages;
+        const known = new Set(old.map((message) => message.id));
+        const updated = receipts?.items.filter((message) => known.has(message.id)) ?? [];
+        const next = {
+          messages: mergeById(mergeById(old, updated), history.items).sort((a, b) => a.seq - b.seq),
+          previous: initial ? history.previous_cursor ?? null : historyRef.current.previous,
+          cursor: history.items.length ? history.items[history.items.length - 1].seq : lastSeq,
+        };
+        const changed = JSON.stringify(next) !== JSON.stringify(historyRef.current);
+        historyRef.current = next;
+        setMessages(next.messages); setPrevious(next.previous);
+        if (changed || initial) void writeCache(connection, historyKey, next).catch(() => undefined);
+        lastSeq = next.cursor;
         hasMore = !!history.next_cursor;
         setRuns(tasks.items);
         loadedScope.current = streamScope; setRunScope(streamScope);
         setRunning(
           [...activeRuns.items, ...tasks.items].find((run) => run.conversation_id === conversation.id && isSteerableUserRun(run)) ?? null,
         );
-        if (initial) {
-          setPrevious(history.previous_cursor ?? null);
-          initial = false;
-        }
+        initial = false;
         reportSync();
       } catch (e) {
         if (valid()) reportSync(e);
@@ -280,7 +282,22 @@ export function useChat({
       void poll();
       refreshLive.current();
     };
-    void poll();
+    void readCache<CachedChat>(connection, historyKey).then((cached) => {
+      if (!active) return;
+      const restored = validCachedChat(cached, conversation.id) ? cached : { messages: [], previous: null, cursor: 0 };
+      historyRef.current = restored;
+      setMessages(restored.messages); setPrevious(restored.previous);
+      loadedScope.current = streamScope; setRunScope(streamScope);
+      // Cached text is readable, but a past running state is not a live execution receipt.
+      setRuns([]); setRunning(null);
+      if (restored.messages.length) {
+        lastSeq = restored.cursor;
+        pendingStatusRef.current = restored.messages.find((message) => message.role === "user" && message.status === "accepted")?.seq ?? null;
+        initial = false; setLoading(false);
+      }
+      hydrated = true;
+      void poll();
+    });
     const timer = setInterval(() => {
       void poll();
     }, 2500);
@@ -295,7 +312,7 @@ export function useChat({
       controller?.abort();
       listener.remove();
     };
-  }, [connection, conversation.id, focusMessageSeq, streamScope, reportSync]);
+  }, [connection, conversation.id, focusMessageSeq, historyKey, streamScope, reportSync]);
 
   useEffect(() => {
     if (!streamEvents || !trackedRunId) return;
@@ -346,12 +363,12 @@ export function useChat({
         connection,
         `/conversations/${conversation.id}/messages?before=${encodeURIComponent(previous)}&limit=100`,
       );
-      if (!alive.current) return;
+      if (!alive.current || currentScope.current !== streamScope) return;
       nearBottomRef.current = false;
-      setMessages((old) =>
-        mergeById(page.items, old).sort((a, b) => a.seq - b.seq),
-      );
-      setPrevious(page.previous_cursor ?? null);
+      const next = { ...historyRef.current, messages: mergeById(page.items, historyRef.current.messages).sort((a, b) => a.seq - b.seq), previous: page.previous_cursor ?? null };
+      historyRef.current = next;
+      setMessages(next.messages); setPrevious(next.previous);
+      void writeCache(connection, historyKey, next).catch(() => undefined);
     } catch (e) {
       if (alive.current) setError(humanError(e));
     } finally {
@@ -406,7 +423,10 @@ export function useChat({
       acknowledged.current.add(payload.id);
       await settleDraft(payload.id);
       if (!active()) return;
-      setMessages((old) => mergeById(old, [receipt.message]).sort((a, b) => a.seq - b.seq));
+      // A POST receipt can be ahead of unsynchronized messages. Keep the last read cursor.
+      const next = { ...historyRef.current, messages: mergeById(historyRef.current.messages, [receipt.message]).sort((a, b) => a.seq - b.seq) };
+      historyRef.current = next; setMessages(next.messages);
+      void writeCache(connection, historyKey, next).catch(() => undefined);
       setRuns((old) => mergeById(old, [receipt.run]));
       nearBottomRef.current = true;
       refresh.current(); onRefresh();

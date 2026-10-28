@@ -3,6 +3,7 @@ import { AppState } from "react-native";
 import { request, type Connection } from "./api";
 import type { FinanceDashboardSummary, HealthSummary } from "./serviceApi";
 import type { TodayServices } from "./todayHomeLogic";
+import { cacheRevision, readCache, serviceCacheKey, writeCache } from "./localCache";
 
 const empty = (loading: boolean): TodayServices => ({ finance: { data: null, loading, error: "" }, health: { data: null, loading, error: "" } });
 
@@ -14,16 +15,42 @@ export function useTodayServices(connection: Connection | undefined, date: strin
     if (!connection) return;
     let active = true, inFlight = false, lastStarted = -Infinity;
     const controller = new AbortController();
+    const financeKey = serviceCacheKey(`finance:${date.slice(0, 7)}`);
+    const healthKey = serviceCacheKey(`health:${date}`);
+    const received = { finance: false, health: false };
+    void Promise.all([
+      readCache<FinanceDashboardSummary>(connection, financeKey),
+      readCache<HealthSummary>(connection, healthKey),
+    ]).then(([finance, health]) => {
+      if (!active) return;
+      setState((old) => {
+        const previous = old.scope === scope ? old.value : empty(true);
+        return { scope, value: {
+          finance: !received.finance && finance?.month === date.slice(0, 7) ? { ...previous.finance, data: finance, loading: false } : previous.finance,
+          health: !received.health && health?.date === date ? { ...previous.health, data: health, loading: false } : previous.health,
+        } };
+      });
+    });
     async function load() {
       if (!active || inFlight || AppState.currentState !== "active" || Date.now() - lastStarted < 60000) return;
       inFlight = true;
       lastStarted = Date.now();
+      const version = cacheRevision();
       try {
         const results = await Promise.allSettled([
           request<FinanceDashboardSummary>(connection!, `/finance/summary?month=${date.slice(0, 7)}`, { signal: controller.signal }),
           request<HealthSummary>(connection!, `/health/summary?date=${date}`, { signal: controller.signal }),
         ]);
         if (!active) return;
+        if (results[0].status === "fulfilled") {
+          received.finance = true;
+          void writeCache(connection!, financeKey, results[0].value, version).catch(() => undefined);
+        }
+        if (results[1].status === "fulfilled") {
+          received.health = true;
+          void writeCache(connection!, healthKey, results[1].value, version).catch(() => undefined);
+        }
+        if (results.some((result) => result.status === "rejected")) lastStarted = -Infinity;
         setState((old) => {
           const previous = old.scope === scope ? old.value : empty(true);
           return { scope, value: {

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { cacheHarness } from "./helpers/local-cache.mjs";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 import { test } from "node:test";
@@ -68,13 +69,14 @@ function load(file, deps, globals = {}) {
   const code = ts.transpileModule(readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX } }).outputText;
   runInNewContext(code, { exports, AbortController, setTimeout, clearTimeout, ...globals, require(id) { assert.ok(id in deps, id); return deps[id]; } }); return exports;
 }
-function harness({ initial = { text: "", pending: null }, preference = "queue", preferenceReady = true, read, transfer, discard = () => {}, events = async () => ({ items: [], next_cursor: null }) } = {}) {
+function harness({ cache = cacheHarness(), initial = { text: "", pending: null }, preference = "queue", preferenceReady = true, read, transfer, discard = () => {}, events = async () => ({ items: [], next_cursor: null }) } = {}) {
   const lifecycle = hooks(), calls = [], timers = new Map(), listeners = new Set(); let sequence = 0, stored = plain(initial), currentRuns = [run()], messages = [];
   const appState = { currentState: "active", addEventListener(_name, f) { listeners.add(f); return { remove: () => listeners.delete(f) }; } };
   const later = (fn, ms) => { const id = ++sequence; timers.set(id, { fn, ms }); return id; };
   const sync = () => {};
   const args = { connection: { url: "https://fixture.test", token: "fictional" }, conversation: { id: "c1" }, onRefresh() {}, defaultIntent: preference, defaultIntentReady: preferenceReady };
   const { useChat } = load("useChat.ts", {
+    "./localCache": cache,
     react: lifecycle.react, "react-native": { AppState: appState, Alert: { alert() {} } }, "expo-crypto": { randomUUID: () => `out-${++sequence}` }, "expo-speech": { stop: async () => {} },
     "./liveRun": live, "./ConnectionStatus": { useSyncStatus: () => sync }, "./ui": { humanError: (e) => e.message },
     "./steerableRun": steerableRun, "./chatPhotos": { discardDraftPhotos: discard, sendDraftPhoto: transfer },
@@ -88,7 +90,7 @@ function harness({ initial = { text: "", pending: null }, preference = "queue", 
     } },
   }, { setTimeout: later, clearTimeout: (id) => timers.delete(id), setInterval: later, clearInterval: (id) => timers.delete(id) });
   const render = () => lifecycle.render(() => useChat(args));
-  return { render, calls, args, timers, stored: () => stored, unmount: lifecycle.unmount,
+  return { render, calls, args, timers, cache, stored: () => stored, unmount: lifecycle.unmount,
     async ready() { render(); await settle(); render(); await settle(); return render(); },
     setRuns(value) { currentRuns = value; }, setMessages(value) { messages = value; },
     setAppState(state) { appState.currentState = state; [...listeners].forEach((f) => f(state)); },
@@ -350,4 +352,56 @@ test("leaving during photo transfer aborts and a late result cannot submit or cl
   const task = (await app.ready()).send(); await settle(); app.unmount(); assert.equal(signal.aborted, true);
   late.resolve(); await task; assert.equal(app.stored().text, "keep"); assert.equal(app.stored().photos.length, 1);
   assert.equal(app.calls.filter((call) => call.method === "POST").length, 0);
+});
+
+test("cached chat and loaded older pages survive offline remount, then catch up over multiple pages without gaps", async () => {
+  const cache = cacheHarness();
+  const message = (seq) => ({ id: `m-${seq}`, seq, conversation_id: "c1", role: "assistant", content: `message ${seq}`, status: "applied" });
+  const page = (from, to, previous = null, next = null) => ({ items: Array.from({ length: to - from + 1 }, (_, i) => message(from + i)), previous_cursor: previous, next_cursor: next });
+  const first = harness({ cache, read: ({ path }) => path.includes("/messages?") ? Promise.resolve(path.includes("before=") ? page(1, 100) : page(101, 200, "101")) : undefined });
+  let value = await first.ready(); assert.equal(value.messages.length, 100);
+  await value.loadOlder(); await settle(); value = first.render(); assert.equal(value.messages.length, 200); assert.equal(value.previous, null); first.unmount();
+  const offline = harness({ cache, read: () => Promise.reject(new Error("offline")) });
+  value = await offline.ready(); assert.equal(value.messages.length, 200); assert.equal(value.loading, false); assert.equal(value.running, null); assert.equal(value.runs.length, 0);
+  assert.match(offline.calls.find(({ path }) => path.includes("/messages?")).path, /cursor=200/); offline.unmount();
+  const online = harness({ cache, read: ({ path }) => {
+    if (!path.includes("/messages?")) return undefined;
+    const cursor = Number(new URL(path, "https://test").searchParams.get("cursor"));
+    const end = Math.min(cursor + 100, 450);
+    return Promise.resolve(page(cursor + 1, end, String(cursor + 1), end < 450 ? String(end) : null));
+  } });
+  value = await online.ready(); assert.equal(value.messages.length, 300);
+  value = await online.timer(100); assert.equal(value.messages.length, 400);
+  value = await online.timer(100); assert.equal(value.messages.length, 450);
+  assert.deepEqual(plain(value.messages.map((item) => item.seq)), Array.from({ length: 450 }, (_, i) => i + 1));
+  assert.equal(value.previous, null); online.unmount();
+});
+
+test("chat cache does not expose another token's history or a search window as the latest conversation", async () => {
+  const cache = cacheHarness();
+  const connection = { url: "https://fixture.test", token: "fictional" };
+  const saved = { messages: [{ id: "secret", seq: 12, content: "cached private content", conversation_id: "c1", role: "assistant", status: "applied" }], previous: "12" };
+  await cache.writeCache(connection, "chat:c1:latest", saved);
+  const other = harness({ cache, read: () => Promise.reject(new Error("offline")) });
+  other.args.connection = { ...connection, token: "another-account" };
+  assert.equal((await other.ready()).messages.length, 0); other.unmount();
+  const focus = harness({ cache, read: () => Promise.reject(new Error("offline")) });
+  focus.args.focusMessageSeq = 7;
+  assert.equal((await focus.ready()).messages.length, 0); focus.unmount();
+});
+
+test("a newly sent receipt does not advance the durable read cursor past unseen messages", async () => {
+  const cache = cacheHarness(), connection = { url: "https://fixture.test", token: "fictional" };
+  const old = { id: "m-10", seq: 10, conversation_id: "c1", role: "assistant", content: "old", status: "applied" };
+  await cache.writeCache(connection, "chat:c1:latest", { messages: [old], cursor: 10, previous: null });
+  const app = harness({ cache, initial: { text: "new", pending: null }, read: ({ method, body }) => {
+    if (method === "POST") return Promise.resolve({ message: { ...body, seq: 50, conversation_id: "c1", role: "user", status: "accepted" }, run: run("new", "queued") });
+    return Promise.reject(new Error("reads offline"));
+  } });
+  const value = await app.ready(); await value.send(); await settle();
+  const saved = await cache.readCache(connection, "chat:c1:latest");
+  assert.equal(saved.cursor, 10); assert.equal(saved.messages.at(-1).seq, 50); app.unmount();
+  const restored = harness({ cache, read: () => Promise.reject(new Error("offline")) });
+  assert.equal((await restored.ready()).messages.at(-1).seq, 50);
+  assert.match(restored.calls.find(({ path }) => path.includes("/messages?")).path, /cursor=10&/); restored.unmount();
 });

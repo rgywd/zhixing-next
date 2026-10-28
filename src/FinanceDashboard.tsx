@@ -1,3 +1,4 @@
+import { cacheRevision, serviceCacheKey, writeCache } from "./localCache";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, BackHandler, Pressable, Text, View } from "react-native";
 import type { Connection } from "./api";
@@ -21,8 +22,14 @@ export function FinanceDashboard({ connection, onBack, onChat, onChanged, refres
   const styles = useServiceStyles();
   const { show, dismiss } = useNotice();
   const [month, setMonth] = useState(localDate().slice(0, 7));
-  const read = useCallback(() => readFinanceDashboard(connection, month), [connection, month]);
-  const snapshot = useServiceSnapshot(connection, `finance:${month}`, read, refreshKey);
+  const read = useCallback(async () => {
+    const version = cacheRevision();
+    const result = await readFinanceDashboard(connection, month);
+    void writeCache(connection, serviceCacheKey(`finance:${month}`), result.summary, version).catch(() => undefined);
+    return result;
+  }, [connection, month]);
+  // The full page includes paged transactions; Home's summary is a different payload.
+  const snapshot = useServiceSnapshot(connection, `finance-page:${month}`, read, refreshKey);
   const editor = useServiceEditor(connection, "finance", () => { show({ message: "财务数据已保存", tone: "success" }); void snapshot.reload(); onChanged?.(); },
     (resume) => show({ id: "finance-draft", message: "尚未完成的财务编辑已保留", duration: 6000, action: { label: "继续编辑", onPress: () => { dismiss("finance-draft"); resume(); } } }));
   useEffect(() => () => dismiss("finance-draft"), [dismiss]);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { cacheHarness } from "./helpers/local-cache.mjs";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
@@ -20,6 +21,7 @@ function hooks() {
   unmount() { values.forEach((value) => value?.cleanup?.()); } };
 }
 function load(name, dependencies) {
+  dependencies = { "./localCache": cacheHarness(), ...dependencies };
   const exports = {};
   const extension = ["FinanceDashboard", "HealthPage"].includes(name) ? "tsx" : "ts";
   runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/${name}.${extension}`, import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
@@ -32,6 +34,7 @@ let uuid = 0;
 function setup(mutate = async () => ({})) {
   const storage = new Map(); let lifecycle = hooks();
   const forms = load("serviceForms", {
+    "./localCache": cacheHarness(),
     react: Object.fromEntries(["useState", "useRef", "useEffect", "useCallback"].map((name) => [name, (...args) => lifecycle.react[name](...args)])),
     "@react-native-async-storage/async-storage": { __esModule: true, default: { getItem: async (key) => { if (storage.failRead) throw new Error("storage unreadable"); return storage.get(key) ?? null; }, setItem: async (key, value) => { storage.set(key, value); } } },
     "expo-crypto": { randomUUID: () => `request-${++uuid}` }, "./api": { ApiError }, "./serviceApi": { mutateService: mutate },
@@ -227,15 +230,15 @@ function walk(node) {
   if (Array.isArray(node)) return node.flatMap(walk);
   return [node, ...walk(node.props?.children)];
 }
-function screen(name, data, editing = null, { visible = Boolean(editing), ready = true, serviceEditor } = {}) {
+function screen(name, data, editing = null, { visible = Boolean(editing), ready = true, serviceEditor, cache = cacheHarness(), onSnapshot, readFinance = () => {} } = {}) {
   const opened = [], saved = [], backs = [], notices = [], recovery = [];
   const editor = serviceEditor ?? { draft: editing, visible, busy: false, ready, locked: false, error: "", storageError: "", open: (...args) => opened.push(args), close: () => backs.push(true), resume() { editor.visible = true; }, discard() {}, set() {}, submit: (...args) => saved.push(args) };
   const lifecycle = hooks(); const actual = setup().forms;
   const component = load(name, {
     ...design, "react/jsx-runtime": jsxRuntime, react: lifecycle.react,
     "react-native": { StyleSheet: { create: (value) => value }, View: "View", Text: "Text", Pressable: "Pressable", ActivityIndicator: "ActivityIndicator", BackHandler: { addEventListener: (_event, callback) => { backs.push(callback); return { remove() {} }; } } },
-    "./api": {}, "./Notice": { useNotice: () => ({ show: (notice) => notices.push(notice), dismiss() {} }) }, "./serviceApi": { readFinanceDashboard() {}, readHealthSummary() {} },
-    "./serviceForms": { ...actual, useServiceEditor: (_connection, _service, _saved, onRecovery) => { recovery.push(onRecovery); return editor; }, useServiceSnapshot: () => ({ data, loading: false, error: "", reload() {} }) }, "./ui": ui,
+    "./localCache": cache, "./api": {}, "./Notice": { useNotice: () => ({ show: (notice) => notices.push(notice), dismiss() {} }) }, "./serviceApi": { readFinanceDashboard: readFinance, readHealthSummary() {} },
+    "./serviceForms": { ...actual, useServiceEditor: (_connection, _service, _saved, onRecovery) => { recovery.push(onRecovery); return editor; }, useServiceSnapshot: (_connection, scope, read) => { onSnapshot?.(scope, read); return { data, loading: false, error: "", reload() {} }; } }, "./ui": ui,
     "./deviceCapabilities": { allowNotifications: async () => {} }, "./healthNotifications": { pauseHealthNotificationsForToday: async () => {} },
   })[name];
   const chats = [];
@@ -394,4 +397,16 @@ test("unrelated correction preserves uncertain transaction range and payment cov
   assert.equal(change.body.date_precision, "range");
   assert.equal(change.body.date_start, "2028-03-01");
   assert.equal(change.body.coverage_end, "2028-08");
+});
+
+
+test("finance page persists a distinct full payload and publishes only its summary for Home", async () => {
+  const cache = cacheHarness(), data = financeData(); let selectedScope, refresh;
+  const date = setup().forms.localDate(), month = date.slice(0, 7); data.summary.month = month;
+  screen("FinanceDashboard", data, null, { cache, readFinance: async () => data, onSnapshot: (scope, read) => { selectedScope = scope; refresh = read; } });
+  assert.equal(selectedScope, `finance-page:${month}`);
+  assert.equal(await refresh(), data); await settle();
+  const summaryKey = cache.serviceCacheKey(`finance:${month}`);
+  assert.deepEqual(JSON.parse(JSON.stringify(await cache.readCache(connection, summaryKey))), data.summary);
+  assert.notEqual(summaryKey, cache.serviceCacheKey(selectedScope));
 });

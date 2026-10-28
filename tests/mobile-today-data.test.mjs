@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { cacheHarness } from "./helpers/local-cache.mjs";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { runInNewContext } from "node:vm";
@@ -143,11 +144,11 @@ function hooks() {
     useEffect(effect, dependencies) { const index = cursor++, previous = values[index]; if (changed(previous?.dependencies, dependencies)) { values[index] = { dependencies }; effects.push(() => { previous?.cleanup?.(); values[index].cleanup = effect(); }); } },
   }, render(callback) { cursor = 0; effects = []; const result = callback(); effects.forEach((effect) => effect()); return result; }, unmount() { values.forEach((value) => value?.cleanup?.()); }, get writes() { return writes; } };
 }
-function serviceHarness() {
+function serviceHarness(cache = cacheHarness()) {
   const lifecycle = hooks(), calls = [], intervals = new Map(), listeners = new Set(); let clock = now, intervalId = 0;
   class Clock extends Date { static now() { return clock; } }
   const appState = { currentState: "active", addEventListener(_event, callback) { listeners.add(callback); return { remove: () => listeners.delete(callback) }; } };
-  const api = load("useTodayServices", { react: lifecycle.react, "react-native": { AppState: appState }, "./api": { request(connection, path, options) { const result = deferred(); calls.push({ connection, path, options, ...result }); return result.promise; } } }, { Date: Clock, setInterval(callback) { const id = ++intervalId; intervals.set(id, callback); return id; }, clearInterval: (id) => intervals.delete(id) });
+  const api = load("useTodayServices", { "./localCache": cache, react: lifecycle.react, "react-native": { AppState: appState }, "./api": { request(connection, path, options) { const result = deferred(); calls.push({ connection, path, options, ...result }); return result.promise; } } }, { Date: Clock, setInterval(callback) { const id = ++intervalId; intervals.set(id, callback); return id; }, clearInterval: (id) => intervals.delete(id) });
   const props = { connection: { url: "https://a.example", token: "a-private" }, date: day, refreshKey: 0 };
   return { calls, props, render(next = {}) { Object.assign(props, next); return lifecycle.render(() => api.useTodayServices(props.connection, props.date, props.refreshKey)); }, complete(start = 0, sourceDay = props.date) { calls[start].resolve(finance("50.00")); calls[start + 1].resolve(health({ date: sourceDay, review: { recorded_meals: 2 } })); }, foreground(next = "active") { appState.currentState = next; for (const listener of [...listeners]) listener(next); }, advance(ms) { clock += ms; }, tick() { for (const callback of [...intervals.values()]) callback(); }, unmount: lifecycle.unmount, get writes() { return lifecycle.writes; }, listeners, intervals };
 }
@@ -183,4 +184,26 @@ test("a partial service failure keeps only its same-scope cached data with an ex
   app.render({ refreshKey: 1 }); app.calls[2].resolve(finance("25.00")); app.calls[3].reject(new Error("offline")); await settle();
   const state = app.render(); assert.equal(state.finance.data.remaining.daily_budget, "25.00"); assert.equal(state.health.data.review.recorded_meals, 2); assert.match(state.health.error, /暂未更新/);
   app.render({ date: "2026-10-16" }); app.calls[4].reject(new Error("offline")); app.calls[5].reject(new Error("offline")); await settle(); assert.equal(app.render().health.data, null); app.unmount();
+});
+
+test("home restores dated summaries on a cold offline start and shares their cache with service pages", async () => {
+  const cache = cacheHarness();
+  const connection = { url: "https://a.example", token: "a-private" };
+  await cache.writeCache(connection, cache.serviceCacheKey(`finance:${day.slice(0, 7)}`), finance("88.00"));
+  await cache.writeCache(connection, cache.serviceCacheKey(`health:${day}`), health({ review: { recorded_meals: 3 } }));
+  const app = serviceHarness(cache); app.render(); await settle();
+  let value = app.render(); assert.equal(value.finance.data.remaining.daily_budget, "88.00"); assert.equal(value.health.data.review.recorded_meals, 3);
+  app.calls[0].reject(new Error("offline")); app.calls[1].reject(new Error("offline")); await settle();
+  value = app.render(); assert.equal(value.finance.data.remaining.daily_budget, "88.00"); assert.match(value.health.error, /暂未更新/);
+  value = app.render({ date: "2026-10-16" }); assert.equal(value.finance.data, null); assert.equal(value.health.data, null); await settle();
+  assert.equal(app.render().finance.data.remaining.daily_budget, "88.00"); assert.equal(app.render().health.data, null);
+  app.render({ date: "2026-11-01" }); await settle(); assert.equal(app.render().finance.data, null); app.unmount();
+});
+
+test("a delayed home cache read cannot roll back a successful server response", async () => {
+  const old = deferred(), cache = cacheHarness();
+  const app = serviceHarness({ ...cache, readCache: () => old.promise }); app.render(); app.complete(); await settle();
+  assert.equal(app.render().health.data.review.recorded_meals, 2);
+  old.resolve(health({ review: { recorded_meals: 99 } })); await settle();
+  assert.equal(app.render().health.data.review.recorded_meals, 2); app.unmount();
 });
