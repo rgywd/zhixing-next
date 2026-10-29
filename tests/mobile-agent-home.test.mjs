@@ -32,10 +32,10 @@ function harness(overrides = {}) {
 test("welcome actions append to an existing draft, keep chat mode, and never auto-send", () => {
   const app = harness();
   const actions = app.render().nodes.filter((node) => node.type === "Pressable" && node.props.accessibilityRole === "button");
-  assert.deepEqual(actions.map((node) => node.props.accessibilityLabel), ["☕ 规划今日节奏", "🎯 明确执行要点", "理清思路", "看看开销", "读懂资料", "聊聊近况", "饮食与生活建议"]);
+  assert.deepEqual(actions.map((node) => node.props.accessibilityLabel), ["理清思路", "看看开销", "读懂资料", "聊聊近况"]);
   for (const action of actions) action.props.onPress();
   const drafts = app.calls.filter(([kind]) => kind === "Draft");
-  assert.equal(drafts.length, 7);
+  assert.equal(drafts.length, 4);
   assert.ok(drafts.every(([, text]) => text.startsWith("我先写了一半\n\n")));
   assert.ok(app.calls.filter(([kind]) => kind === "Kind").every(([, value]) => value === "chat"));
   assert.equal(app.calls.some(([kind]) => kind === "Send"), false);

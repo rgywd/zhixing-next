@@ -24,7 +24,7 @@ export function apply(ctx, config) {
           () => call('bash', { command: "node --input-type=module -e \"import { answer } from './sample.js'; if (answer !== 42) process.exit(1); console.log('CHECK_PASSED')\"", description: 'Check the edited module returns forty two', workdir: config.workspace }),
         ][results.length]();
       } else if (prompt.includes('PUBLISH-CHECK') && !results.length) {
-        block = call('zhixing_publish_file', { file_path: `${config.workspace}/sample.js`, name: 'delivered.js' });
+        block = call('present', { files: [{ path: `${config.workspace}/sample.js`, description: '交付结果' }] });
       } else if (prompt.includes('QUEUE-WINDOW') && !results.length) {
         block = call('bash', { command: 'sleep 2', description: 'Keep a short queue window', workdir: config.workspace });
       } else if (prompt.includes('CANCEL-SHELL') && !results.length) {

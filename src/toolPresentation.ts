@@ -25,6 +25,17 @@ export function toolDetails(part: ReplyPart & { type: "tool" }) {
     ? detail.finishedAt - detail.startedAt : null;
   // Missing exit metadata is deliberately not inferred from a successful tool receipt.
   const exitCode = part.name === "bash" && typeof meta.exitCode === "number" ? meta.exitCode : null;
-  return { input: displayValue(input), output, meta: displayValue(detail?.meta), error: displayValue(detail?.error),
+  const embeddedContent = output.match(/<content>\n?([\s\S]*?)\n?<\/content>/)?.[1];
+  const preview = part.name === "write" && typeof args.content === "string" ? args.content
+    : part.name === "read" ? embeddedContent ?? output
+    : part.name === "bash" ? output
+    : !/^(\s*[\[{]|\s*<)/.test(output) && part.name !== "present" ? output : "";
+  return { preview, input: displayValue(input), output, meta: displayValue(detail?.meta), error: displayValue(detail?.error),
     path, command, diffs, duration, exitCode };
+}
+
+export function toolSummary(part: ReplyPart & { type: "tool" }, label: string) {
+  const detail = toolDetails(part);
+  const file = detail.path.split(/[\\/]/).at(-1);
+  return file ? `${label} · ${file}` : label;
 }

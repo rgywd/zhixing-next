@@ -27,6 +27,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
   const snapshot = { events: [], next: 0, hasMore: false, running: false, active: true, queue: [], pending: [], live: null };
   const report = () => {};
   const dependencies = {
+    '@react-native-vector-icons/ionicons': { Ionicons: 'Ionicons' }, './resources': { shareNativeDownload: async () => {} },
     react: lifecycle.react, 'react/jsx-runtime': jsxRuntime,
     'react-native': { ...Object.fromEntries(['FlatList', 'Pressable', 'ScrollView', 'Text', 'TextInput', 'View'].map(n => [n, n])), Linking: {}, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },
     'expo-clipboard': { setStringAsync: async () => {} }, './Notice': { useNotice: () => ({ show() {} }) }, './theme': theme,
@@ -44,7 +45,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     './ConnectionStatus': { useSyncStatus: () => report }, './dshProtocol': protocol, './chatPhotos': { discardDraftPhotos() {} },
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
   };
-  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'MessageRevisionSheet']) dependencies[`./${component}`] = { [component]: component };
+  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard']) dependencies[`./${component}`] = { [component]: component };
   dependencies['./PhotoAttachments'] = { DraftAttachments: 'DraftAttachments', MessagePhotos: 'MessagePhotos' };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../src/DshChatPanel.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -117,6 +118,9 @@ test('DSH follows streamed growth and keyboard resizing while preserving manual 
   list = app.render().find(n => n.type === 'FlatList');
   list.props.onScroll(event(300)); list.props.onContentSizeChange(400, 1700);
   assert.equal(scrolls.at(-1).animated, false); assert.equal(scrolls.length, 4);
+  list.props.renderItem({ item: { id: 'reply', role: 'assistant' }, index: 0 }).props.onReadProcess();
+  list.props.onContentSizeChange(400, 1900);
+  assert.equal(scrolls.length, 4, 'opening a process must keep its position instead of chasing the new bottom');
   app.unmount();
 });
 
@@ -135,11 +139,10 @@ test('search focus waits for the exact visible row and disables automatic follow
   app.unmount();
 });
 
-const revisionSheet = app => app.render().find(n => n.type === 'MessageRevisionSheet').props;
 async function openRevision(app, role = 'user') {
   const list = app.render().find(n => n.type === 'FlatList');
-  list.props.renderItem({ item: list.props.data.find(r => r.role === role) }).props.onMenu();
-  const label = role === 'user' ? '编辑并重新回答' : '重新回答';
+  list.props.renderItem({ item: list.props.data.find(r => r.role === role), index: role === 'user' ? 0 : 1 }).props.onMenu();
+  const label = role === 'user' ? '编辑消息' : '重新回答';
   app.render().find(n => n.type === 'ActionLink' && n.props.children === label).props.onPress();
   app.render().find(n => n.type === 'BottomSheet' && n.props.title === '消息操作').props.onDismiss();
   await settle();
@@ -149,31 +152,55 @@ const revisionEvents = [
   { seq: 2, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'old answer' }] } } },
   { seq: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
 ];
+test('restoring an unfinished edit returns to its original message without losing the ordinary draft', async () => {
+  const store = { draft: { text: 'ordinary draft', pending: null, revision: {
+    id: 'edit-in-progress', kind: 'edit', seq: 1, version: 'edited-version', text: 'unfinished change', attachments: [],
+  } } };
+  const app = harness({ store }), positions = [];
+  app.props.onFocusHandled = () => assert.fail('editing is not a search result');
+  app.snapshot.events = revisionEvents; app.snapshot.history = { active: 'edited-version', versions: [] };
+  app.render(); await settle();
+  const list = app.render().find(n => n.type === 'FlatList');
+  list.props.ref.current = { scrollToIndex: value => positions.push(value), scrollToOffset: () => assert.fail('must stay at the original message while editing') };
+  list.props.onContentSizeChange(320, 4000); list.props.onLayout();
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(positions[0].index, 0);
+  list.props.onViewableItemsChanged({ viewableItems: [{ index: 0, isViewable: true }] });
+  assert.equal(app.composer().text, 'unfinished change');
+  app.composer().editing.onCancel(); await settle();
+  assert.equal(app.composer().text, 'ordinary draft');
+  assert.equal(app.calls.some(c => c.method === 'POST'), false); app.unmount();
+});
 test('true message editing preserves the normal draft and retries an identical durable operation after remount', async () => {
   const store = { draft: { text: 'unsent normal draft', pending: null } };
   const first = harness({ store, post: async () => { throw new Error('lost acknowledgement'); } });
   first.snapshot.events = revisionEvents; first.snapshot.next = 4;
   first.render(); await settle(); await openRevision(first);
-  assert.equal(revisionSheet(first).value.text, 'old demand');
-  revisionSheet(first).onChange({ ...revisionSheet(first).value, text: 'new demand', attachments: [] }); await settle();
-  revisionSheet(first).onSubmit(); await settle();
+  assert.equal(first.composer().text, 'old demand');
+  first.composer().onText('new demand'); await settle();
+  first.render().find(n => n.type === 'IconAction' && n.props.label === '移除附件 note.txt').props.onPress(); await settle();
+  first.composer().onSend(); await settle();
   const sent = first.calls.find(c => c.path.endsWith('/revisions'));
   assert.equal(sent.body.seq, 1); assert.equal(sent.body.text, 'new demand'); assert.deepEqual(plain(sent.body.attachments), []);
   assert.equal(store.draft.text, 'unsent normal draft'); assert.equal(store.draft.revision.submitted, true);
-  assert.equal(first.composer().canSend, false); assert.equal(revisionSheet(first).error, 'lost acknowledgement'); first.unmount();
+  assert.equal(first.composer().canSend, true); assert.equal(first.composer().editable, false); assert.ok(first.render().some(n => n.props?.children === 'lost acknowledgement')); first.unmount();
   const restored = harness({ store }); restored.render(); await settle();
-  revisionSheet(restored).onSubmit(); await settle();
+  restored.composer().onSend(); await settle();
   const retry = restored.calls.find(c => c.path.endsWith('/revisions'));
   assert.deepEqual(plain(retry.body), plain(sent.body)); assert.equal(store.draft.revision, undefined);
   assert.equal(restored.composer().text, 'unsent normal draft'); restored.unmount();
 });
-test('regenerate selects the actual assistant event and dismissing or cancelling does not send', async () => {
+test('regenerate acts directly on the assistant reply; cancelling inline edit restores ordinary draft without sending', async () => {
   const app = harness(); app.snapshot.events = revisionEvents; app.render(); await settle();
-  await openRevision(app, 'assistant'); assert.equal(revisionSheet(app).value.seq, 2);
-  assert.equal(revisionSheet(app).value.kind, 'retry');
-  revisionSheet(app).onClose(); assert.ok(app.store.draft.revision);
-  revisionSheet(app).onCancel(); await settle(); assert.equal(app.store.draft.revision, undefined);
-  assert.equal(app.calls.some(c => c.method === 'POST'), false); assert.equal(app.composer().text, 'fix this'); app.unmount();
+  await openRevision(app); assert.equal(app.composer().text, 'old demand');
+  app.composer().onText('unfinished change'); await settle();
+  app.composer().editing.onCancel(); await settle();
+  assert.equal(app.store.draft.revision, undefined); assert.equal(app.calls.some(c => c.method === 'POST'), false);
+  assert.equal(app.composer().text, 'fix this');
+  await openRevision(app, 'assistant');
+  const sent = app.calls.find(c => c.path.endsWith('/revisions'));
+  assert.equal(sent.body.seq, 2); assert.equal(sent.body.kind, 'retry');
+  assert.equal(app.store.draft.revision, undefined); assert.equal(app.composer().text, 'fix this'); app.unmount();
 });
 test('version changes replace reused native sequence numbers and cache published sidecars without fake events', async () => {
   const app = harness(); app.snapshot.events = revisionEvents; app.snapshot.next = 4;

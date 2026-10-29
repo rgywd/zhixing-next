@@ -8,10 +8,11 @@ import type { Run } from "./api";
 import { replyParts, replySections } from "./replyParts";
 import { layout } from "./theme";
 import { useUi } from "./ui";
+import { toolSummary } from "./toolPresentation";
 import { ToolDetails } from "./ToolDetails";
 
 const toolLabels: Record<string, string> = {
-  zhixing_publish_file: "交付文件", read: "读取文件", write: "保存文件", edit: "修改文件", bash: "执行命令", subagent: "调用子助手", zhixing_service: "处理知行数据",
+  web_fetch: "读取网页", present: "交付文件", zhixing_publish_file: "交付文件", read: "读取文件", write: "保存文件", edit: "修改文件", bash: "执行命令", subagent: "调用子助手", zhixing_service: "处理知行数据",
   ask_user_question: "等待你的回答", plugin_manager: "管理插件", schedule_create: "安排任务",
   search_history: "查找历史对话", read_history: "读取历史对话", read_history_message: "读取历史消息", browse_personal_memories: "查阅记忆", find_resources: "查找资料", read_saved_resource: "读取保存的资料", search_web: "搜索网页",
   calculate: "计算", date_info: "查询日期", publish_report: "生成报告", apply_finance_transaction_batch: "整理收支",
@@ -55,20 +56,22 @@ function ReasoningStep({ part, active, onExpand }: { part: ReplyPart & { type: "
   </View>;
 }
 
-function ProcessGroup({ parts, active, onOpenRun, onPublish }: { parts: ReplyPart[]; active: boolean; onOpenRun?: () => void; onPublish?: (seq: number) => Promise<void> }) {
+function ProcessGroup({ parts, active, onOpenRun, onRead }: { parts: ReplyPart[]; active: boolean; onOpenRun?: () => void; onRead?: () => void }) {
   const { s, colors } = useUi();
   const [choice, setChoice] = useState<Disclosure | null>(null);
   const [detailId, setDetail] = useState<string | null>(null);
   const detail = parts.find((part): part is ReplyPart & { type: "tool" } => part.type === "tool" && part.id === detailId);
   const mode = choice ?? (active ? "preview" : "collapsed");
   const visible = mode === "expanded" ? parts : parts.slice(-2);
-  const toolCount = parts.filter((part) => part.type === "tool").length;
-  return <View style={{ minWidth: 0, gap: 2 }}>
+  const tools = parts.filter((part): part is ReplyPart & { type: "tool" } => part.type === "tool");
+  const summary = tools.length === 1 ? toolSummary(tools[0], toolName(tools[0].name))
+    : tools.length ? [...new Set(tools.map(part => toolName(part.name)))].slice(0, 2).join("、") : "思考过程";
+  return <View onTouchStart={onRead} style={{ minWidth: 0, gap: 2, backgroundColor: colors.neutral, borderRadius: 16, paddingHorizontal: 12, paddingVertical: 3, marginVertical: 4 }}>
     <Pressable accessibilityRole="button" accessibilityLabel={mode === "collapsed" ? "展开思考与工具过程" : "收起思考与工具过程"}
       accessibilityState={{ expanded: mode !== "collapsed" }} onPress={() => setChoice(mode === "collapsed" ? "preview" : "collapsed")}
       style={[s.row, { minHeight: layout.touchTarget, gap: 8 }]}>
-      <Ionicons name="git-network-outline" size={16} color={colors.muted} />
-      <Text style={[s.muted, { flex: 1 }]}>思考与工具{toolCount ? ` · ${toolCount} 项工具` : ""} · {parts.length} 步</Text>
+      <Ionicons name="sparkles-outline" size={16} color={colors.muted} />
+      <Text numberOfLines={2} style={[s.description, { flex: 1, fontSize: 13 }]}>{summary}</Text>
       <Ionicons name={mode === "collapsed" ? "chevron-down" : "chevron-up"} size={14} color={colors.muted} />
     </Pressable>
     {mode !== "collapsed" ? <View style={{ borderLeftWidth: 1, borderLeftColor: colors.line, paddingLeft: 12, gap: 2 }}>
@@ -81,14 +84,13 @@ function ProcessGroup({ parts, active, onOpenRun, onPublish }: { parts: ReplyPar
         style={[s.row, { minHeight: layout.touchTarget, gap: 8, paddingVertical: 5 }]}>
         <Ionicons name={part.status === "started" && active ? "time-outline" : part.status === "completed" ? "checkmark-circle-outline" : "alert-circle-outline"}
           size={16} color={part.status === "failed" ? colors.red : colors.muted} />
-        <Text style={[s.description, { flex: 1 }]}>{toolName(part.name)} · {toolStatus(part, active)}</Text>
+        <Text style={[s.description, { flex: 1 }]}>{toolSummary(part, toolName(part.name))}</Text>
         <Ionicons name="chevron-forward" size={14} color={colors.muted} />
       </Pressable> : <ReasoningStep key={part.id} part={part} active={active} onExpand={() => setChoice("expanded")} />)}
     </View> : null}
-    {detail ? <BottomSheet visible title={toolName(detail.name)} subtitle="这条回复的工具过程" tall={!!detail.detail} onClose={() => setDetail(null)}>
+    {detail ? <BottomSheet visible title={toolName(detail.name)} subtitle={toolStatus(detail, active)} onClose={() => setDetail(null)}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 16, gap: 12 }}>
-        <Text style={s.text}>{toolStatus(detail, active)}</Text>
-        {detail.detail ? <ToolDetails part={detail} onPublish={onPublish} /> : <Text style={s.description}>{detail.status === "completed" ? "这一步已收到工具完成回执，回复正文会结合结果继续说明。"
+        {detail.detail ? <ToolDetails part={detail} /> : <Text style={s.description}>{detail.status === "completed" ? "这一步已收到工具完成回执，回复正文会结合结果继续说明。"
           : detail.status === "failed" ? "这一步未完成，请结合回复正文或处理记录查看后续情况。"
           : active ? "助手正在处理这一步，完成后会更新状态。" : "这一步没有收到明确的完成回执。"}</Text>}
         {onOpenRun ? <Pressable accessibilityRole="button" accessibilityLabel="查看这条回复的处理记录" onPress={() => { setDetail(null); onOpenRun(); }}
@@ -99,8 +101,8 @@ function ProcessGroup({ parts, active, onOpenRun, onPublish }: { parts: ReplyPar
 }
 
 export type ReplyContentProps = { parts: ReplyPart[]; active?: boolean; finalText?: string | null; finalPartId?: string | null;
-  status?: Run["status"]; phase?: string; cancelRequested?: boolean; connectionIssue?: boolean; truncated?: boolean; onOpenRun?: () => void; onPublish?: (seq: number) => Promise<void> };
-export function ReplyContent({ parts, active = false, finalText, finalPartId, status, phase, cancelRequested, connectionIssue, truncated, onOpenRun, onPublish }: ReplyContentProps) {
+  status?: Run["status"]; phase?: string; cancelRequested?: boolean; connectionIssue?: boolean; truncated?: boolean; onOpenRun?: () => void; onOpenLink?: (url: string) => boolean; onReadProcess?: () => void };
+export function ReplyContent({ parts, active = false, finalText, finalPartId, status, phase, cancelRequested, connectionIssue, truncated, onOpenRun, onOpenLink, onReadProcess }: ReplyContentProps) {
   const { s, colors } = useUi();
   const terminalLabel = status === "failed" ? "回复未完成" : status === "cancelled" ? "回复已停止" : status === "interrupted" ? "回复已中断" : "";
   const latest = parts.at(-1);
@@ -113,8 +115,8 @@ export function ReplyContent({ parts, active = false, finalText, finalPartId, st
       {active ? <ActivityIndicator size="small" color={colors.gold} /> : null}
       <Text style={s.muted}>{terminalLabel || (connectionIssue ? "连接恢复后继续显示进度" : label)}</Text>
     </View> : null}
-    {sections.map((section) => section.type === "text" ? section.part.text ? <MessageBody key={section.id} streaming={active}>{section.part.text}</MessageBody> : null
-      : <ProcessGroup key={section.id} parts={section.parts} active={active} onOpenRun={onOpenRun} onPublish={onPublish} />)}
+    {sections.map((section) => section.type === "text" ? section.part.text ? <MessageBody key={section.id} streaming={active} onOpenLink={onOpenLink}>{section.part.text}</MessageBody> : null
+      : <ProcessGroup key={section.id} parts={section.parts} active={active} onOpenRun={onOpenRun} onRead={onReadProcess} />)}
     {truncated ? <Text style={s.muted}>过程展示有限，完整回答以正文为准。</Text> : null}
   </View>;
 }

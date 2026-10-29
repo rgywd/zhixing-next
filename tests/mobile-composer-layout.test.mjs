@@ -31,7 +31,7 @@ function harness({ colors = darkColors, request = async () => ({ items: [] }), .
     "./ThemeProvider": { useTheme: () => ({ colors }), useThemedStyles: (factory) => factory(colors) },
   };
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/ConversationComposer.tsx", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
-    exports, AbortController, setTimeout, require(name) { assert.ok(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name]; },
+    exports, AbortController, setTimeout, clearTimeout, require(name) { assert.ok(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name]; },
   });
   return { props, actions, render(next = {}) { Object.assign(props, next); return walk(lifecycle.render(() => exports.ConversationComposer(props))); }, unmount: lifecycle.unmount };
 }
@@ -56,78 +56,23 @@ test("expanded editing keeps the same draft and attachments, restores selection 
   assert.ok(content(app.render()[0]).includes('photo draft')); assert.ok(!app.actions.includes('send')); app.unmount();
 });
 
-test("the shared default composer places real choices above the attachment, input and send row", () => {
+test("the composer keeps text and immediate controls together with accessible model and reasoning labels", () => {
   const app = harness(); const nodes = app.render();
-  assert.match(content(nodes[0]), new RegExp(model.name));
-  const options = nodes[0].props.children[0], editor = nodes[0].props.children[1];
-  assert.ok(walk(options).includes(control(nodes, "选择聊天模型")));
-  assert.ok(walk(options).includes(control(nodes, "思考深度")));
-  assert.ok(walk(options).includes(control(nodes, "联网搜索")));
-  assert.equal(walk(options).some((node) => node.type === "TextInput"), false);
-  assert.ok(walk(editor).includes(control(nodes, "添加资料")));
-  assert.ok(walk(editor).some((node) => node.type === "TextInput"));
-  assert.ok(walk(editor).includes(control(nodes, "发送消息")));
-  app.unmount();
-});
-
-test("shared controls show real model, reasoning and search states in one scrolling row and expose no fake microphone", () => {
-  const app = harness(); const nodes = app.render();
-  assert.match(content(control(nodes, "选择聊天模型")), /我选的真实模型/);
-  assert.match(content(control(nodes, "思考深度")), /深度/);
-  assert.equal(content(control(nodes, "联网搜索")), "联网搜索"); assert.match(control(nodes, "联网搜索").props.accessibilityLabel, /已关闭/);
-  const options = nodes.find((node) => node.type === "ScrollView");
-  assert.equal(options.props.horizontal, true);
-  assert.equal(options.props.showsHorizontalScrollIndicator, false);
-  assert.equal(options.props.keyboardShouldPersistTaps, "handled");
-  assert.equal(options.props.contentContainerStyle.flexWrap, "nowrap");
-  assert.equal(options.props.contentContainerStyle.flexDirection, "row");
-  assert.ok(walk(options).filter((node) => node.type === "Text").every((node) => node.props.numberOfLines === 1));
-  assert.equal(nodes.some((node) => /语音|录音|麦克风/.test(node.props?.accessibilityLabel ?? "")), false);
-  for (const [label, action] of [["选择聊天模型", "model"], ["思考深度", "reasoning"], ["联网搜索", "search"], ["添加资料", "files"], ["发送消息", "send"]]) { control(nodes, label).props.onPress(); assert.equal(app.actions.at(-1), action); }
-  app.unmount();
-});
-
-test("long real labels stay complete in an unshrinking horizontal row at narrow widths", async () => {
-  const longModelName = "用户自定义的超长模型名称 · 完整版本标识 2026";
-  const app = harness({ model: { ...model, name: longModelName }, searchId: "long", connection: { url: "https://example.test", token: "fixture" }, request: async () => ({ items: [{ id: "long", name: "我配置的长名称搜索供应商", kind: "brave" }] }) });
-  app.render(); await settle();
-  const nodes = app.render();
-  const options = nodes.find((node) => node.type === "ScrollView");
-  assert.equal(options.props.style.flexShrink, 0);
-  const choices = walk(options).filter((node) => node.type === "Pressable");
-  assert.equal(choices.length, 3);
-  for (const choice of choices) {
-    assert.equal(choice.props.style[0].flexShrink, 0);
-    assert.ok(choice.props.style[0].minHeight >= 44);
-    assert.ok(choice.props.style[0].minWidth >= 40);
-    assert.equal(choice.props.style[0].maxWidth, undefined);
+  const editor = nodes[0].props.children[1];
+  assert.equal(walk(editor).filter(n => n.type === 'TextInput').length, 1);
+  for (const [label, action] of [["选择聊天模型", "model"], ["思考深度", "reasoning"], ["联网搜索", "search"], ["添加资料", "files"], ["发送消息", "send"]]) {
+    const item = control(nodes, label); assert.ok(walk(editor).includes(item)); item.props.onPress(); assert.equal(app.actions.at(-1), action);
   }
-  assert.match(content(control(nodes, "选择聊天模型")), new RegExp(longModelName));
-  assert.match(content(control(nodes, "联网搜索")), /我配置的长名称搜索供应商/);
+  assert.match(control(nodes, '思考深度').props.accessibilityLabel, /深度/);
+  assert.match(control(nodes, '选择聊天模型').props.accessibilityLabel, /我选的真实模型/);
+  assert.equal(control(nodes, '展开编辑消息'), undefined, 'a short message needs no extra editor row');
+  assert.equal(nodes.some(n => /语音|录音|麦克风/.test(n.props?.accessibilityLabel ?? '')), false);
   app.unmount();
 });
-
-test("queued content floats above the model viewport without adding a persistent input row", () => {
-  const app = harness({ floating: "queued preview" });
-  const nodes = app.render();
-  const anchor = nodes[0].props.children[0];
-  const floating = anchor.props.children[0];
-  assert.equal(anchor.props.style[0].position, "relative");
-  assert.equal(anchor.props.style[1].paddingTop, 50);
-  assert.equal(nodes[0].props.style[1].marginTop, -50);
-  assert.equal(anchor.props.style[1].paddingTop + nodes[0].props.style[1].marginTop, 0);
-  assert.equal(floating.props.style.position, "absolute");
-  assert.equal(floating.props.style.top, 0);
-  assert.equal(floating.props.style.bottom, undefined);
-  assert.equal(floating.props.style.left, 0);
-  assert.equal(floating.props.style.right, 0);
-  assert.equal(floating.props.pointerEvents, "box-none");
-  assert.equal(content(floating), "queued preview");
-  assert.equal(anchor.props.children[1].type, "ScrollView");
-  const empty = app.render({ floating: undefined });
-  assert.equal(empty[0].props.children[0].props.children[0], null);
-  assert.equal(empty[0].props.children.filter((node) => node && node.type !== "BottomSheet").length, 2);
-  app.unmount();
+test("queue appears above the unified composer and disappears without a placeholder", () => {
+  const app = harness({ floating: 'queued preview' });
+  assert.equal(content(app.render()[0].props.children[0]), 'queued preview');
+  assert.equal(app.render({ floating: undefined })[0].props.children[0], null); app.unmount();
 });
 
 test("the shared composer preserves attachments, hints, multiline edits, locked controls and pending retry", () => {
@@ -144,21 +89,21 @@ test("the shared composer preserves attachments, hints, multiline edits, locked 
 
 test("reasoning controls reflect unsupported, auto and disabled depths", () => {
   const app = harness();
-  const unavailable = app.render({ model: { ...model, reasoning_levels: [] } }); assert.equal(control(unavailable, "思考深度").props.disabled, true); assert.match(content(control(unavailable, "思考深度")), /不可调整/);
-  const automatic = app.render({ model, depth: "auto" }); assert.match(content(control(automatic, "思考深度")), /自动/);
-  const disabled = app.render({ depth: "none" }); assert.match(content(control(disabled, "思考深度")), /关闭/); assert.equal(control(disabled, "思考深度").props.disabled, false);
+  const unavailable = app.render({ model: { ...model, reasoning_levels: [] } }); assert.equal(control(unavailable, "思考深度"), undefined);
+  const automatic = app.render({ model, depth: "auto" }); assert.match(control(automatic, "思考深度").props.accessibilityLabel, /自动/);
+  const disabled = app.render({ depth: "none" }); assert.match(control(disabled, "思考深度").props.accessibilityLabel, /关闭/); assert.ok(!control(disabled, "思考深度").props.disabled);
   app.unmount();
 });
 
 test("search provider labels never carry over across connections and late requests cannot restore an old provider", async () => {
   const calls = [], connectionA = { url: "https://a.example", token: "a" }, connectionB = { url: "https://b.example", token: "b" };
   const app = harness({ connection: connectionA, searchId: "same-id", request(connection, path, options) { return new Promise((resolve) => calls.push({ connection, path, options, resolve })); } });
-  app.render(); calls[0].resolve({ items: [{ id: "same-id", name: "旧服务搜索", kind: "tavily" }] }); await settle(); assert.match(content(control(app.render(), "联网搜索")), /旧服务搜索/);
-  const switching = app.render({ connection: connectionB }); assert.doesNotMatch(content(control(switching, "联网搜索")), /旧服务搜索/); assert.equal(calls[0].options.signal.aborted, true);
-  calls[1].resolve({ items: [{ id: "same-id", name: "新服务搜索", kind: "brave" }] }); await settle(); assert.match(content(control(app.render(), "联网搜索")), /新服务搜索/);
+  app.render(); calls[0].resolve({ items: [{ id: "same-id", name: "旧服务搜索", kind: "tavily" }] }); await settle(); assert.match(control(app.render(), "联网搜索").props.accessibilityLabel, /旧服务搜索/);
+  const switching = app.render({ connection: connectionB }); assert.doesNotMatch(control(switching, "联网搜索").props.accessibilityLabel, /旧服务搜索/); assert.equal(calls[0].options.signal.aborted, true);
+  calls[1].resolve({ items: [{ id: "same-id", name: "新服务搜索", kind: "brave" }] }); await settle(); assert.match(control(app.render(), "联网搜索").props.accessibilityLabel, /新服务搜索/);
   app.render({ searchId: "late" }); app.render({ searchId: null }); assert.equal(calls[2].options.signal.aborted, true);
   calls[2].resolve({ items: [{ id: "late", name: "不应出现的旧响应", kind: "tavily" }] }); await settle();
-  const off = control(app.render(), "联网搜索"); assert.equal(content(off), "联网搜索"); assert.match(off.props.accessibilityLabel, /已关闭/); assert.doesNotMatch(content(off), /旧响应/); assert.equal(off.props.accessibilityState.selected, false); app.unmount();
+  const off = control(app.render(), "联网搜索"); assert.equal(content(off), ""); assert.match(off.props.accessibilityLabel, /已关闭/); assert.doesNotMatch(content(off), /旧响应/); assert.equal(off.props.accessibilityState.selected, false); app.unmount();
 });
 
 test("the photo action opens the native picker only after its sheet is dismissed, without navigating to files", () => {

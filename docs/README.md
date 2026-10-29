@@ -1,12 +1,14 @@
 # 文档入口
 
+- [AI 对话重做与真实模型验收](AI-CHAT-REDESIGN-2026-10-29.md)：统一设计语言、原位编辑、直接重答、原生 present、工具与文件交付；先通过模拟器产品验收再合并。
+
 - [AI 对话体验第二轮迭代](AI-CHAT-REVISIONS-2026-10-29.md)：真实消息编辑、重新回答、版本切换、工作区文件发布及模拟器验收。
 
 - [AI 对话体验第一轮迭代](AI-CHAT-ITERATION-2026-10-29.md)：工具结果、代码复制、选文与长文本编辑、原生文件、改名和搜索定位；本地适配与模拟器验收。
 
 - [RikkaHub 与知行 DSH 对话详情产品对照](CHAT-EXPERIENCE-RIKKAHUB-COMPARISON.md)：布局、消息与输入、52 个界面条目、功能差距、实施优先级及验收清单；附[模拟器截图](CHAT-EXPERIENCE-RIKKAHUB-SCREENSHOTS.md)。
 
-- [DSH 插件接入](../plugins/dsh-zhixing/README.md)：现有 App 壳子、原生宿主会话、工具事件、问答／取消、业务桥接与验收命令。
+- [DSH 插件接入](../plugins/dsh-zhixing/README.md)：移动端出口、原生宿主会话、工具事件、问答／取消、业务桥接与验收命令。
 
 - [DSH 聊天与 Android 模拟器验收](DSH-ACCEPTANCE-2026-10-29.md)：消息展示、原生工具、队列、附件重试、历史恢复及测试模型边界。
 
