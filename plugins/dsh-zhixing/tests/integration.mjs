@@ -222,9 +222,18 @@ try {
   const publishedState = await until(snapshot, s => !s.running && s.events.some(e => e.type === 'user/message' && e.data.source?.rpcId === 'publish-model'), 'model publishes file');
   const publishResult = publishedState.events.findLast(e => e.type === 'tool/result');
   assert.ok(!publishResult.data.message.isError, JSON.stringify(publishResult));
-  const modelFile = publishResult.data.message.content.find(b => b.type === 'file').attachment;
-  assert.equal(await (await fetch(`http://127.0.0.1:${appPort}/v1${path}/dsh/files/${encodeURIComponent(modelFile.attachmentId)}`, { headers })).text(), 'changed after publication\n');
-  console.log('PASS attachment-preserving edit, immutable manual publication and native model file delivery');
+  const declaration = publishedState.events.findLast(e => e.type === 'deliverables/presented');
+  assert.ok(declaration, 'native present must append its own durable declaration');
+  const deliveryPath = `${path}/dsh/deliveries/${declaration.seq}/0`;
+  const download = () => fetch(`http://127.0.0.1:${appPort}/v1${deliveryPath}`, { headers }).then(r => r.text());
+  assert.equal(await download(), 'changed after publication\n');
+  assert.equal((await api(`${deliveryPath}/text`)).content, 'changed after publication');
+  await writeFile(join(workspace, 'sample.js'), 'native current file\n');
+  await stop(); await start();
+  assert.equal(await download(), 'native current file\n', 'native present opens current source bytes after restart');
+  await rejected(`${rp}/dsh/deliveries/${declaration.seq}/0`, undefined, 404, 'GET');
+  await rejected(`${deliveryPath}?version=${"foreign-session"}`, undefined, 404, 'GET');
+  console.log('PASS native present, source file preview/download, restart and conversation ownership');
   if (process.env.ZHIXING_TEST_BUSINESS_URL) {
     const schema = await api('/business/schema'); assert.ok(schema.paths['/v1/finance/summary']);
     const summary = await api('/finance/summary'); assert.ok(summary);

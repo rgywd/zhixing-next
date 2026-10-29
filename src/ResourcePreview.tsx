@@ -8,7 +8,7 @@ import { MessageBody } from "./MessageBody";
 import { shareResource } from "./resources";
 import { useThemedStyles } from "./ThemeProvider";
 import { layout, radius, space, type ThemeColors } from "./theme";
-import { ActionLink, SheetHeader, humanError, useUi } from "./ui";
+import { ActionLink, IconAction, humanError, useUi } from "./ui";
 
 type PreviewResource = Pick<Resource, "id" | "name" | "mime_type" | "size">;
 export function resourceDetail(resource: Pick<Resource, "name" | "mime_type" | "size">) {
@@ -89,7 +89,7 @@ export function ResourcePreview({ connection, resource, onClose, textPath, onDow
   const [error, setError] = useState<{ resourceId: string; message: string } | null>(null);
   return <Modal visible={!!resource} onRequestClose={onClose}>
     <SafeAreaView style={s.root}>
-      <SheetHeader title={resource?.name ?? "资料"} onClose={onClose} />
+      <View style={styles.header}><Ionicons name="document-text-outline" size={22} color={colors.muted} /><Text accessibilityRole="header" numberOfLines={2} style={styles.heading}>{resource?.name ?? "资料"}</Text><IconAction icon="close" label="关闭" onPress={onClose} /></View>
       {resource ? <>
         {resource.mime_type.startsWith("image/")
           ? <ResourceImage key={resource.id} connection={connection} resource={resource} contain style={styles.preview} />
@@ -108,6 +108,8 @@ export function ResourcePreview({ connection, resource, onClose, textPath, onDow
 }
 
 const createStyles = (colors: ThemeColors) => StyleSheet.create({
+  header: { flexDirection: "row", alignItems: "center", gap: 10, minHeight: 64, paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.line },
+  heading: { flex: 1, minWidth: 0, fontSize: 16, lineHeight: 22, fontWeight: "600", color: colors.ink },
   imageFrame: { overflow: "hidden", borderRadius: radius.small, backgroundColor: colors.neutral },
   imageStatus: { ...StyleSheet.absoluteFill, minHeight: layout.touchTarget, alignItems: "center", justifyContent: "center", gap: space.xs, backgroundColor: colors.neutral },
   preview: { flex: 1, width: "100%", borderRadius: 0, backgroundColor: colors.paper },

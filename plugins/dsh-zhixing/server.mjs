@@ -5,6 +5,7 @@ import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { createRevisions } from './revisions.mjs';
 import { publishFile } from './artifacts.mjs';
+import { declaredFile, deliveryBytes } from './deliveries.mjs';
 
 const page = items => ({ items, next_cursor: null, previous_cursor: null });
 const own = id => /^zhixing-(main|finance|health)-[a-f0-9-]+$/.test(id);
@@ -299,6 +300,29 @@ export async function startServer(ctx, config, native = {}) {
           if (!['remove', 'steer', 'edit'].includes(action.kind)) throw failure('无效的队列操作。');
           const result = await ctx.sessionController.updateQueue({ sessionId: id, itemId, action });
           await flush(id); return reply(result);
+        }
+        const delivery = suffix.match(/^\/dsh\/deliveries\/(\d+)\/(\d+)(\/text)?$/);
+        if (method === 'GET' && delivery) {
+          const version = url.searchParams.get('version') ?? id;
+          if (!history.versions.some(v => v.id === version)) throw failure('这个文件不属于当前对话。', 404);
+          const target = await declaredFile(ctx, records, version, Number(delivery[1]), Number(delivery[2]));
+          const abort = new AbortController();
+          const disconnected = () => { if (!res.writableFinished) abort.abort(); };
+          res.once('close', disconnected);
+          try {
+            if (delivery[3]) {
+              const page = await ctx.workspaceFiles.read(target.scope, target.path, {}, abort.signal);
+              return reply({ resource_id: `presented:${delivery[1]}:${delivery[2]}`, content: page.text,
+                format: /\.(md|markdown)$/i.test(target.name) ? 'markdown' : 'text', truncated: !page.eof });
+            }
+            // Resolve access before sending headers; byte reads retain all Host filesystem policy.
+            await ctx.workspaceFiles.stat(target.scope, target.path, abort.signal);
+            res.writeHead(200, { 'Content-Type': textFile(target.name) ? 'text/plain; charset=utf-8' : 'application/octet-stream',
+              'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(target.name)}`,
+              'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+            await pipeline(Readable.from(deliveryBytes(ctx, target, abort.signal)), res);
+            return;
+          } finally { res.removeListener('close', disconnected); }
         }
         if (method === 'POST' && suffix === '/dsh/artifacts') {
           const body = await json(req);

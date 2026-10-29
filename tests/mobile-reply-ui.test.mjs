@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { test } from "node:test";
 import ts from "typescript";
 import * as jsx from "react/jsx-runtime";
+import * as toolPresentation from "../src/toolPresentation.ts";
 import * as live from "../src/liveRun.ts";
 import { replyParts, replySections } from "../src/replyParts.ts";
 import { markdownBlockSignature } from "../src/messageMarkdown.ts";
@@ -77,7 +78,7 @@ function uiHarness(initial) {
   const { ReplyContent } = load("ReplyContent.tsx", { react, "react/jsx-runtime": jsx,
     "react-native": { View: "View", Text: "Text", Pressable: "Pressable", ActivityIndicator: "Spinner", ScrollView: "ScrollView" },
     "@react-native-vector-icons/ionicons": { Ionicons: "Icon" }, "./MessageBody": { MessageBody: "Markdown" },
-    "./ToolDetails": { ToolDetails: "ToolDetails" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, "./replyParts": { replyParts, replySections },
+    "./toolPresentation": toolPresentation, "./ToolDetails": { ToolDetails: "ToolDetails" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, "./replyParts": { replyParts, replySections },
     "./theme": { layout: { touchTarget: 44 } }, "./ui": { useUi: () => ({ s: { row: {}, muted: {}, description: {}, text: {} }, colors: { line: "#333", muted: "#aaa", gold: "#ca8", red: "#f88" } }) } });
   function visit(node, path = "root") {
     if (!node || typeof node !== "object") return node;
@@ -122,7 +123,7 @@ test("process preview shows two latest steps and tool detail follows the real co
   byLabel(nodes, "查看全部 3 步").props.onPress(); nodes = ui.render(); assert.ok(nodes.some((n) => n.props?.children === "Early thought"));
   byLabel(nodes, "搜索网页 · 进行中，查看工具详情").props.onPress(); nodes = ui.render(); assert.ok(nodes.some((n) => n.type === "BottomSheet"));
   parts = [...parts.slice(0, 2), { ...parts[2], status: "completed", args: "fictional-private", output: "fictional-private" }];
-  nodes = ui.render({ parts, active: true }); assert.ok(nodes.some((n) => n.type === "Text" && n.props.children === "已完成"));
+  nodes = ui.render({ parts, active: true }); assert.ok(nodes.some((n) => n.type === "BottomSheet" && n.props.subtitle === "已完成"));
   assert.ok(!JSON.stringify(nodes).includes("fictional-private"));
 });
 
@@ -168,7 +169,7 @@ test("MessageBody renders the complete final source immediately and disables sel
   assert.equal(blockComparisons[0](final.props, same), true);
 });
 
-test("Markdown tables share fixed column boundaries across unequal headers, rows and incomplete cells", () => {
+test("Markdown tables size columns to content and share boundaries across unequal headers, rows and incomplete cells", () => {
   const { MessageBody } = load("MessageBody.tsx", { react: { memo: (fn) => fn, useDeferredValue: (value) => value, useMemo: (fn) => fn() },
     "react/jsx-runtime": jsx, "react-native": { Text: "Text", View: "View", ScrollView: "ScrollView" },
     "@ronradtke/react-native-markdown-display": { __esModule: true, default: "Markdown", createMarkdownIt, parser, sealIncompleteMarkdown },
@@ -184,24 +185,25 @@ test("Markdown tables share fixed column boundaries across unequal headers, rows
     const markdown = block.type(block.props), rules = markdown.props.rules, table = markdown.props.children[0];
     const rows = table.children.flatMap((section) => section.children).filter((node) => node.type === "tr");
     const renderedTable = rules.table(table, ["semantic table children"], [], {});
-    assert.equal(renderedTable.type, "ScrollView"); assert.equal(renderedTable.props.horizontal, true);
-    assert.equal(renderedTable.props.children.props.children[0], "semantic table children");
-    const gridWidth = flatten(renderedTable.props.children.props.style).width - 2;
+    const scroll = renderedTable.props.children[1];
+    assert.equal(scroll.type, "ScrollView"); assert.equal(scroll.props.horizontal, true);
+    assert.equal(scroll.props.children.props.children[0], "semantic table children");
+    const gridWidth = flatten(scroll.props.children.props.style).width - 2;
     const columnCount = rows[0].children.length;
-    assert.equal(gridWidth, columnCount * 160);
+    assert.ok(gridWidth >= columnCount * 56 && gridWidth <= columnCount * 220);
     const boundaries = rows.map((row) => {
       const renderedRow = rules.tr(row, [], [table], {});
       assert.equal(flatten(renderedRow.props.style).width, gridWidth);
       let offset = 0;
       return row.children.map((cell) => {
         const renderedCell = rules[cell.type](cell, [cell.children], [row, table], {}), style = flatten(renderedCell.props.style);
-        assert.equal(style.flexGrow, 0); assert.equal(style.flexShrink, 0); assert.equal(style.width, 160);
+        assert.equal(style.flexGrow, 0); assert.equal(style.flexShrink, 0); assert.ok(style.width >= 56 && style.width <= 220);
         assert.equal(style.minWidth, style.maxWidth); assert.equal(renderedCell.props.children[0], cell.children);
         const boundary = offset; offset += style.width; return boundary;
       });
     });
     for (const row of boundaries) assert.deepEqual(row, boundaries[0], "every row uses exactly the header's column positions");
-    assert.ok(gridWidth > 284, "a 320dp screen scrolls the grid locally instead of shrinking cells per row");
+    if (source.includes("事项")) assert.ok(boundaries[0][1] < gridWidth / 2, "short labels leave more room for readable content");
     assert.ok(JSON.stringify(table).includes(source.includes("事项") ? "给下一餐留余地" : "https://fixture.test"), "complete semantic content survives the layout rule");
   }
 });

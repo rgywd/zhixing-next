@@ -9,6 +9,7 @@
     "server.mjs",
     "revisions.mjs",
     "artifacts.mjs",
+    "deliveries.mjs",
     "storage.mjs",
     "cordis.patch.yml",
     "README.md"

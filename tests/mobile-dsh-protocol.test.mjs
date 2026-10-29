@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chatRows, contentText, eventPresentation, liveText, mergeDshEvents, rowText, rowHasMessage } from '../src/dshProtocol.ts';
+import { deliveredFileForLink, dshFilePath, messageVersions, chatRows, contentText, eventPresentation, liveText, mergeDshEvents, rowText, rowHasMessage } from '../src/dshProtocol.ts';
 import { toolDetails } from '../src/toolPresentation.ts';
 
 const event = (seq, type, data) => ({ seq, type, data });
@@ -124,4 +124,52 @@ test('published workspace files attach to the matching tool reply without changi
 test('native fork closers do not create phantom failed replies before the edited user message', () => {
   const rows = chatRows([event(0, 'turn/start', { turn: 1 }), event(1, 'turn/end', { turn: 1, reason: { kind: 'forked' } }), user(2, 'edited')], null);
   assert.equal(rows.length, 1); assert.equal(rows[0].role, 'user');
+});
+
+test('native present events attach files to their turn and address a recorded declaration, never a client path', () => {
+  const events = [
+    { seq: 1, type: 'turn/start', data: { turn: 1 } },
+    { seq: 2, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '文件已整理好。' }] } } },
+    { seq: 3, type: 'deliverables/presented', data: { turn: 1, callId: 'a', files: [{ path: '/workspace/计划.md', description: '周末安排' }, { path: null }] } },
+    { seq: 4, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+  ];
+  const file = chatRows(events, { history: { active: 'branch', versions: [] } })[0].attachments[0];
+  assert.equal(file.name, '计划.md'); assert.equal(file.description, '周末安排');
+  assert.equal(dshFilePath('/conversations/c', file, true), '/conversations/c/dsh/deliveries/3/0/text?version=branch');
+  assert.equal(chatRows(events, null)[0].attachments.length, 1);
+});
+test('message-local versions track real sibling branches, including when viewing their descendants', () => {
+  const history = { active: 'later', versions: [{ id: 'root' },
+    { id: 'edit', source: 'root', userIndex: 0, group: 'root:1', kind: 'edit' },
+    { id: 'retry', source: 'edit', userIndex: 0, group: 'root:1', kind: 'retry' },
+    { id: 'later', source: 'retry', userIndex: 2, group: 'retry:9', kind: 'edit' }] };
+  assert.deepEqual(messageVersions(history, 0), { ids: ['root', 'edit', 'retry'], index: 2, kind: 'retry' });
+  assert.deepEqual(messageVersions({ ...history, active: 'root' }, 0).ids, ['root', 'edit', 'retry']);
+  assert.equal(messageVersions(history, 1), null);
+});
+test('tool summaries remove transport envelopes from readable file content', () => {
+  const read = toolDetails({ type: 'tool', name: 'read', detail: { output: [{ type: 'text', text: '<path>/work/note.txt</path>\n<content>\n正文\n</content>' }] } });
+  assert.equal(read.preview, '正文'); assert.ok(read.output.includes('<path>'), 'raw evidence remains available');
+});
+
+test('body file links resolve only declared unambiguous files, including escaped Chinese paths', () => {
+  const files = [{ id: 'one', type: 'file', name: '计划.md', sourcePath: '/work/docs/计划.md' }];
+  assert.equal(deliveredFileForLink(files, './docs/%E8%AE%A1%E5%88%92.md#part')?.id, 'one');
+  assert.equal(deliveredFileForLink(files, '/work/docs/计划.md')?.id, 'one');
+  for (const url of ['https://host/计划.md', 'file:///work/docs/计划.md', '../计划.md', '/private/计划.md', '%xx', '//host/计划.md'])
+    assert.equal(deliveredFileForLink(files, url), undefined, url);
+  assert.equal(deliveredFileForLink([...files, { ...files[0], id: 'two', sourcePath: '/other/计划.md' }], '计划.md'), undefined);
+});
+test('presenting the same file again updates its card and retains the new native declaration', () => {
+  const rows = chatRows([user(0, 'make a file'), event(1, 'turn/start', { turn: 1 }),
+    event(2, 'deliverables/presented', { turn: 1, files: [{ path: '/work/a.md', description: 'draft' }] }),
+    event(3, 'deliverables/presented', { turn: 1, files: [{ path: '/work/a.md', description: 'ready' }] })]);
+  assert.equal(rows[1].attachments.length, 1); assert.equal(rows[1].attachments[0].description, 'ready');
+  assert.equal(rows[1].attachments[0].delivery.seq, 3);
+});
+
+test('empty provider reasoning blocks do not create fake thinking steps', () => {
+  const rows = chatRows([event(0, 'turn/start', { turn: 1 }), answer(1, 1, 1, [{ type: 'reasoning', text: '' }, { type: 'text', text: '文件已就绪' }])]);
+  assert.deepEqual(rows[0].parts.map(p => p.type), ['text']);
+  assert.equal(rows[0].events.length, 2, 'the native receipt is retained unchanged');
 });

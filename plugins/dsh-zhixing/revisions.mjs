@@ -21,7 +21,7 @@ export function createRevisions(ctx, { records, resolve, flush, metadata, forkRe
   const summary = async root => {
     const state = await load(root);
     return { active: state.active, versions: [{ id: root, label: '原始版本' }, ...state.entries.filter(v => v.accepted).map((v, i) => ({
-      id: v.child, label: `${v.kind === 'edit' ? '编辑' : '重答'}版本 ${i + 1}`, source: v.source, seq: v.seq,
+      id: v.child, label: `${v.kind === 'edit' ? '编辑' : '重答'}版本 ${i + 1}`, source: v.source, seq: v.seq, userIndex: v.userIndex, group: v.group, kind: v.kind,
     }))] };
   };
   const idle = async id => {
@@ -62,7 +62,11 @@ export function createRevisions(ctx, { records, resolve, flush, metadata, forkRe
         ...attachments.filter(b => body.attachments.includes(b.attachment.attachmentId)) ];
       if (!content.length) throw failure('消息至少需要文字或一个附件。', 400);
       if (!entry) {
-        entry = { request: body.id, signature, source: state.active, seq: body.seq, kind: body.kind,
+        const userIndex = events.filter(e => isUser(e) && e.seq < user.seq).length;
+        let ancestor = state.entries.find(v => v.child === state.active);
+        while (ancestor && ancestor.userIndex > userIndex) ancestor = state.entries.find(v => v.child === ancestor.source);
+        const group = ancestor?.userIndex === userIndex ? ancestor.group : `${state.active}:${user.data.id ?? user.seq}`;
+        entry = { request: body.id, signature, source: state.active, seq: body.seq, kind: body.kind, userIndex, group,
           child: `zhixing-revision-${createHash('sha256').update(`${root}:${body.id}`).digest('hex')}`, cut: user.seq - 1, content };
         await save(root, { ...state, entries: [...state.entries, entry] }); register(entry.child);
       }

@@ -7,7 +7,7 @@ export type DshQuestion = { id: string; question: string; detail?: string; heade
 export type DshPending = { id: string; sessionId: string; kind: "approval" | "question";
   toolName?: string; reason?: string; questions?: DshQuestion[] };
 export type DshSnapshot = { events: DshEvent[]; next: number; hasMore: boolean; running: boolean; active: boolean;
-  history?: { active: string; versions: { id: string; label: string; source?: string; seq?: number }[] };
+  history?: { active: string; versions: { id: string; label: string; source?: string; seq?: number; userIndex?: number; group?: string; kind?: string }[] };
   artifacts?: { id: string; toolSeq: number; content: unknown }[];
   queue: { id: string; placement?: "queued" | "steering" | "context"; content: unknown }[]; pending: DshPending[];
   live: { attemptId: string; turn: number; step: number; chunks: Record<string, unknown>[] } | null };
@@ -35,7 +35,7 @@ export function liveText(snapshot: DshSnapshot | null): string {
   return snapshot.live.chunks.filter(c => c.type === "text-delta").map(c => String(c.text ?? "")).join("");
 }
 
-export type DshAttachment = { id: string; name: string; type: "image" | "file"; bytes: number };
+export type DshAttachment = { id: string; name: string; type: "image" | "file"; bytes: number; description?: string; sourcePath?: string; delivery?: { seq: number; index: number; version?: string } };
 export type DshChatRow = { id: string; role: "user" | "assistant"; parts: ReplyPart[]; attachments: DshAttachment[];
   events: DshEvent[]; active: boolean; status?: "completed" | "cancelled" | "failed" | "interrupted" };
 export const rowText = (row: DshChatRow) => row.parts.flatMap(p => p.type === "text" && p.attempt_status !== "failed" ? [p.text] : []).join("\n\n");
@@ -71,7 +71,8 @@ export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshC
   };
   const contentParts = (content: unknown, id: string): ReplyPart[] => (Array.isArray(content) ? content : []).flatMap((value, index) => {
     const block = record(value);
-    return block.type === "text" || block.type === "reasoning" ? [{ id: `${id}:${index}`, type: block.type, text: String(block.text ?? "") }] : [];
+    return (block.type === "text" || block.type === "reasoning") && String(block.text ?? "").trim()
+      ? [{ id: `${id}:${index}`, type: block.type, text: String(block.text) }] : [];
   });
   for (const event of events) {
     const data = event.data;
@@ -102,6 +103,17 @@ export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshC
         part.detail = { ...part.detail, output: message.content, meta: data.meta, error: data.error, finishedAt: event.time };
       }
       assistant(eventTurn).attachments.push(...contentAttachments(message.content));
+    } else if (event.type === "deliverables/presented" && Array.isArray(data.files)) {
+      const row = assistant(eventTurn);
+      data.files.forEach((value, index) => {
+        const file = record(value);
+        if (typeof file.path !== "string" || !file.path.trim()) return;
+        const id = `presented:${event.seq}:${index}`;
+        row.attachments = row.attachments.filter(attachment => attachment.sourcePath !== file.path);
+        row.attachments.push({ id, name: file.path.split(/[\\/]/).at(-1) || "文件", type: "file", bytes: 0,
+          description: typeof file.description === "string" ? file.description : undefined, sourcePath: file.path,
+          delivery: { seq: event.seq, index, version: snapshot?.history?.active } });
+      });
     } else if (event.type === "turn/end") {
       current.ended = true;
       const reason = record(data.reason).kind;
@@ -122,9 +134,10 @@ export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshC
       if (chunk.type !== "text-delta" && chunk.type !== "reasoning-delta") continue;
       const index = Number(chunk.index ?? 0), type = chunk.type === "text-delta" ? "text" : "reasoning";
       let part = blocks.get(index);
-      if (!part) { part = { id: `live:${live.attemptId}:${index}`, type, text: "" }; blocks.set(index, part); row.parts.push(part as ReplyPart); }
+      if (!part) { part = { id: `live:${live.attemptId}:${index}`, type, text: "" }; blocks.set(index, part); }
       part.text += String(chunk.text ?? "");
     }
+    row.parts.push(...[...blocks.values()].filter(part => part.text.trim()));
   }
   const activeTurn = live?.turn ?? turn;
   if (snapshot?.running && !context(activeTurn).ended) assistant(activeTurn).active = true;
@@ -146,4 +159,38 @@ export function eventPresentation(event: DshEvent): { title: string; text: strin
   // are visible by default; the UI never defines a tool capability allowlist.
   const quiet = /^(system\/message|request\/|step\/|turn\/start|agent\/inbox\/|inbox\/|model\/|tools\/|session\/|plugin:zhixing\/)/.test(event.type);
   return { title: event.type, text: "", quiet };
+}
+
+/** Show real branch choices at the message where they diverge, never fabricated page numbers. */
+export function messageVersions(history: DshSnapshot["history"], userIndex: number) {
+  if (!history) return null;
+  const ancestors: string[] = [];
+  let id: string | undefined = history.active;
+  while (id && !ancestors.includes(id)) { ancestors.push(id); id = history.versions.find(v => v.id === id)?.source; }
+  const edge = ancestors.map(a => history.versions.find(v => v.id === a && v.userIndex === userIndex && v.group)).find(Boolean)
+    ?? history.versions.findLast(v => v.userIndex === userIndex && v.group && v.source && ancestors.includes(v.source));
+  if (!edge?.group) return null;
+  const siblings = history.versions.filter(v => v.group === edge.group);
+  const origin = siblings[0]?.source;
+  if (!origin) return null;
+  const ids = [origin, ...siblings.map(v => v.id)];
+  const selected = ancestors.find(a => ids.includes(a));
+  if (!selected) return null;
+  return { ids, index: ids.indexOf(selected), kind: edge.kind };
+}
+
+export function dshFilePath(base: string, file: DshAttachment, text = false) {
+  if (file.delivery) return `${base}/dsh/deliveries/${file.delivery.seq}/${file.delivery.index}${text ? "/text" : ""}${file.delivery.version ? `?version=${encodeURIComponent(file.delivery.version)}` : ""}`;
+  return `${base}/dsh/files/${encodeURIComponent(file.id)}${text ? "/text" : ""}`;
+}
+
+/** Resolve only files actually delivered in this reply; a model URL never grants filesystem access. */
+export function deliveredFileForLink(files: DshAttachment[], url: string) {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url) || url.startsWith("//")) return undefined;
+  let path: string;
+  try { path = decodeURIComponent(url.split("#")[0]).replace(/^\.\//, ""); } catch { return undefined; }
+  if (!path || path.split("/").includes("..")) return undefined;
+  const matches = files.filter(file => file.type === "file" && (file.sourcePath === path || (!path.startsWith("/") &&
+    (file.sourcePath?.endsWith(`/${path}`) || (!file.sourcePath && file.name === path)))));
+  return matches.length === 1 ? matches[0] : undefined;
 }

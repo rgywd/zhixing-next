@@ -349,44 +349,25 @@ test("new from the welcome or a main conversation returns to the preserved main 
   }
 });
 
-test("the real shared header preserves accessible controls, touch targets and theme colors", () => {
-  const flatten = (style) => Array.isArray(style) ? Object.assign({}, ...style.map(flatten)) : style || {};
+test("the shared header exposes readable identity and moves secondary actions into its menu", () => {
   for (const colors of [theme.lightColors, theme.darkColors]) {
-    const actions = [];
+    const actions = [], life = hooks();
     const { AgentChatHeader } = load("AgentChatHeader.tsx", {
-      "react/jsx-runtime": jsxRuntime,
-      "react-native": { View: "View", Text: "Text", Pressable: "Pressable", StyleSheet: { create: (value) => value, hairlineWidth: 1 } },
+      react: life.react, "react/jsx-runtime": jsxRuntime, "./BottomSheet": { BottomSheet: "BottomSheet" },
+      "react-native": { View: "View", Text: "Text", Pressable: "Pressable", StyleSheet: { create: value => value, hairlineWidth: 1 } },
       "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./AppearanceControl": { AppearanceControl: "AppearanceControl" },
-      "./ThemeProvider": { useThemedStyles: (factory) => factory(colors) }, "./theme": theme, "./ui": { useUi: () => ({ colors }) },
+      "./ThemeProvider": { useThemedStyles: factory => factory(colors) }, "./theme": theme,
+      "./ui": { useUi: () => ({ s: {}, colors }), ActionLink: "ActionLink" },
     });
-    const props = { title: "财务助手", subtitle: "这个月的收支", pinned: true, onMenu: () => actions.push("menu"), onNew: () => actions.push("new"), onClose: () => actions.push("close"), onPin: () => actions.push("pin") };
-    const nodes = walk(AgentChatHeader(props));
-    const button = (label) => nodes.find((node) => node.type === "Pressable" && node.props.accessibilityLabel === label);
-    for (const [label, action] of [["打开对话侧边栏", "menu"], ["新建对话", "new"], ["返回上一页", "close"], ["固定或取消固定此对话", "pin"]]) {
-      const control = button(label); assert.equal(control.props.accessibilityRole, "button");
-      const style = flatten(control.props.style); assert.ok(style.width >= 40); assert.ok((style.minHeight ?? style.height) >= 44);
-      control.props.onPress(); assert.equal(actions.at(-1), action);
-    }
-    assert.equal(button("固定或取消固定此对话").props.accessibilityState.selected, true);
-    const identity = button("财务助手，这个月的收支，打开对话侧边栏"); assert.ok(identity); identity.props.onPress(); assert.equal(actions.at(-1), "menu");
-    const title = nodes.find((node) => node.type === "Text" && node.props.accessibilityRole === "header");
-    assert.equal(title.props.children, "财务助手"); assert.equal(flatten(title.props.style).color, colors.ink);
-    assert.equal(flatten(nodes.find((node) => node.type === "Text" && node.props.children === "这个月的收支").props.style).color, colors.muted);
-    assert.equal(nodes.filter((node) => node.type === "AppearanceControl").length, 1);
-    const bookmark = walk(button("固定或取消固定此对话")).find((node) => node.type === "Ionicons"); assert.equal(bookmark.props.name, "bookmark"); assert.equal(bookmark.props.color, colors.gold);
-
-    const locked = walk(AgentChatHeader({ ...props, busy: true, pinReady: false }));
-    for (const label of ["新建对话", "固定或取消固定此对话"]) {
-      const control = locked.find((node) => node.type === "Pressable" && node.props.accessibilityLabel === label);
-      assert.equal(control.props.disabled, true); assert.equal(control.props.accessibilityState.disabled, true);
-    }
-    assert.equal(locked.find((node) => node.props?.accessibilityLabel === "返回上一页").props.disabled, undefined);
-    for (const status of ["待命中", "重新连接"]) {
-      const welcome = walk(AgentChatHeader({ ...props, title: "知行", onPin: undefined, status }));
-      assert.equal(welcome.some((node) => node.props?.accessibilityLabel === "固定或取消固定此对话"), false);
-      const badge = welcome.find((node) => node.type === "Text" && node.props.children === status);
-      assert.equal(flatten(badge.props.style).color, status === "待命中" ? colors.gold : colors.muted);
-    }
+    const props = { title: "财务助手", subtitle: "这个月的收支", onMenu: () => actions.push("menu"), onNew: () => actions.push("new"), onClose: () => actions.push("close"), onSettings: () => actions.push("settings") };
+    const render = () => walk(life.render(() => AgentChatHeader(props)));
+    let nodes = render();
+    assert.equal(nodes.find(n => n.props?.accessibilityRole === 'header').props.children, '这个月的收支');
+    nodes.find(n => n.props?.accessibilityLabel === '对话菜单').props.onPress();
+    nodes = render(); assert.equal(nodes.find(n => n.type === 'BottomSheet').props.visible, true);
+    nodes.find(n => n.type === 'ActionLink' && n.props.children === '返回上一页').props.onPress();
+    assert.deepEqual(actions, []); render().find(n => n.type === 'BottomSheet').props.onDismiss();
+    assert.deepEqual(actions, ['close']);
   }
 });
 
@@ -398,7 +379,7 @@ test("every welcome suggestion keeps chat mode and the composer exposes no task 
   const props = { name: "知行", draft: "", kind: "chat", busy: false, connection: {}, catalog: null, modelId: null, effort: null, onDraft: (text) => prompts.push(text), onKind: (kind) => kinds.push(kind), onSend() {}, onFiles() {}, onModelId() {}, onEffort() {}, onSearchProviderId() {} };
   const nodes = walk(lifecycle.render(() => AiHome(props)));
   nodes.filter((node) => node.type === "Pressable" && node.props.accessibilityRole === "button").forEach((node) => node.props.onPress());
-  assert.equal(kinds.length, 7); assert.ok(kinds.every((kind) => kind === "chat")); assert.equal(prompts.length, 7);
+  assert.equal(kinds.length, 4); assert.ok(kinds.every((kind) => kind === "chat")); assert.equal(prompts.length, 4);
   const composerLife = hooks();
   const { ConversationComposer } = load("ConversationComposer.tsx", { ...dependencies, react: composerLife.react, "./ThemeProvider": { useTheme: () => ({ colors: theme.lightColors }), useThemedStyles: (factory) => factory(theme.lightColors) }, "./api": { request: async () => ({ items: [] }) }, "./BrandIcon": { BrandIcon: "BrandIcon" }, "./reasoning": { thinkingLabel: () => "默认" } });
   const composer = nodes.find((node) => node.type === "ConversationComposer");

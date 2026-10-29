@@ -30,19 +30,19 @@ export const lightColors = {
 
 export type ThemeColors = typeof lightColors;
 export const darkColors: ThemeColors = {
-  paper: "#131211",
-  surface: "#1B1A19",
-  surfaceRaised: "#23211F",
-  ink: "#F2F1EE",
+  paper: "#111214",
+  surface: "#1C1E21",
+  surfaceRaised: "#24262A",
+  ink: "#F1F2F4",
   onInk: "#171615",
   accent: "#C4AE86",
   pale: "#302A20",
   primary: "#E6E1D8",
   onPrimary: "#181715",
-  muted: "#ABA6A0",
-  line: "#36332F",
+  muted: "#A0A4AC",
+  line: "#34373D",
   strongLine: "#625D53",
-  neutral: "#282624",
+  neutral: "#282B30",
   red: "#F09588",
   amber: "#CCB47C",
   blue: "#94BCDB",
@@ -55,7 +55,7 @@ export const darkColors: ThemeColors = {
   greenSoft: "#233129",
   overlay: "rgba(0, 0, 0, 0.64)",
   shadow: "#000000",
-  switchThumb: "#F2F1EE",
+  switchThumb: "#F1F2F4",
 };
 
 export type ThemeMode = "light" | "dark";
