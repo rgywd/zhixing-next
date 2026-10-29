@@ -26,6 +26,8 @@ import { ChatTextEditor } from "./ChatTextEditor";
 import { DshFilePreview } from "./DshFilePreview";
 import type { MessageRevision } from "./messageRevision";
 import { ChatFileCard } from "./ChatFileCard";
+import { conversationFiles } from "./conversationFiles";
+import { ConversationFilesSheet } from "./ConversationFilesSheet";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { shareNativeDownload } from "./resources";
 
@@ -140,13 +142,13 @@ export function DshHostSettings({ webUrl }: { webUrl?: string | null }) {
 }
 
 export function DshChatPanel({ connection, conversation, assistantName, catalog, onRefresh, onConversationChanged,
-  startWithFiles, onFilesOpened, startWithSend, onSendStarted, settingsOpen, onSettingsClose, webUrl,
+  startWithFiles, onFilesOpened, startWithSend, onSendStarted, settingsOpen, onSettingsClose, filesOpen, onFilesClose, onFilesOpen, webUrl,
   focusMessageSeq, focusMessageVersion, onFocusHandled,
 }: {
   connection: Connection; conversation: Conversation; assistantName: string; catalog: ModelCatalog | null;
   onRefresh: () => void; onConversationChanged: (conversation: Conversation) => void;
   startWithFiles?: boolean; onFilesOpened?: () => void; startWithSend?: boolean; onSendStarted?: () => void;
-  settingsOpen?: boolean; onSettingsClose?: () => void; webUrl?: string | null;
+  settingsOpen?: boolean; onSettingsClose?: () => void; filesOpen?: boolean; onFilesClose?: () => void; onFilesOpen?: () => void; webUrl?: string | null;
   focusMessageSeq?: number | null; onFocusHandled?: (seq: number) => void;
   focusMessageVersion?: string;
 }) {
@@ -161,6 +163,9 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const [events, setEvents] = useState<DshEvent[]>([]);
   const [snapshot, setSnapshot] = useState<DshSnapshot | null>(null);
   const rows = useMemo(() => chatRows(events, snapshot), [events, snapshot]);
+  // The rows already belong to the active version; the extra guard drops a
+  // presentation stamped for a version the user switched away from.
+  const deliveredFiles = useMemo(() => conversationFiles(rows, snapshot?.history?.active), [rows, snapshot?.history?.active]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [records, setRecords] = useState<DshChatRow | "all" | null>(null);
@@ -168,6 +173,8 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const [selectedText, setSelectedText] = useState<string | null>(null);
   const afterMenu = useRef<(() => void) | null>(null);
   const [previewFile, setPreviewFile] = useState<DshAttachment | null>(null);
+  const [previewFromFiles, setPreviewFromFiles] = useState(false);
+  const [pendingPreview, setPendingPreview] = useState<DshAttachment | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [titleError, setTitleError] = useState("");
@@ -357,6 +364,18 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     try { await Clipboard.setStringAsync(rowText(row)); notice.show({ message: "已复制消息", tone: "success" }); }
     catch (e) { setError(humanError(e)); }
   }
+  const prepareShare = useCallback((file: DshAttachment) => shareNativeDownload(connection, file.name, dshFilePath(base, file)), [connection, base]);
+  const shareFromMessage = useCallback((file: DshAttachment) => {
+    void prepareShare(file).catch(e => setError(humanError(e)));
+  }, [prepareShare]);
+  function openFromFiles(file: DshAttachment) {
+    // Close the list first; its dismissal hands off to the single native preview modal.
+    setPendingPreview(file); onFilesClose?.();
+  }
+  function previewClosed() {
+    if (!previewFromFiles) return;
+    setPreviewFromFiles(false); onFilesOpen?.();
+  }
   async function quoteMessage(row: DshChatRow) {
     if (!ready || busy || draftRef.current.pending) return;
     try {
@@ -475,7 +494,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       renderItem={({ item, index }) => <MessageRow row={item} name={assistantName} connection={connection} base={base}
         phase={item.active && snapshot?.pending.length ? snapshot.pending[0].kind === "approval" ? "approval" : "input" : undefined}
         highlighted={item.id === highlighted} onFile={setPreviewFile} onReadProcess={() => { nearBottom.current = false; setAwayFromLatest(true); }}
-        onShare={file => { void shareNativeDownload(connection, file.name, dshFilePath(base, file)).catch(e => setError(humanError(e))); }}
+        onShare={shareFromMessage}
         onRevise={() => { void beginRevision(item); }} revisionDisabled={historyLocked || !!draft.revision}
         versions={messageVersions(snapshot?.history, rows.slice(0, index + 1).filter(row => row.role === "user").length - 1)} onVersion={id => { void switchVersion(id); }}
         onCopy={() => { void copyMessage(item); }} onMenu={() => setMessageMenu(item)} onRecords={() => setRecords(item)} />}
@@ -582,7 +601,10 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       </ScrollView>
     </BottomSheet>
     {selectedText !== null ? <ChatTextEditor text={selectedText} onClose={() => setSelectedText(null)} /> : null}
-    {previewFile ? <DshFilePreview key={previewFile.id} connection={connection} base={base} file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
+    <ConversationFilesSheet visible={!!filesOpen} ready={!!snapshot} files={deliveredFiles}
+      onOpen={openFromFiles} onShare={prepareShare} onClose={() => { setPendingPreview(null); onFilesClose?.(); }}
+      onDismiss={() => { const file = pendingPreview; if (!file) return; setPendingPreview(null); setPreviewFromFiles(true); setPreviewFile(file); }} />
+    <DshFilePreview connection={connection} base={base} file={previewFile} onClose={() => setPreviewFile(null)} onDismiss={previewClosed} />
     <BottomSheet visible={!!records} title="处理记录" subtitle="原始事件与工具回执" tall onClose={() => setRecords(null)}>
       <FlatList data={records === "all" ? events : records?.events ?? []} keyExtractor={event => String(event.seq)}
         contentContainerStyle={{ paddingHorizontal: layout.gutter, paddingBottom: space.lg }} renderItem={({ item }) => <EventRow event={item} name={assistantName} />} />

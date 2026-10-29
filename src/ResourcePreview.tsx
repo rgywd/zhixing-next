@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View, ScrollView, type StyleProp, type ViewStyle } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ActivityIndicator, Image, Modal, Platform, Pressable, StyleSheet, Text, View, ScrollView, type StyleProp, type ViewStyle } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import type { Connection, Resource } from "./api";
@@ -80,14 +80,24 @@ export function TextResourcePreview({ connection, resource, textPath }: { connec
   </ScrollView>;
 }
 
-export function ResourcePreview({ connection, resource, onClose, textPath, onDownload }: {
-  connection: Connection; resource: PreviewResource | null; onClose: () => void; textPath?: string; onDownload?: () => Promise<void>;
+export function ResourcePreview({ connection, resource, onClose, onDismiss, textPath, onDownload }: {
+  connection: Connection; resource: PreviewResource | null; onClose: () => void; onDismiss?: () => void;
+  textPath?: string; onDownload?: () => Promise<void>;
 }) {
   const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<{ resourceId: string; message: string } | null>(null);
-  return <Modal visible={!!resource} onRequestClose={onClose}>
+  // Modal reports dismissal completion on iOS only. Android dialogs are already
+  // gone by the next commit, so notify from the effect there instead of guessing
+  // an animation duration.
+  const wasOpen = useRef(!!resource);
+  useEffect(() => {
+    const open = !!resource;
+    if (wasOpen.current && !open && Platform.OS !== "ios") onDismiss?.();
+    wasOpen.current = open;
+  }, [resource, onDismiss]);
+  return <Modal visible={!!resource} onRequestClose={onClose} onDismiss={onDismiss}>
     <SafeAreaView style={s.root}>
       <View style={styles.header}><Ionicons name="document-text-outline" size={22} color={colors.muted} /><Text accessibilityRole="header" numberOfLines={2} style={styles.heading}>{resource?.name ?? "资料"}</Text><IconAction icon="close" label="关闭" onPress={onClose} /></View>
       {resource ? <>

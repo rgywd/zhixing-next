@@ -359,15 +359,24 @@ test("the shared header exposes readable identity and moves secondary actions in
       "./ThemeProvider": { useThemedStyles: factory => factory(colors) }, "./theme": theme,
       "./ui": { useUi: () => ({ s: {}, colors }), ActionLink: "ActionLink" },
     });
-    const props = { title: "财务助手", subtitle: "这个月的收支", onMenu: () => actions.push("menu"), onNew: () => actions.push("new"), onClose: () => actions.push("close"), onSettings: () => actions.push("settings") };
+    const props = { title: "财务助手", subtitle: "这个月的收支", onMenu: () => actions.push("menu"), onNew: () => actions.push("new"), onClose: () => actions.push("close"), onSettings: () => actions.push("settings"), onFiles: () => actions.push("files") };
     const render = () => walk(life.render(() => AgentChatHeader(props)));
     let nodes = render();
     assert.equal(nodes.find(n => n.props?.accessibilityRole === 'header').props.children, '这个月的收支');
     nodes.find(n => n.props?.accessibilityLabel === '对话菜单').props.onPress();
     nodes = render(); assert.equal(nodes.find(n => n.type === 'BottomSheet').props.visible, true);
-    nodes.find(n => n.type === 'ActionLink' && n.props.children === '返回上一页').props.onPress();
+    nodes.find(n => n.type === 'ActionLink' && n.props.children === '本对话文件').props.onPress();
     assert.deepEqual(actions, []); render().find(n => n.type === 'BottomSheet').props.onDismiss();
-    assert.deepEqual(actions, ['close']);
+    assert.deepEqual(actions, ['files']);
+    render().find(n => n.props?.accessibilityLabel === '对话菜单').props.onPress();
+    nodes = render();
+    nodes.find(n => n.type === 'ActionLink' && n.props.children === '返回上一页').props.onPress();
+    assert.deepEqual(actions, ['files']); render().find(n => n.type === 'BottomSheet').props.onDismiss();
+    assert.deepEqual(actions, ['files', 'close']);
+    const withoutFiles = { ...props, onFiles: undefined };
+    const openMenu = () => walk(life.render(() => AgentChatHeader(withoutFiles)));
+    openMenu().find(n => n.props?.accessibilityLabel === '对话菜单').props.onPress();
+    assert.equal(openMenu().some(n => n.type === 'ActionLink' && n.props.children === '本对话文件'), false);
   }
 });
 

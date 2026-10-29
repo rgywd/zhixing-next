@@ -4,7 +4,7 @@ import type { DshAttachment } from "./dshProtocol";
 import { useUi } from "./ui";
 import { radius, space, typography } from "./theme";
 
-export function ChatFileCard({ file, onOpen, onShare }: { file: DshAttachment; onOpen: () => void; onShare?: () => void }) {
+export function ChatFileCard({ file, onOpen, onShare, busy = false }: { file: DshAttachment; onOpen: () => void; onShare?: () => void; busy?: boolean }) {
   const { colors } = useUi();
   const kind = file.name.split(".").at(-1)?.toUpperCase() ?? "文件";
   return <View style={{ flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: colors.line,
@@ -19,7 +19,8 @@ export function ChatFileCard({ file, onOpen, onShare }: { file: DshAttachment; o
         <Text numberOfLines={2} style={{ ...typography.detail, color: colors.muted }}>{file.description || `${kind} 文件${file.bytes ? ` · ${file.bytes < 1024 ? `${file.bytes} B` : `${(file.bytes / 1024).toFixed(1)} KB`}` : ""} · 轻点预览`}</Text>
       </View>
     </Pressable>
-    {onShare ? <Pressable accessibilityRole="button" accessibilityLabel={`分享文件 ${file.name}`} onPress={onShare} style={{ width: 44, minHeight: 60, alignItems: "center", justifyContent: "center" }}>
+    {onShare ? <Pressable accessibilityRole="button" accessibilityLabel={`分享文件 ${file.name}`} accessibilityState={{ disabled: busy }}
+      disabled={busy} onPress={onShare} style={{ width: 44, minHeight: 60, alignItems: "center", justifyContent: "center", opacity: busy ? 0.4 : 1 }}>
       <Ionicons name="share-outline" size={20} color={colors.muted} />
     </Pressable> : null}
   </View>;
