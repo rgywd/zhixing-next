@@ -1,5 +1,7 @@
 # 文档入口
 
+- [AI 对话体验第二轮迭代](AI-CHAT-REVISIONS-2026-10-29.md)：真实消息编辑、重新回答、版本切换、工作区文件发布及模拟器验收。
+
 - [AI 对话体验第一轮迭代](AI-CHAT-ITERATION-2026-10-29.md)：工具结果、代码复制、选文与长文本编辑、原生文件、改名和搜索定位；本地适配与模拟器验收。
 
 - [RikkaHub 与知行 DSH 对话详情产品对照](CHAT-EXPERIENCE-RIKKAHUB-COMPARISON.md)：布局、消息与输入、52 个界面条目、功能差距、实施优先级及验收清单；附[模拟器截图](CHAT-EXPERIENCE-RIKKAHUB-SCREENSHOTS.md)。

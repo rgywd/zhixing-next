@@ -3,7 +3,7 @@ import { Text, View } from "react-native";
 import type { ReplyPart } from "./liveRun";
 import { toolDetails } from "./toolPresentation";
 import { CopyAction } from "./CopyAction";
-import { ActionLink, useUi } from "./ui";
+import { ActionLink, humanError, useUi } from "./ui";
 import { radius, space } from "./theme";
 
 function DetailBlock({ title, text, tone }: { title: string; text: string; tone?: "error" | "success" }) {
@@ -15,15 +15,26 @@ function DetailBlock({ title, text, tone }: { title: string; text: string; tone?
   </View>;
 }
 
-export function ToolDetails({ part }: { part: ReplyPart & { type: "tool" } }) {
+export function ToolDetails({ part, onPublish }: { part: ReplyPart & { type: "tool" }; onPublish?: (seq: number) => Promise<void> }) {
   const { s } = useUi();
   const [parameters, setParameters] = useState(false);
   const [metadata, setMetadata] = useState(false);
+  const [publishing, setPublishing] = useState(false);
+  const [published, setPublished] = useState(false);
+  const [error, setError] = useState("");
   const detail = toolDetails(part);
   if (!part.detail) return null;
   return <View style={{ gap: space.md }}>
     <Text selectable style={s.muted}>{part.name}{detail.duration !== null ? ` · 耗时 ${detail.duration < 1000 ? `${detail.duration} 毫秒` : `${(detail.duration / 1000).toFixed(1)} 秒`}` : ""}</Text>
     {detail.path ? <Text selectable style={s.description}>{detail.path}</Text> : null}
+    {onPublish && detail.path && part.seq !== undefined && part.status === "completed" && ["read", "write", "edit"].includes(part.name) ? <View>
+      <ActionLink icon="download-outline" disabled={publishing || published} onPress={() => {
+        setPublishing(true); setError("");
+        void onPublish(part.seq!).then(() => setPublished(true)).catch(e => setError(humanError(e))).finally(() => setPublishing(false));
+      }}>{published ? "已发布到本条回复" : publishing ? "正在发布…" : "发布当前文件"}</ActionLink>
+      <Text style={s.muted}>保存当前文件的副本，发布后可在回复中打开和分享。</Text>
+      {error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+    </View> : null}
     {detail.command ? <DetailBlock title="命令" text={detail.command} /> : null}
     {detail.exitCode !== null ? <Text style={s.text}>退出码：{detail.exitCode}</Text> : null}
     {detail.diffs.map((diff, index) => <View key={index} style={{ gap: space.sm }}>

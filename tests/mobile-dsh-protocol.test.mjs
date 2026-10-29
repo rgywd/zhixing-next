@@ -109,3 +109,19 @@ test('message focus distinguishes steering segments sharing the same turn log, i
   assert.equal(rows.findIndex(row => rowHasMessage(row, 4)), 3);
   assert.equal(rows.findIndex(row => rowHasMessage(row, 2)), 1);
 });
+
+test('published workspace files attach to the matching tool reply without changing native event sequences', () => {
+  const events = [event(0, 'turn/start', { turn: 1 }), user(1, 'create file'),
+    event(2, 'tool/call', { turn: 1, callId: 'write', name: 'write', arguments: '{}' }),
+    event(3, 'tool/result', { turn: 1, message: { toolCallId: 'write', content: [] } }),
+    event(4, 'turn/end', { turn: 1, reason: { kind: 'completed' } })];
+  const ref = { type: 'file', attachment: { attachmentId: 'file-a', name: 'result.bin', bytes: 7 } };
+  const rows = chatRows(events, { artifacts: [{ id: 'p1', toolSeq: 2, content: [ref] }, { id: 'p2', toolSeq: 2, content: [ref] },
+    { id: 'foreign', toolSeq: 999, content: [{ ...ref, attachment: { ...ref.attachment, attachmentId: 'foreign' } }] }] });
+  assert.equal(rows[1].attachments.length, 1); assert.equal(rows[1].attachments[0].id, 'file-a');
+  assert.deepEqual(rows[1].events.map(e => e.seq), [0, 1, 2, 3, 4]); assert.equal(events.length, 5);
+});
+test('native fork closers do not create phantom failed replies before the edited user message', () => {
+  const rows = chatRows([event(0, 'turn/start', { turn: 1 }), event(1, 'turn/end', { turn: 1, reason: { kind: 'forked' } }), user(2, 'edited')], null);
+  assert.equal(rows.length, 1); assert.equal(rows[0].role, 'user');
+});

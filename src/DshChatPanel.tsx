@@ -15,7 +15,7 @@ import { ConversationComposer } from "./ConversationComposer";
 import { BottomSheet } from "./BottomSheet";
 import { ModelPicker } from "./ModelPicker";
 import { ReasoningPicker } from "./ReasoningPicker";
-import { chatRows, contentText, eventPresentation, rowText, rowHasMessage, mergeDshEvents, type DshAttachment, type DshChatRow, type DshEvent, type DshPending, type DshSnapshot } from "./dshProtocol";
+import { chatRows, contentText, eventPresentation, rowText, rowHasMessage, revisionSeq, mergeDshEvents, type DshAttachment, type DshChatRow, type DshEvent, type DshPending, type DshSnapshot } from "./dshProtocol";
 import { useSyncStatus } from "./ConnectionStatus";
 import { DraftAttachments, MessagePhotos } from "./PhotoAttachments";
 import { discardDraftPhotos } from "./chatPhotos";
@@ -24,9 +24,11 @@ import { useNotice } from "./Notice";
 import { layout, radius, space } from "./theme";
 import { ChatTextEditor } from "./ChatTextEditor";
 import { DshFilePreview } from "./DshFilePreview";
+import { MessageRevisionSheet, type MessageRevision } from "./MessageRevisionSheet";
 
 type LocalFile = { id: string; uri: string; name: string; mediaType?: string };
-type DshDraft = Draft & { files?: LocalFile[]; receipts?: Record<string, string> };
+type DshDraft = Draft & { revision?: MessageRevision; sendVersion?: string; files?: LocalFile[]; receipts?: Record<string, string> };
+type DshCache = { historyId: string; events: DshEvent[] } & Pick<DshSnapshot, "history" | "artifacts">;
 const imageType = (uri: string, name: string) => {
   const suffix = (uri.match(/\.([a-z]+)(?:[?#]|$)/i)?.[1] ?? name.split(".").at(-1) ?? "jpeg").toLowerCase();
   return `image/${suffix === "jpg" ? "jpeg" : suffix}`;
@@ -50,10 +52,10 @@ function EventRow({ event, name }: { event: DshEvent; name: string }) {
   </View>;
 }
 
-function MessageRow({ row, name, connection, base, phase, onCopy, onMenu, onRecords, onFile, highlighted }: {
+function MessageRow({ row, name, connection, base, phase, onCopy, onMenu, onRecords, onFile, highlighted, onPublish }: {
   row: DshChatRow; name: string; connection: Connection; base: string; phase?: string;
   onCopy: () => void; onMenu: () => void; onRecords: () => void;
-  onFile: (file: DshAttachment) => void; highlighted?: boolean;
+  onFile: (file: DshAttachment) => void; highlighted?: boolean; onPublish: (seq: number) => Promise<void>;
 }) {
   const { s, colors } = useUi();
   const user = row.role === "user";
@@ -67,7 +69,7 @@ function MessageRow({ row, name, connection, base, phase, onCopy, onMenu, onReco
       {images.length ? <MessagePhotos connection={connection} images={images} /> : null}
       {row.attachments.filter(a => a.type === "file").map((a, index) => <ActionLink key={`${a.id}:${index}`} icon="document-text-outline" onPress={() => onFile(a)}>{`打开文件 · ${a.name}`}</ActionLink>)}
       {user ? rowText(row) ? <MessageBody>{rowText(row)}</MessageBody> : null
-        : <ReplyContent parts={row.parts} active={row.active} status={row.status} phase={phase} onOpenRun={onRecords} />}
+        : <ReplyContent parts={row.parts} active={row.active} status={row.status} phase={phase} onOpenRun={onRecords} onPublish={onPublish} />}
     </View>
     {!row.active ? <View style={s.row}>
       {rowText(row) ? <IconAction icon="copy-outline" label="复制消息" onPress={onCopy} /> : null}
@@ -119,13 +121,14 @@ export function DshHostSettings({ webUrl }: { webUrl?: string | null }) {
 
 export function DshChatPanel({ connection, conversation, assistantName, catalog, onRefresh, onConversationChanged,
   startWithFiles, onFilesOpened, startWithSend, onSendStarted, settingsOpen, onSettingsClose, webUrl,
-  focusMessageSeq, onFocusHandled,
+  focusMessageSeq, focusMessageVersion, onFocusHandled,
 }: {
   connection: Connection; conversation: Conversation; assistantName: string; catalog: ModelCatalog | null;
   onRefresh: () => void; onConversationChanged: (conversation: Conversation) => void;
   startWithFiles?: boolean; onFilesOpened?: () => void; startWithSend?: boolean; onSendStarted?: () => void;
   settingsOpen?: boolean; onSettingsClose?: () => void; webUrl?: string | null;
   focusMessageSeq?: number | null; onFocusHandled?: (seq: number) => void;
+  focusMessageVersion?: string;
 }) {
   const { s, colors } = useUi();
   const notice = useNotice();
@@ -147,6 +150,10 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const [renaming, setRenaming] = useState(false);
   const [title, setTitle] = useState("");
   const [titleError, setTitleError] = useState("");
+  const [revisionOpen, setRevisionOpen] = useState(false);
+  const [revisionError, setRevisionError] = useState("");
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const publicationIds = useRef(new Map<string, string>());
   const [queueOpen, setQueueOpen] = useState(false);
   const [models, setModels] = useState(false);
   const [reasoning, setReasoning] = useState(false);
@@ -188,6 +195,8 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   useEffect(() => {
     let active = true, polling = false, cursor = 0, wasRunning = false;
     let accumulated: DshEvent[] = [];
+    let historyId = conversation.id;
+    let metadata = "";
     const controller = new AbortController();
     const cacheKey = `dsh:${conversation.id}`;
     async function poll() {
@@ -197,8 +206,12 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         let changed = false;
         let next: DshSnapshot;
         do {
-          next = await request<DshSnapshot>(connection, `${base}/dsh?offset=${cursor}`, { signal: controller.signal });
+          next = await request<DshSnapshot>(connection, `${base}/dsh?offset=${cursor}&version=${encodeURIComponent(historyId)}`, { signal: controller.signal });
           if (!active) return;
+          if (next.history && next.history.active !== historyId) {
+            accumulated = []; historyId = next.history.active; changed = true;
+            setHighlighted(null); setPreviewFile(null); setRecords(null); nearBottom.current = true; setAwayFromLatest(false);
+          }
           changed ||= next.events.length > 0;
           accumulated = mergeDshEvents(accumulated, next.events); cursor = next.next;
         } while (next.hasMore);
@@ -206,14 +219,27 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         setSnapshot(next); report();
         if (wasRunning && !next.running) onRefreshRef.current();
         wasRunning = next.running;
-        if (changed) void writeCache(connection, cacheKey, accumulated).catch(() => {});
+        const nextMetadata = JSON.stringify([next.history, next.artifacts]);
+        if (changed || metadata !== nextMetadata) {
+          metadata = nextMetadata;
+          void writeCache(connection, cacheKey, { historyId, events: accumulated, history: next.history, artifacts: next.artifacts }).catch(() => {});
+        }
       } catch (e) { if (active) report(e); }
       finally { polling = false; }
     }
     refreshRef.current = () => { void poll(); };
-    void readCache<DshEvent[]>(connection, cacheKey).then(cached => {
+    void readCache<DshEvent[] | DshCache>(connection, cacheKey).then(cached => {
       if (!active) return;
-      if (Array.isArray(cached)) { accumulated = cached; cursor = cached.length ? cached[cached.length - 1].seq + 1 : 0; setEvents(cached); }
+      if (cached) {
+        accumulated = Array.isArray(cached) ? cached : cached.events;
+        historyId = Array.isArray(cached) ? conversation.id : cached.historyId;
+        if (!Array.isArray(cached)) {
+          metadata = JSON.stringify([cached.history, cached.artifacts]);
+          setSnapshot({ history: cached.history, artifacts: cached.artifacts, events: [], next: 0, hasMore: false,
+            running: false, active: false, queue: [], pending: [], live: null });
+        }
+        cursor = accumulated.length ? accumulated[accumulated.length - 1].seq + 1 : 0; setEvents(accumulated);
+      }
       void poll();
     });
     const timer = setInterval(() => { void poll(); }, 750);
@@ -258,12 +284,13 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     finally { working.current = false; if (alive.current) setBusy(false); }
   }
   async function send() {
-    if (working.current || !ready) return;
+    if (working.current || !ready || draftRef.current.revision) return;
     working.current = true; setBusy(true); setError("");
     try {
       const current = draftRef.current;
       const pending = current.pending ?? { id: Crypto.randomUUID(), content: current.text, kind: "chat" as const, intent: snapshot?.running ? intent : "queue" };
-      await update({ ...current, pending });
+      const sendVersion = current.sendVersion ?? snapshot?.history?.active ?? conversation.id;
+      await update({ ...current, pending, sendVersion });
       const parts: ({ type: "text"; text: string } | { type: "file"; receiptId: string })[] = pending.content.trim() ? [{ type: "text", text: pending.content }] : [];
       const attachments = [...(current.files ?? []), ...(current.photos ?? []).map(p => ({ id: p.id, uri: p.prepared?.uri ?? p.uri, name: p.prepared?.name ?? p.name,
         mediaType: imageType(p.prepared?.uri ?? p.uri, p.prepared?.name ?? p.name) }))];
@@ -279,7 +306,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         await update({ ...draftRef.current, receipts: { ...draftRef.current.receipts, [file.id]: receipt.receiptId } });
         parts.push({ type: "file", receiptId: receipt.receiptId });
       }
-      await request(connection, `${base}/messages`, { method: "POST", body: { ...pending, parts } });
+      await request(connection, `${base}/messages`, { method: "POST", body: { ...pending, parts, version: sendVersion } });
       // Keep the request ID until clearing is durable, including after a lost ACK.
       await clearDraft(key, pending.id);
       if (draftRef.current.pending?.id === pending.id) {
@@ -315,6 +342,47 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       setMessageMenu(null); notice.show({ message: "已放入草稿，可修改后发送" });
     } catch (e) { setError(humanError(e)); }
   }
+  const historyId = snapshot?.history?.active ?? conversation.id;
+  const historyLocked = !snapshot || snapshot.running || !!snapshot.queue.length || busy || !!draft.pending || !ready;
+  async function beginRevision(row: DshChatRow) {
+    const seq = revisionSeq(row); if (seq === undefined || historyLocked || draftRef.current.revision) return;
+    try {
+      await update({ ...draftRef.current, revision: { id: Crypto.randomUUID(), kind: row.role === "user" ? "edit" : "retry",
+        seq, version: historyId, text: rowText(row), attachments: row.attachments } });
+      setRevisionError(""); setRevisionOpen(true);
+    } catch (e) { setError(humanError(e)); }
+  }
+  async function submitRevision() {
+    const value = draftRef.current.revision;
+    if (!value || working.current) return;
+    working.current = true; setBusy(true); setRevisionError("");
+    try {
+      await update({ ...draftRef.current, revision: { ...value, submitted: true } });
+      await request(connection, `${base}/dsh/revisions`, { method: "POST", timeoutMs: 60000,
+        body: { id: value.id, kind: value.kind, seq: value.seq, version: value.version,
+          ...(value.kind === "edit" ? { text: value.text, attachments: value.attachments.map(a => a.id) } : {}) } });
+      await update({ ...draftRef.current, revision: undefined, receipts: undefined, sendVersion: undefined });
+      if (alive.current) { setRevisionOpen(false); nearBottom.current = true; setAwayFromLatest(false); refresh(); onRefreshRef.current(); }
+    } catch (e) { if (alive.current) setRevisionError(humanError(e)); }
+    finally { working.current = false; if (alive.current) setBusy(false); }
+  }
+  async function switchVersion(version: string) {
+    if (working.current || historyLocked || draftRef.current.revision) return;
+    working.current = true; setBusy(true); setRevisionError("");
+    try {
+      await request(connection, `${base}/dsh/version`, { method: "PUT", body: { expected: historyId, version } });
+      await update({ ...draftRef.current, receipts: undefined, sendVersion: undefined });
+      setVersionsOpen(false); refresh(); onRefreshRef.current();
+    } catch (e) { setRevisionError(humanError(e)); }
+    finally { working.current = false; setBusy(false); }
+  }
+  async function publish(seq: number) {
+    const publicationKey = `${historyId}:${seq}`;
+    let id = publicationIds.current.get(publicationKey);
+    if (!id) { id = Crypto.randomUUID(); publicationIds.current.set(publicationKey, id); }
+    await request(connection, `${base}/dsh/artifacts`, { method: "POST", timeoutMs: 120000, body: { id, seq, version: historyId } });
+    refresh();
+  }
   const started = useRef(false);
   useEffect(() => {
     if (!ready || started.current) return;
@@ -328,7 +396,14 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     const timer = setTimeout(() => { if (nearBottom.current) list.current?.scrollToOffset({ offset: contentHeight.current, animated: false }); }, 50);
     return () => clearTimeout(timer);
   }, [rows.length]);
-  const focusIndex = focusMessageSeq == null ? -1 : rows.findIndex(row => rowHasMessage(row, focusMessageSeq));
+  const focusVersionMatches = !focusMessageVersion || snapshot?.history?.active === focusMessageVersion;
+  useEffect(() => {
+    if (focusMessageSeq != null && snapshot?.history?.active && !focusVersionMatches) {
+      handled.current?.(focusMessageSeq);
+      notice.show({ message: "对话版本已改变，请重新搜索后定位。", tone: "warning" });
+    }
+  }, [focusMessageSeq, focusVersionMatches, snapshot?.history?.active, notice]);
+  const focusIndex = focusMessageSeq == null || !focusVersionMatches ? -1 : rows.findIndex(row => rowHasMessage(row, focusMessageSeq));
   const focusRowId = rows[focusIndex]?.id;
   useEffect(() => {
     if (focusMessageSeq == null || focusIndex < 0) return;
@@ -341,12 +416,15 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     return () => { focusTarget.current = null; if (focusTimer.current) clearTimeout(focusTimer.current); };
   }, [focusMessageSeq, focusIndex, focusRowId]);
   const queue = snapshot?.queue ?? [];
-  const canSend = ready && !busy && !!(draft.text.trim() || draft.files?.length || draft.photos?.length || draft.pending);
+  const canSend = ready && !busy && !draft.revision && !!(draft.text.trim() || draft.files?.length || draft.photos?.length || draft.pending);
   const scrollToLatest = (animated: boolean) => list.current?.scrollToOffset({ offset: contentHeight.current, animated });
   const followLatest = () => { if (nearBottom.current) scrollToLatest(false); };
   return <View style={{ flex: 1 }}>
     <View style={{ flex: 1 }}>
-    <FlatList ref={list} data={rows} keyExtractor={row => row.id} keyboardShouldPersistTaps="handled" removeClippedSubviews={false}
+    {(snapshot?.history?.versions.length ?? 0) > 1 ? <View style={{ paddingHorizontal: layout.gutter }}>
+      <ActionLink icon="git-branch-outline" onPress={() => { setRevisionError(""); setVersionsOpen(true); }}>{`${snapshot?.history?.versions.find(v => v.id === historyId)?.label ?? "当前版本"} · 查看版本`}</ActionLink>
+    </View> : null}
+    <FlatList key={historyId} ref={list} data={rows} keyExtractor={row => row.id} keyboardShouldPersistTaps="handled" removeClippedSubviews={false}
       onViewableItemsChanged={viewable}
       onScrollToIndexFailed={({ index, averageItemLength }) => {
         const target = focusTarget.current;
@@ -380,7 +458,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       onContentSizeChange={(_width, height) => { contentHeight.current = height; followLatest(); }} onLayout={followLatest}
       renderItem={({ item }) => <MessageRow row={item} name={assistantName} connection={connection} base={base}
         phase={item.active && snapshot?.pending.length ? snapshot.pending[0].kind === "approval" ? "approval" : "input" : undefined}
-        highlighted={item.id === highlighted} onFile={setPreviewFile}
+        highlighted={item.id === highlighted} onFile={setPreviewFile} onPublish={publish}
         onCopy={() => { void copyMessage(item); }} onMenu={() => setMessageMenu(item)} onRecords={() => setRecords(item)} />}
       ListFooterComponent={<>
         {snapshot?.pending.map(p => <InputCard key={p.id} pending={p} busy={busy} answer={value => { void action(`/dsh/answers/${p.id}`, value); }} />)}
@@ -394,6 +472,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     </View>
     {error ? <Text accessibilityRole="alert" style={[s.error, { marginHorizontal: 20 }]}>{error}</Text> : null}
     {!ready && error ? <Button secondary onPress={() => setDraftAttempt(value => value + 1)}>重新读取草稿</Button> : null}
+    {draft.revision ? <View style={{ paddingHorizontal: layout.gutter }}><ActionLink onPress={() => setRevisionOpen(true)}>{draft.revision.submitted ? "继续确认消息修改" : draft.revision.kind === "edit" ? "继续编辑原消息" : "继续重新回答"}</ActionLink></View> : null}
     <ConversationComposer unlimitedText text={draft.text} onText={text => { void update({ ...draftRef.current, text }).catch(e => setError(humanError(e))); }}
       editable={ready && !busy && !draft.pending} onSend={() => { void send(); }} onFiles={() => { void files(); }} onPhotos={() => { void photos(); }}
       attachmentLocked={!ready || busy || !!draft.pending} busy={busy} canSend={canSend} pending={!!draft.pending}
@@ -435,6 +514,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         <ActionLink disabled={busy || !!draft.pending} onPress={() => setIntent(intent === "queue" ? "steer" : "queue")}>{intent === "queue" ? "接着处理" : "补充当前回复"}</ActionLink>
         <Text style={s.description}>{intent === "queue" ? "当前回复完成后，按顺序处理新消息。" : "执行过程中加入新要求；空闲时直接开始回复。"}</Text>
         {snapshot?.running ? <ActionLink disabled={busy} onPress={() => { void action("/dsh/cancel"); }}>停止回复</ActionLink> : null}
+        <ActionLink icon="git-branch-outline" onPress={() => { onSettingsClose?.(); setRevisionError(""); setVersionsOpen(true); }}>查看对话版本</ActionLink>
         <ActionLink icon="receipt-outline" onPress={() => { onSettingsClose?.(); setRecords("all"); }}>查看完整处理记录</ActionLink>
         <DshHostSettings webUrl={webUrl} />
         </>}
@@ -447,8 +527,27 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
           <ActionLink icon="text-outline" onPress={() => { const text = rowText(messageMenu); afterMenu.current = () => setSelectedText(text); setMessageMenu(null); }}>选取文字</ActionLink>
           <ActionLink icon="create-outline" disabled={!ready || busy || !!draft.pending} onPress={() => { void quoteMessage(messageMenu); }}>{messageMenu.role === "user" ? "复制到草稿修改" : "引用到草稿"}</ActionLink>
         </> : null}
+        {messageMenu && revisionSeq(messageMenu) !== undefined ? <ActionLink icon="refresh-outline" disabled={historyLocked || !!draft.revision}
+          onPress={() => { const row = messageMenu; afterMenu.current = () => { void beginRevision(row); }; setMessageMenu(null); }}>
+          {messageMenu.role === "user" ? "编辑并重新回答" : "重新回答"}
+        </ActionLink> : null}
         <ActionLink icon="receipt-outline" onPress={() => { setRecords(messageMenu); setMessageMenu(null); }}>查看处理记录</ActionLink>
       </View>
+    </BottomSheet>
+    <MessageRevisionSheet visible={revisionOpen} value={draft.revision} busy={busy} error={revisionError}
+      onChange={revision => { void update({ ...draftRef.current, revision }).catch(e => setRevisionError(humanError(e))); }}
+      onSubmit={() => { void submitRevision(); }} onClose={() => setRevisionOpen(false)}
+      onCancel={() => { void update({ ...draftRef.current, revision: undefined }).then(() => setRevisionOpen(false)).catch(e => setRevisionError(humanError(e))); }} />
+    <BottomSheet visible={versionsOpen} title="对话版本" onClose={() => { if (!busy) setVersionsOpen(false); }}>
+      <ScrollView contentContainerStyle={s.content}>
+        <Text style={s.description}>切换要查看和继续的版本。旧回复保留；工作区文件和已执行操作不会回滚。</Text>
+        {(snapshot?.history?.versions ?? [{ id: conversation.id, label: "原始版本" }]).map(v => <ActionLink key={v.id}
+          disabled={historyLocked || !!draft.revision || v.id === historyId} onPress={() => { void switchVersion(v.id); }}>
+          {`${v.label}${v.id === historyId ? " · 当前" : ""}`}
+        </ActionLink>)}
+        {revisionError ? <Text accessibilityRole="alert" style={s.error}>{revisionError}</Text> : null}
+        {historyLocked ? <Text style={s.muted}>回复和等待消息处理完后可切换。</Text> : null}
+      </ScrollView>
     </BottomSheet>
     {selectedText !== null ? <ChatTextEditor text={selectedText} onClose={() => setSelectedText(null)} /> : null}
     {previewFile ? <DshFilePreview key={previewFile.id} connection={connection} base={base} file={previewFile} onClose={() => setPreviewFile(null)} /> : null}
