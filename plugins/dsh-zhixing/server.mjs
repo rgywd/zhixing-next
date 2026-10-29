@@ -1,0 +1,263 @@
+import { createServer } from 'node:http';
+import { Buffer } from 'node:buffer';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
+
+const page = items => ({ items, next_cursor: null, previous_cursor: null });
+const own = id => /^zhixing-(main|finance|health)-[a-f0-9-]+$/.test(id);
+const routeId = selection => JSON.stringify([selection.provider, selection.model]);
+const failure = (message, status = 400) => Object.assign(new Error(message), { status });
+const businessPath = path => /^\/v1\/(finance|health|life|memories|resources|business\/schema)(\/|\?|$)/.test(path);
+
+export async function businessRequest(config, path, method = 'GET', body, signal, raw = false) {
+  if (!config.businessUrl) throw failure('尚未连接知行业务数据服务。', 503);
+  if (!businessPath(path)) throw failure('不是知行业务数据接口。');
+  const base = new URL(config.businessUrl);
+  const url = new URL(path, base);
+  if (url.origin !== base.origin || (!businessPath(url.pathname))) throw failure('无效的业务接口路径。');
+  return fetch(url, { method, signal, redirect: 'error', headers: {
+    Authorization: `Bearer ${config.businessToken ?? ''}`, 'Content-Type': raw ? 'application/octet-stream' : 'application/json',
+  }, ...(body === undefined ? {} : { body: raw ? body : JSON.stringify(body) }), ...(raw ? { duplex: 'half' } : {}) });
+}
+
+async function json(req) {
+  let source = '';
+  // This is a control-message transport bound; file bodies stream to DSH separately.
+  for await (const chunk of req) {
+    source += chunk;
+    if (Buffer.byteLength(source) > 16 * 1024 * 1024) throw failure('请求过大，请使用文件上传。', 413);
+  }
+  try { return source ? JSON.parse(source) : {}; } catch { throw failure('无效的 JSON。'); }
+}
+
+export function conversation(row) {
+  const values = row.projections?.values ?? {};
+  const selection = values.modelSelection?.next ?? values.modelSelection?.lastUsed;
+  return { id: row.sessionId, title: values.title || '新的对话', project_id: null,
+    agent_id: row.sessionId.startsWith('zhixing-finance-') ? 'finance' : row.sessionId.startsWith('zhixing-health-') ? 'health' : null,
+    model_id: selection ? routeId(selection) : null, reasoning_effort: selection?.reasoningEffort ?? null,
+    blocked: false, updated_at: new Date(row.updatedAt).toISOString() };
+}
+
+export function modelCatalog(catalog, images = new Map()) {
+  return { items: catalog.groups.flatMap(group => group.models.map(model => ({
+    id: routeId({ provider: group.id, model: model.id }), name: model.name, model: model.id, provider: group.id,
+    protocol: 'chat_completions', ready: catalog.routableProviders.includes(group.id), image_input: images.get(routeId({ provider: group.id, model: model.id })) ?? false,
+    reasoning_levels: model.reasoning?.efforts.map(e => e.id) ?? [],
+    reasoning_labels: Object.fromEntries(model.reasoning?.efforts.map(e => [e.id, e.name]) ?? []),
+    default_reasoning_effort: model.reasoning?.defaultEffort ?? null,
+  }))), roles: { chat: routeId(catalog.default), task: routeId(catalog.default) } };
+}
+
+/** Answer only requests for this outlet. Other channel answerers keep their scope. */
+export function createInteractions(ctx) {
+  const pending = new Map();
+  const wait = (kind, req) => new Promise((resolve, reject) => {
+    const id = randomUUID();
+    const finish = (value, error) => {
+      pending.delete(id); req.signal?.removeEventListener('abort', abort);
+      if (error) reject(error); else resolve(value);
+    };
+    const abort = () => finish(kind === 'approval' ? 'cancelled' : undefined,
+      kind === 'question' ? new Error('Question cancelled by DSH') : undefined);
+    pending.set(id, { id, sessionId: req.agent.id, kind,
+      ...(kind === 'approval' ? { toolName: req.toolName, reason: req.displayReason?.zh ?? req.reason, callId: req.callId }
+        : { questions: req.questions, callId: req.wait?.callId }), finish });
+    req.signal?.addEventListener('abort', abort, { once: true });
+    if (req.signal?.aborted) abort();
+  });
+  const disposers = [
+    ctx.on('approval/request', (req, next) => own(req.agent?.id ?? '') ? wait('approval', req) : next(), { prepend: true }),
+    ctx.on('user-questions/request', (req, next) => own(req.agent?.id ?? '') ? wait('question', req) : next(), { prepend: true }),
+  ];
+  return {
+    list: sessionId => [...pending.values()].filter(p => p.sessionId === sessionId).map(({ finish: _finish, ...p }) => p),
+    answer(sessionId, id, body) {
+      const p = pending.get(id);
+      if (!p || p.sessionId !== sessionId) throw failure('请求已经结束，请刷新。', 409);
+      if (p.kind === 'approval') {
+        if (!['allowed-once', 'rejected'].includes(body.outcome)) throw failure('无效的授权选择。');
+        p.finish(body.outcome);
+      } else {
+        const answers = body.answers;
+        if (!Array.isArray(answers) || answers.length !== p.questions.length ||
+          p.questions.some(q => answers.filter(a => a.id === q.id).length !== 1)) throw failure('请回答每个问题。');
+        for (const q of p.questions) {
+          const a = answers.find(a => a.id === q.id);
+          if (!Array.isArray(a.selected) || new Set(a.selected).size !== a.selected.length ||
+            a.selected.some(label => !q.options?.some(o => o.label === label)) ||
+            (!q.multiSelect && a.selected.length > 1) || (a.custom !== undefined && typeof a.custom !== 'string') ||
+            (!a.selected.length && !a.custom?.trim()) || (q.intent?.kind === 'approval' && (a.custom || a.selected.length !== 1))) throw failure('回答不符合问题选项。');
+        }
+        p.finish({ answers });
+      }
+      return { accepted: true };
+    },
+    close() { for (const dispose of disposers) dispose(); for (const p of [...pending.values()]) p.finish(p.kind === 'approval' ? 'cancelled' : undefined, p.kind === 'question' ? new Error('Outlet closed') : undefined); },
+  };
+}
+
+export async function startServer(ctx, config) {
+  if (typeof config.token !== 'string' || !config.token.trim()) throw new Error('ZHIXING_DSH_TOKEN is required');
+  const token = Buffer.from(`Bearer ${config.token}`);
+  const interactions = createInteractions(ctx);
+  const live = new Map();
+  const sends = new Map();
+  const stopStream = ctx.on('agent/assistant-stream', ({ agent, frame }) => {
+    if (!own(agent.id)) return;
+    if (frame.type === 'start') live.set(agent.id, { attemptId: frame.attemptId, turn: frame.turn, step: frame.step, chunks: [] });
+    if (frame.type === 'chunk') live.get(agent.id)?.chunks.push(frame.chunk);
+    if (frame.type === 'end') live.delete(agent.id);
+  });
+  const signal = () => new AbortController().signal;
+  const list = async () => (await ctx.sessionController.list({}, signal())).items.filter(row => own(row.sessionId));
+  const get = async id => {
+    const row = (await list()).find(row => row.sessionId === id);
+    if (!row) throw failure('对话不存在。', 404);
+    return conversation(row);
+  };
+  const resolve = async id => {
+    const result = await ctx.sessionController.resolveAgent(id);
+    if (result.error) throw result.error;
+    return result.agent;
+  };
+  const flush = async id => { const session = ctx.sessions.get(id); if (session) await ctx.sessions.flush(session); };
+  const send = (id, body) => {
+    if (typeof body.id !== 'string' || !body.id) throw failure('消息缺少请求编号。');
+    // Serialize admission as well as using DSH's durable rpcId deduplication.
+    const previous = sends.get(id) ?? Promise.resolve();
+    const operation = previous.catch(() => {}).then(async () => {
+      const result = await ctx.sessionController.prompt({ sessionId: id, requestId: body.id,
+        mode: body.intent === 'steer' ? 'steer' : 'queue',
+        content: body.parts ?? [{ type: 'text', text: body.content ?? '' }] }, signal());
+      await flush(id);
+      return result;
+    });
+    sends.set(id, operation);
+    void operation.finally(() => { if (sends.get(id) === operation) sends.delete(id); }).catch(() => {});
+    return operation;
+  };
+  const server = createServer(async (req, res) => {
+    const reply = (data, status = 200) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
+    try {
+      const provided = Buffer.from(req.headers.authorization ?? '');
+      if (provided.length !== token.length || !timingSafeEqual(provided, token)) throw failure('连接令牌无效。', 401);
+      const url = new URL(req.url, 'http://localhost');
+      const path = url.pathname;
+      const method = req.method;
+      if (method === 'GET' && path === '/v1/status') {
+        const catalog = await ctx.sessionController.modelCatalog();
+        return reply({ runtime: 'dsh', model_ready: catalog.routableProviders.includes(catalog.default.provider) && catalog.groups.some(g => g.id === catalog.default.provider && g.models.some(m => m.id === catalog.default.model)), worker_online: true,
+          execution_available: true, business_connected: !!config.businessUrl, web_url: config.webUrl ?? null });
+      }
+      if (method === 'GET' && path === '/v1/assistant') return reply({ name: '知行', persona: '' });
+      if (method === 'GET' && path === '/v1/models') {
+        const catalog = await ctx.sessionController.modelCatalog(), images = new Map();
+        if (ctx.llm) await Promise.all(catalog.groups.flatMap(g => g.models.map(async m => {
+          const info = await ctx.llm.resolveModelInfo(g.id, m.id);
+          images.set(routeId({ provider: g.id, model: m.id }), info.inputModalities?.includes('image') ?? false);
+        })));
+        return reply(modelCatalog(catalog, images));
+      }
+      if (method === 'GET' && path === '/v1/agents') return reply(page(config.businessUrl ? ['finance', 'health'].map(id => ({ id,
+        kind: 'service', service: id, name: id === 'finance' ? '财务助手' : '健康助手', description: 'DSH · 知行业务服务',
+        instructions: '', tools: [], visible: true })) : []));
+      if (method === 'GET' && ['/v1/conversations', '/v1/conversations/recent'].includes(path)) return reply(page((await list()).map(conversation)));
+      if (method === 'GET' && path === '/v1/conversations/search') {
+        const query = url.searchParams.get('q') ?? '';
+        const chats = (await list()).map(conversation);
+        const matches = await ctx.sessionController.search({ query }, signal());
+        return reply(page(matches.items.flatMap(item => {
+          const chat = chats.find(c => c.id === item.sessionId);
+          return chat ? [{ conversation_id: chat.id, title: chat.title, agent_id: chat.agent_id,
+            updated_at: chat.updated_at, message_id: null, message_seq: null, snippet: item.snippet }] : [];
+        })));
+      }
+      if (method === 'POST' && path === '/v1/conversations') {
+        const body = await json(req);
+        const service = ['finance', 'health'].includes(body.agent_id) ? body.agent_id : 'main';
+        const { sessionId } = await ctx.sessionController.create({ sessionId: `zhixing-${service}-${randomUUID()}` });
+        if (body.title?.trim()) await ctx.sessionController.rename({ sessionId, title: body.title.trim() });
+        await flush(sessionId);
+        return reply(await get(sessionId), 201);
+      }
+      const match = path.match(/^\/v1\/conversations\/([^/]+)(.*)$/);
+      if (match && own(match[1])) {
+        const [, id, suffix] = match;
+        if (method === 'GET' && !suffix) return reply(await get(id));
+        if (method === 'POST' && suffix === '/messages') return reply(await send(id, await json(req)));
+        if (method === 'PUT' && suffix === '/model') {
+          const body = await json(req);
+          const defaults = (await ctx.sessionController.modelCatalog()).default;
+          const [provider, model] = body.model_id ? JSON.parse(body.model_id) : [defaults.provider, defaults.model];
+          await ctx.sessionController.selectModel({ sessionId: id, provider, model,
+            ...(body.reasoning_effort && body.reasoning_effort !== 'auto' ? { reasoningEffort: body.reasoning_effort } : {}) });
+          await flush(id); return reply(await get(id));
+        }
+        if (method === 'GET' && suffix === '/dsh') {
+          const offset = Number(url.searchParams.get('offset') ?? 0);
+          if (!Number.isSafeInteger(offset) || offset < 0) throw failure('无效的事件位置。');
+          await flush(id);
+          const reader = await ctx.sessionPersistence.open(id, 'read');
+          let events;
+          try { ({ events } = await reader.read(offset, 256)); } finally { await reader.close(); }
+          const agent = ctx.agents.get(id);
+          const pending = interactions.list(id);
+          const projection = ctx.sessionController.projections ? await ctx.sessionController.projections({ sessionId: id }, signal()) : null;
+          for (const question of projection?.values.userQuestions?.active ?? []) {
+            if (question.state === 'continued') pending.push({ id: `continued:${question.callId}`, sessionId: id,
+              kind: 'question', questions: question.questions, callId: question.callId });
+          }
+          return reply({ events, next: offset + events.length, hasMore: events.length === 256,
+            running: agent?.status === 'running', active: !!agent, pending,
+            queue: agent ? [...agent.inbox.nextStep, ...agent.inbox.nextTurn] : [], live: live.get(id) ?? null });
+        }
+        if (method === 'POST' && suffix === '/dsh/cancel') {
+          const agent = ctx.agents.get(id);
+          ctx.sessionController.cancel({ sessionId: id });
+          if (agent) await agent.whenIdle();
+          await flush(id);
+          return reply({ stopped: true });
+        }
+        if (method === 'POST' && suffix.startsWith('/dsh/answers/')) {
+          const requestId = suffix.split('/').at(-1), body = await json(req);
+          if (requestId.startsWith('continued:')) {
+            const agent = await resolve(id);
+            if (!Array.isArray(body.answers) || body.answers.some(a => !a || typeof a.id !== 'string' || !Array.isArray(a.selected)
+              || a.selected.some(s => typeof s !== 'string') || (a.custom !== undefined && typeof a.custom !== 'string'))) throw failure('无效的回答。');
+            const accepted = ctx.userQuestions.answer(agent, requestId.slice('continued:'.length), body);
+            if (!accepted) throw failure('问题已经结束，请刷新。', 409);
+            await flush(id); return reply({ accepted });
+          }
+          return reply(interactions.answer(id, requestId, body));
+        }
+        if (method === 'PUT' && suffix === '/dsh/files') {
+          await resolve(id);
+          const args = { sessionId: id, data: req, name: url.searchParams.get('name') || 'file' };
+          const mediaType = url.searchParams.get('mediaType');
+          return reply(await (mediaType?.startsWith('image/') ? ctx.fileUploads.uploadImageStream({ ...args, mediaType }) : ctx.fileUploads.uploadStream(args)));
+        }
+      }
+      if (method === 'GET' && path === '/v1/resources' && !config.businessUrl) return reply(page([]));
+      if (businessPath(path)) {
+        const raw = req.headers['content-type']?.startsWith('application/octet-stream');
+        const response = await businessRequest(config, path + url.search, method, ['GET', 'HEAD'].includes(method) ? undefined : raw ? req : await json(req), undefined, raw);
+        res.writeHead(response.status, { 'Content-Type': response.headers.get('content-type') ?? 'application/json', 'Cache-Control': 'no-store' });
+        if (response.body) await pipeline(Readable.fromWeb(response.body), res); else res.end();
+        return;
+      }
+      throw failure('此入口由 DSH 宿主管理，请在 DSH 中配置。', 404);
+    } catch (error) {
+      if (!res.headersSent) reply({ error: { code: error.code ?? 'dsh_error', message: error.message } }, error.status ?? 400);
+      else res.destroy();
+    }
+  });
+  try {
+    await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.port ?? 8001, config.host ?? '127.0.0.1', resolve); });
+  } catch (error) { interactions.close(); stopStream(); throw error; }
+  return { address: server.address(), async close() {
+    interactions.close(); stopStream();
+    await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+  } };
+}

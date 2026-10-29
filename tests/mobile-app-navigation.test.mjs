@@ -61,7 +61,7 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel"].map((key) => [key, key]));
+  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "BottomSheet", "DshChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel", "DshHostSettings"].map((key) => [key, key]));
   dependencies["./chatPreferences"] = { ChatPreferencesProvider: "ChatPreferencesProvider" };
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
@@ -72,6 +72,28 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
   return { render, calls, preferences, welcome, reminderVersions, toggled, notification() { reminderOpen(); }, keyboard(visible) { keyboardVisible = visible; }, get keyboardDismisses() { return keyboardDismisses; }, tabsVisible() { return render().some((item) => item.type === exported.BottomTabs); }, back() { return [...backHandlers].at(-1)?.(); }, renderTabs() { const node = render().find((item) => item.type === exported.BottomTabs); assert.ok(node, "bottom navigation visible"); return walk(exported.BottomTabs(node.props)); }, unmount: lifecycle.unmount };
 }
 const find = (app, name) => app.render().find((node) => node.type === name);
+
+test("DSH uses the existing shell with its own renderer and host settings", async () => {
+  const app = appHarness({ serviceStatus: { runtime: "dsh", model_ready: true, worker_online: true } });
+  app.render(); await settle();
+  find(app, "HomePanel").props.onOpenConversation("main-history"); await settle();
+  assert.ok(find(app, "DshChatPanel")); assert.equal(find(app, "ChatPanel"), undefined);
+  assert.ok(find(app, "AgentChatHeader"));
+  find(app, "AgentChatHeader").props.onClose();
+  app.renderTabs().find(node => node.props.accessibilityLabel === "设置").props.onPress();
+  find(app, "SettingsHome").props.onOpen("providers");
+  assert.ok(find(app, "DshHostSettings")); assert.equal(find(app, "ProvidersPanel"), undefined);
+  app.unmount();
+});
+
+test("legacy conversations remain accessible when status cannot be refreshed", async () => {
+  const app = appHarness({ failStatus: true });
+  app.render(); await settle();
+  find(app, "HomePanel").props.onOpenConversation("main-history"); await settle();
+  assert.ok(find(app, "ChatPanel"));
+  assert.equal(find(app, "DshChatPanel"), undefined);
+  app.unmount();
+});
 
 test("local password vault stays available without a server and owns its private return path", async () => {
   for (const connected of [true, false]) {

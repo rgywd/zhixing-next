@@ -8,6 +8,7 @@ import { readCache, writeCache } from "./localCache";
 export function useSessionData(connection: Connection) {
   const [recentResources, setRecentResources] = useState<Resource[]>([]);
   const [assistant, setAssistant] = useState<Assistant | null>(null);
+  const [runtime, setRuntime] = useState<ServiceStatus["runtime"]>();
   const [status, setStatus] = useState<ServiceStatus | null>(null);
   const [lastSyncFailed, setLastSyncFailed] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -24,7 +25,7 @@ export function useSessionData(connection: Connection) {
   const alive = useRef(true);
   const refresh = useCallback(() => refreshRef.current(), []);
   const reportSync = useSyncStatus(refresh);
-  const snapshot = JSON.stringify({ assistant, conversations, agents, catalog, recentResources, conversationCursor });
+  const snapshot = JSON.stringify({ runtime, assistant, conversations, agents, catalog, recentResources, conversationCursor });
   useEffect(() => {
     if (!cacheReady) return;
     void writeCache(connection, "app", JSON.parse(snapshot)).catch(() => undefined);
@@ -57,7 +58,7 @@ export function useSessionData(connection: Connection) {
         if (!active) return;
         const [health, person, chats, agentPage, modelPage, current, resources, recentChats] = results;
         const failure = results.find((result) => result.status === "rejected");
-        if (health.status === "fulfilled") setStatus(health.value);
+        if (health.status === "fulfilled") { setStatus(health.value); setRuntime(health.value.runtime); }
         setLastSyncFailed(!!failure);
         if (person.status === "fulfilled") setAssistant(person.value);
         if (resources.status === "fulfilled") setRecentResources(resources.value.items);
@@ -91,10 +92,11 @@ export function useSessionData(connection: Connection) {
     refreshRef.current = () => {
       void poll();
     };
-    void readCache<{ assistant: Assistant | null; conversations: Conversation[]; agents: Agent[]; catalog: ModelCatalog | null;
+    void readCache<{ runtime?: ServiceStatus["runtime"]; assistant: Assistant | null; conversations: Conversation[]; agents: Agent[]; catalog: ModelCatalog | null;
       recentResources: Resource[]; conversationCursor: string | null }>(connection, "app").then((cached) => {
       if (!active) return;
       if (cached && Array.isArray(cached.conversations) && Array.isArray(cached.agents) && Array.isArray(cached.recentResources)) {
+        setRuntime(cached.runtime);
         setAssistant(cached.assistant); setConversations(cached.conversations); setAgents(cached.agents);
         setCatalog(cached.catalog); setRecentResources(cached.recentResources); setConversationCursor(cached.conversationCursor);
         setSelectedId((old) => old ?? [...cached.conversations].reverse().find((item) => !item.agent_id)?.id ?? null);
@@ -118,6 +120,6 @@ export function useSessionData(connection: Connection) {
     };
   }, [connection, reportSync]);
 
-  return { assistant, setAssistant, status, lastSyncFailed, conversations, setConversations, agents, catalog, setCatalog,
+  return { assistant, setAssistant, status, runtime, lastSyncFailed, conversations, setConversations, agents, catalog, setCatalog,
     recentResources, selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive };
 }

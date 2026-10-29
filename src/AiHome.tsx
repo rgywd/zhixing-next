@@ -25,6 +25,7 @@ const suggestions = [
 ] as const;
 
 export function AiHome({
+  dsh = false,
   name,
   draft,
   busy,
@@ -48,6 +49,7 @@ export function AiHome({
   pickingPhotos = false,
   onSend,
 }: {
+  dsh?: boolean;
   name: string;
   draft: string;
   kind: Kind;
@@ -121,7 +123,7 @@ export function AiHome({
           <Ionicons name="chevron-forward" size={17} color={colors.muted} />
         </Pressable>
       </ScrollView>
-      <ConversationComposer text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!locked} onText={(text) => { if (!locked) onDraft(text); }} onSend={() => { if (!locked && !pickingPhotos && (draft.trim() || photos.length)) onSend(); }} onFiles={() => { if (!locked) onFiles(); }} onPhotos={onPhotos} attachmentLocked={locked || pickingPhotos} canSend={!locked && !pickingPhotos && !!(draft.trim() || photos.length)} busy={busy} kind="chat" onKind={() => { if (!locked) onKind("chat"); }} kindLocked={locked} connection={connection} model={model} depth={depth} searchId={searchProviderId} optionsLocked={locked || !catalog} onModel={() => { if (!locked && catalog) setShowModels(true); }} onReasoning={() => { if (!locked && catalog) setShowReasoning(true); }} onSearch={() => { if (!locked && catalog) setShowSearch(true); }}>
+      <ConversationComposer unlimitedText={dsh} text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!locked} onText={(text) => { if (!locked) onDraft(text); }} onSend={() => { if (!locked && !pickingPhotos && (draft.trim() || photos.length)) onSend(); }} onFiles={() => { if (!locked) onFiles(); }} onPhotos={onPhotos} attachmentLocked={locked || pickingPhotos} canSend={!locked && !pickingPhotos && !!(draft.trim() || photos.length)} busy={busy} kind="chat" onKind={() => { if (!locked) onKind("chat"); }} kindLocked={locked} connection={connection} model={model} depth={depth} searchId={searchProviderId} optionsLocked={locked || !catalog} onModel={() => { if (!locked && catalog) setShowModels(true); }} onReasoning={() => { if (!locked && catalog) setShowReasoning(true); }} onSearch={dsh ? undefined : () => { if (!locked && catalog) setShowSearch(true); }}>
         <DraftAttachments connection={connection} photos={photos} removePhoto={locked ? undefined : onRemovePhoto} />
       </ConversationComposer>
       {draftError ? <View style={styles.draftError}>
