@@ -1,0 +1,2392 @@
+{
+  "BudgetInput": {
+    "$defs": {
+      "Commitment": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "fixed",
+              "one_time"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "every_months": {
+            "default": 1,
+            "maximum": 120,
+            "minimum": 1,
+            "title": "Every Months",
+            "type": "integer"
+          },
+          "anchor_month": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Anchor Month"
+          },
+          "due_day": {
+            "anyOf": [
+              {
+                "maximum": 31,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Due Day"
+          },
+          "monthly_cost": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Monthly Cost"
+          },
+          "paid_through": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Paid Through"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable expense purpose; reuse the existing same-purpose key when changing amount or cycle",
+            "title": "Purpose"
+          },
+          "separate_from_keys": {
+            "description": "Only when the user clearly describes independent costs of the same purpose; list existing keys that must coexist",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Separate From Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "amount",
+          "kind"
+        ],
+        "title": "Commitment",
+        "type": "object"
+      },
+      "IncomeSchedule": {
+        "additionalProperties": false,
+        "properties": {
+          "rule": {
+            "enum": [
+              "last_business_day",
+              "day_of_month"
+            ],
+            "title": "Rule",
+            "type": "string"
+          },
+          "day": {
+            "anyOf": [
+              {
+                "maximum": 31,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Day"
+          },
+          "weekdays": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Weekdays",
+            "type": "array"
+          },
+          "working_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Working Dates",
+            "type": "array"
+          },
+          "non_working_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Non Working Dates",
+            "type": "array"
+          },
+          "calendar_basis": {
+            "default": "weekdays_only",
+            "enum": [
+              "weekdays_only",
+              "user_overrides"
+            ],
+            "title": "Calendar Basis",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule"
+        ],
+        "title": "IncomeSchedule",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "month": {
+        "title": "Month",
+        "type": "string"
+      },
+      "idempotency_key": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "recurring": {
+        "default": true,
+        "title": "Recurring",
+        "type": "boolean"
+      },
+      "expected_income": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Expected Income"
+      },
+      "savings_target": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Savings Target"
+      },
+      "daily_budget": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Daily Budget"
+      },
+      "commitments": {
+        "items": {
+          "$ref": "#/$defs/Commitment"
+        },
+        "maxItems": 100,
+        "title": "Commitments",
+        "type": "array"
+      },
+      "coverage_start": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Coverage Start"
+      },
+      "coverage_through": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Coverage Through"
+      },
+      "expected_revision": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Expected Revision"
+      },
+      "expected_source_month": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Expected Source Month"
+      },
+      "income_schedule": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/IncomeSchedule"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "month",
+      "idempotency_key"
+    ],
+    "title": "BudgetInput",
+    "type": "object"
+  },
+  "BudgetPatch": {
+    "$defs": {
+      "BudgetChanges": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_income": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Income"
+          },
+          "savings_target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Savings Target"
+          },
+          "daily_budget": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Daily Budget"
+          },
+          "commitments": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/Commitment"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Commitments"
+          },
+          "commitments_upsert": {
+            "items": {
+              "$ref": "#/$defs/Commitment"
+            },
+            "maxItems": 100,
+            "title": "Commitments Upsert",
+            "type": "array"
+          },
+          "commitment_keys_remove": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Commitment Keys Remove",
+            "type": "array"
+          },
+          "coverage_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coverage Start"
+          },
+          "coverage_through": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coverage Through"
+          },
+          "income_schedule": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/IncomeSchedule"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "clear_fields": {
+            "items": {
+              "enum": [
+                "expected_income",
+                "savings_target",
+                "daily_budget",
+                "coverage_start",
+                "coverage_through",
+                "income_schedule"
+              ],
+              "type": "string"
+            },
+            "title": "Clear Fields",
+            "type": "array"
+          }
+        },
+        "title": "BudgetChanges",
+        "type": "object"
+      },
+      "Commitment": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "amount": {
+            "title": "Amount",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "fixed",
+              "one_time"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "every_months": {
+            "default": 1,
+            "maximum": 120,
+            "minimum": 1,
+            "title": "Every Months",
+            "type": "integer"
+          },
+          "anchor_month": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Anchor Month"
+          },
+          "due_day": {
+            "anyOf": [
+              {
+                "maximum": 31,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Due Day"
+          },
+          "monthly_cost": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Monthly Cost"
+          },
+          "paid_through": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Paid Through"
+          },
+          "purpose": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Stable expense purpose; reuse the existing same-purpose key when changing amount or cycle",
+            "title": "Purpose"
+          },
+          "separate_from_keys": {
+            "description": "Only when the user clearly describes independent costs of the same purpose; list existing keys that must coexist",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 100,
+            "title": "Separate From Keys",
+            "type": "array"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "amount",
+          "kind"
+        ],
+        "title": "Commitment",
+        "type": "object"
+      },
+      "IncomeSchedule": {
+        "additionalProperties": false,
+        "properties": {
+          "rule": {
+            "enum": [
+              "last_business_day",
+              "day_of_month"
+            ],
+            "title": "Rule",
+            "type": "string"
+          },
+          "day": {
+            "anyOf": [
+              {
+                "maximum": 31,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Day"
+          },
+          "weekdays": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Weekdays",
+            "type": "array"
+          },
+          "working_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Working Dates",
+            "type": "array"
+          },
+          "non_working_dates": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Non Working Dates",
+            "type": "array"
+          },
+          "calendar_basis": {
+            "default": "weekdays_only",
+            "enum": [
+              "weekdays_only",
+              "user_overrides"
+            ],
+            "title": "Calendar Basis",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rule"
+        ],
+        "title": "IncomeSchedule",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "month": {
+        "title": "Month",
+        "type": "string"
+      },
+      "idempotency_key": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "recurring": {
+        "default": true,
+        "title": "Recurring",
+        "type": "boolean"
+      },
+      "changes": {
+        "$ref": "#/$defs/BudgetChanges"
+      },
+      "expected_revision": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Expected Revision"
+      },
+      "expected_source_month": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Expected Source Month"
+      }
+    },
+    "required": [
+      "month",
+      "idempotency_key",
+      "changes"
+    ],
+    "title": "BudgetPatch",
+    "type": "object"
+  },
+  "TransactionInput": {
+    "additionalProperties": false,
+    "properties": {
+      "idempotency_key": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "kind": {
+        "enum": [
+          "expense",
+          "income",
+          "transfer",
+          "refund"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "amount": {
+        "title": "Amount",
+        "type": "string"
+      },
+      "occurred_on": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Occurred On"
+      },
+      "bucket": {
+        "default": "daily",
+        "enum": [
+          "daily",
+          "fixed",
+          "one_time"
+        ],
+        "title": "Bucket",
+        "type": "string"
+      },
+      "category": {
+        "default": "其他",
+        "title": "Category",
+        "type": "string"
+      },
+      "note": {
+        "default": "",
+        "title": "Note",
+        "type": "string"
+      },
+      "commitment_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Commitment Key"
+      },
+      "related_transaction_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Related Transaction Id"
+      },
+      "conversation_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Conversation Id"
+      },
+      "source_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Source Id"
+      },
+      "entry_type": {
+        "default": "detail",
+        "enum": [
+          "detail",
+          "aggregate"
+        ],
+        "title": "Entry Type",
+        "type": "string"
+      },
+      "period_start": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Period Start"
+      },
+      "date_precision": {
+        "default": "day",
+        "enum": [
+          "day",
+          "month",
+          "range"
+        ],
+        "title": "Date Precision",
+        "type": "string"
+      },
+      "date_start": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Date Start"
+      },
+      "date_end": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Date End"
+      },
+      "coverage_start": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Coverage Start"
+      },
+      "coverage_end": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Coverage End"
+      }
+    },
+    "required": [
+      "idempotency_key",
+      "kind",
+      "amount"
+    ],
+    "title": "TransactionInput",
+    "type": "object"
+  },
+  "TransactionUpdate": {
+    "additionalProperties": false,
+    "properties": {
+      "kind": {
+        "anyOf": [
+          {
+            "enum": [
+              "expense",
+              "income",
+              "transfer",
+              "refund"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Kind"
+      },
+      "amount": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Amount"
+      },
+      "occurred_on": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Occurred On"
+      },
+      "bucket": {
+        "anyOf": [
+          {
+            "enum": [
+              "daily",
+              "fixed",
+              "one_time"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Bucket"
+      },
+      "category": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Category"
+      },
+      "note": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Note"
+      },
+      "commitment_key": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Commitment Key"
+      },
+      "related_transaction_id": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Related Transaction Id"
+      },
+      "entry_type": {
+        "anyOf": [
+          {
+            "enum": [
+              "detail",
+              "aggregate"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Entry Type"
+      },
+      "period_start": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Period Start"
+      },
+      "date_precision": {
+        "anyOf": [
+          {
+            "enum": [
+              "day",
+              "month",
+              "range"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Date Precision"
+      },
+      "date_start": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Date Start"
+      },
+      "date_end": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Date End"
+      },
+      "coverage_start": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Coverage Start"
+      },
+      "coverage_end": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Coverage End"
+      },
+      "idempotency_key": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "expected_revision": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Expected Revision"
+      }
+    },
+    "required": [
+      "idempotency_key"
+    ],
+    "title": "TransactionUpdate",
+    "type": "object"
+  },
+  "TransactionBatch": {
+    "$defs": {
+      "BatchOperation": {
+        "additionalProperties": false,
+        "properties": {
+          "operation": {
+            "enum": [
+              "create",
+              "update",
+              "delete"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "transaction_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Transaction Id"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TransactionChanges"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "expected_revision": {
+            "anyOf": [
+              {
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Expected Revision"
+          }
+        },
+        "required": [
+          "operation"
+        ],
+        "title": "BatchOperation",
+        "type": "object"
+      },
+      "TransactionChanges": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "expense",
+                  "income",
+                  "transfer",
+                  "refund"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Kind"
+          },
+          "amount": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Amount"
+          },
+          "occurred_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Occurred On"
+          },
+          "bucket": {
+            "anyOf": [
+              {
+                "enum": [
+                  "daily",
+                  "fixed",
+                  "one_time"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Bucket"
+          },
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Category"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Note"
+          },
+          "commitment_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Commitment Key"
+          },
+          "related_transaction_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Related Transaction Id"
+          },
+          "entry_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "detail",
+                  "aggregate"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Entry Type"
+          },
+          "period_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Period Start"
+          },
+          "date_precision": {
+            "anyOf": [
+              {
+                "enum": [
+                  "day",
+                  "month",
+                  "range"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Precision"
+          },
+          "date_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date Start"
+          },
+          "date_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Date End"
+          },
+          "coverage_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coverage Start"
+          },
+          "coverage_end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Coverage End"
+          }
+        },
+        "title": "TransactionChanges",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "idempotency_key": {
+        "maxLength": 300,
+        "minLength": 1,
+        "title": "Idempotency Key",
+        "type": "string"
+      },
+      "operations": {
+        "items": {
+          "$ref": "#/$defs/BatchOperation"
+        },
+        "maxItems": 100,
+        "minItems": 1,
+        "title": "Operations",
+        "type": "array"
+      },
+      "conserve_total": {
+        "default": true,
+        "title": "Conserve Total",
+        "type": "boolean"
+      },
+      "reason": {
+        "default": "",
+        "title": "Reason",
+        "type": "string"
+      }
+    },
+    "required": [
+      "idempotency_key",
+      "operations"
+    ],
+    "title": "TransactionBatch",
+    "type": "object"
+  },
+  "ProfileInput": {
+    "additionalProperties": false,
+    "properties": {
+      "revision": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revision"
+      },
+      "height_cm": {
+        "anyOf": [
+          {
+            "exclusiveMinimum": 0,
+            "maximum": 300,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Height Cm"
+      },
+      "activity_limitations": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 30,
+        "title": "Activity Limitations",
+        "type": "array"
+      },
+      "food_allergies": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 30,
+        "title": "Food Allergies",
+        "type": "array"
+      },
+      "food_exclusions": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 30,
+        "title": "Food Exclusions",
+        "type": "array"
+      },
+      "preferences": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 30,
+        "title": "Preferences",
+        "type": "array"
+      },
+      "goals": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 30,
+        "title": "Goals",
+        "type": "array"
+      },
+      "note": {
+        "default": "",
+        "maxLength": 4000,
+        "title": "Note",
+        "type": "string"
+      }
+    },
+    "title": "ProfileInput",
+    "type": "object"
+  },
+  "RemindersInput": {
+    "$defs": {
+      "ReminderSlot": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "time": {
+            "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+            "title": "Time",
+            "type": "string"
+          },
+          "meal_type": {
+            "default": "other",
+            "enum": [
+              "breakfast",
+              "lunch",
+              "dinner",
+              "snack",
+              "other"
+            ],
+            "title": "Meal Type",
+            "type": "string"
+          },
+          "kind": {
+            "default": "meal",
+            "enum": [
+              "meal",
+              "review"
+            ],
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "time"
+        ],
+        "title": "ReminderSlot",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "revision": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revision"
+      },
+      "enabled": {
+        "default": false,
+        "title": "Enabled",
+        "type": "boolean"
+      },
+      "timezone": {
+        "default": "Asia/Shanghai",
+        "maxLength": 100,
+        "minLength": 1,
+        "title": "Timezone",
+        "type": "string"
+      },
+      "slots": {
+        "items": {
+          "$ref": "#/$defs/ReminderSlot"
+        },
+        "maxItems": 12,
+        "title": "Slots",
+        "type": "array"
+      },
+      "quiet_start": {
+        "anyOf": [
+          {
+            "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Quiet Start"
+      },
+      "quiet_end": {
+        "anyOf": [
+          {
+            "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Quiet End"
+      },
+      "max_per_day": {
+        "default": 3,
+        "maximum": 12,
+        "minimum": 1,
+        "title": "Max Per Day",
+        "type": "integer"
+      },
+      "paused_dates": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 90,
+        "title": "Paused Dates",
+        "type": "array"
+      },
+      "tone": {
+        "default": "温和提醒",
+        "maxLength": 200,
+        "title": "Tone",
+        "type": "string"
+      }
+    },
+    "title": "RemindersInput",
+    "type": "object"
+  },
+  "RuleInput": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "anyOf": [
+          {
+            "maxLength": 180,
+            "minLength": 1,
+            "pattern": "^[\\w:-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Id"
+      },
+      "revision": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revision"
+      },
+      "source_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Source Id"
+      },
+      "conversation_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Conversation Id"
+      },
+      "content": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "title": "Content",
+        "type": "string"
+      },
+      "kind": {
+        "default": "guideline",
+        "enum": [
+          "restriction",
+          "preference",
+          "guideline"
+        ],
+        "title": "Kind",
+        "type": "string"
+      },
+      "status": {
+        "default": "active",
+        "enum": [
+          "active",
+          "paused",
+          "proposed"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "effective_from": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Effective From"
+      },
+      "effective_until": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Effective Until"
+      },
+      "excluded_terms": {
+        "items": {
+          "type": "string"
+        },
+        "maxItems": 30,
+        "title": "Excluded Terms",
+        "type": "array"
+      },
+      "origin": {
+        "default": "user",
+        "enum": [
+          "user",
+          "professional",
+          "assistant_proposal"
+        ],
+        "title": "Origin",
+        "type": "string"
+      },
+      "confirmed": {
+        "default": false,
+        "title": "Confirmed",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "content"
+    ],
+    "title": "RuleInput",
+    "type": "object"
+  },
+  "MealInput": {
+    "$defs": {
+      "EnergyEstimate": {
+        "additionalProperties": false,
+        "properties": {
+          "minimum": {
+            "maximum": 30000,
+            "minimum": 0,
+            "title": "Minimum",
+            "type": "number"
+          },
+          "maximum": {
+            "maximum": 30000,
+            "minimum": 0,
+            "title": "Maximum",
+            "type": "number"
+          },
+          "basis": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Basis",
+            "type": "string"
+          },
+          "unit": {
+            "const": "kcal",
+            "default": "kcal",
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "minimum",
+          "maximum",
+          "basis"
+        ],
+        "title": "EnergyEstimate",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "anyOf": [
+          {
+            "maxLength": 180,
+            "minLength": 1,
+            "pattern": "^[\\w:-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Id"
+      },
+      "revision": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revision"
+      },
+      "source_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Source Id"
+      },
+      "conversation_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Conversation Id"
+      },
+      "occurred_at": {
+        "title": "Occurred At",
+        "type": "string"
+      },
+      "meal_type": {
+        "default": "other",
+        "enum": [
+          "breakfast",
+          "lunch",
+          "dinner",
+          "snack",
+          "other"
+        ],
+        "title": "Meal Type",
+        "type": "string"
+      },
+      "description": {
+        "default": "",
+        "maxLength": 4000,
+        "title": "Description",
+        "type": "string"
+      },
+      "portion": {
+        "default": "",
+        "maxLength": 2000,
+        "title": "Portion",
+        "type": "string"
+      },
+      "status": {
+        "default": "recorded",
+        "enum": [
+          "recorded",
+          "skipped"
+        ],
+        "title": "Status",
+        "type": "string"
+      },
+      "recommendation_id": {
+        "anyOf": [
+          {
+            "maxLength": 180,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Recommendation Id"
+      },
+      "note": {
+        "default": "",
+        "maxLength": 4000,
+        "title": "Note",
+        "type": "string"
+      },
+      "estimated_energy": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/EnergyEstimate"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "occurred_at"
+    ],
+    "title": "MealInput",
+    "type": "object"
+  },
+  "WeightInput": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "anyOf": [
+          {
+            "maxLength": 180,
+            "minLength": 1,
+            "pattern": "^[\\w:-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Id"
+      },
+      "revision": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revision"
+      },
+      "source_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Source Id"
+      },
+      "conversation_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Conversation Id"
+      },
+      "measured_at": {
+        "title": "Measured At",
+        "type": "string"
+      },
+      "value": {
+        "exclusiveMinimum": 0,
+        "maximum": 1500,
+        "title": "Value",
+        "type": "number"
+      },
+      "unit": {
+        "default": "kg",
+        "enum": [
+          "kg",
+          "lb"
+        ],
+        "title": "Unit",
+        "type": "string"
+      },
+      "note": {
+        "default": "",
+        "maxLength": 2000,
+        "title": "Note",
+        "type": "string"
+      }
+    },
+    "required": [
+      "measured_at",
+      "value"
+    ],
+    "title": "WeightInput",
+    "type": "object"
+  },
+  "StepsInput": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "anyOf": [
+          {
+            "maxLength": 180,
+            "minLength": 1,
+            "pattern": "^[\\w:-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Id"
+      },
+      "revision": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revision"
+      },
+      "source_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Source Id"
+      },
+      "conversation_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Conversation Id"
+      },
+      "measured_at": {
+        "title": "Measured At",
+        "type": "string"
+      },
+      "value": {
+        "maximum": 200000,
+        "minimum": 0,
+        "title": "Value",
+        "type": "integer"
+      },
+      "note": {
+        "default": "",
+        "maxLength": 2000,
+        "title": "Note",
+        "type": "string"
+      }
+    },
+    "required": [
+      "measured_at",
+      "value"
+    ],
+    "title": "StepsInput",
+    "type": "object"
+  },
+  "RecommendationInput": {
+    "$defs": {
+      "EnergyEstimate": {
+        "additionalProperties": false,
+        "properties": {
+          "minimum": {
+            "maximum": 30000,
+            "minimum": 0,
+            "title": "Minimum",
+            "type": "number"
+          },
+          "maximum": {
+            "maximum": 30000,
+            "minimum": 0,
+            "title": "Maximum",
+            "type": "number"
+          },
+          "basis": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Basis",
+            "type": "string"
+          },
+          "unit": {
+            "const": "kcal",
+            "default": "kcal",
+            "title": "Unit",
+            "type": "string"
+          }
+        },
+        "required": [
+          "minimum",
+          "maximum",
+          "basis"
+        ],
+        "title": "EnergyEstimate",
+        "type": "object"
+      },
+      "RecommendationOption": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 300,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "ingredients": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 40,
+            "title": "Ingredients",
+            "type": "array"
+          },
+          "portion": {
+            "default": "",
+            "maxLength": 1000,
+            "title": "Portion",
+            "type": "string"
+          },
+          "substitutions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Substitutions",
+            "type": "array"
+          },
+          "reason": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Reason",
+            "type": "string"
+          },
+          "note": {
+            "default": "",
+            "maxLength": 2000,
+            "title": "Note",
+            "type": "string"
+          },
+          "estimated_energy": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EnergyEstimate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "cost_note": {
+            "default": "",
+            "maxLength": 500,
+            "title": "Cost Note",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description"
+        ],
+        "title": "RecommendationOption",
+        "type": "object"
+      }
+    },
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "anyOf": [
+          {
+            "maxLength": 180,
+            "minLength": 1,
+            "pattern": "^[\\w:-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Id"
+      },
+      "revision": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revision"
+      },
+      "source_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Source Id"
+      },
+      "conversation_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Conversation Id"
+      },
+      "context_revision": {
+        "minimum": 0,
+        "title": "Context Revision",
+        "type": "integer"
+      },
+      "target_date": {
+        "title": "Target Date",
+        "type": "string"
+      },
+      "meal_type": {
+        "default": "other",
+        "enum": [
+          "breakfast",
+          "lunch",
+          "dinner",
+          "snack",
+          "other"
+        ],
+        "title": "Meal Type",
+        "type": "string"
+      },
+      "context": {
+        "default": "",
+        "maxLength": 4000,
+        "title": "Context",
+        "type": "string"
+      },
+      "options": {
+        "items": {
+          "$ref": "#/$defs/RecommendationOption"
+        },
+        "maxItems": 5,
+        "minItems": 1,
+        "title": "Options",
+        "type": "array"
+      },
+      "note": {
+        "default": "",
+        "maxLength": 2000,
+        "title": "Note",
+        "type": "string"
+      }
+    },
+    "required": [
+      "context_revision",
+      "target_date",
+      "options"
+    ],
+    "title": "RecommendationInput",
+    "type": "object"
+  },
+  "FeedbackInput": {
+    "additionalProperties": false,
+    "properties": {
+      "id": {
+        "anyOf": [
+          {
+            "maxLength": 180,
+            "minLength": 1,
+            "pattern": "^[\\w:-]+$",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Id"
+      },
+      "revision": {
+        "anyOf": [
+          {
+            "minimum": 1,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Revision"
+      },
+      "source_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Source Id"
+      },
+      "conversation_id": {
+        "anyOf": [
+          {
+            "maxLength": 200,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Conversation Id"
+      },
+      "action": {
+        "enum": [
+          "accepted",
+          "replaced",
+          "declined"
+        ],
+        "title": "Action",
+        "type": "string"
+      },
+      "option_id": {
+        "anyOf": [
+          {
+            "maxLength": 100,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null,
+        "title": "Option Id"
+      },
+      "note": {
+        "default": "",
+        "maxLength": 4000,
+        "title": "Note",
+        "type": "string"
+      }
+    },
+    "required": [
+      "action"
+    ],
+    "title": "FeedbackInput",
+    "type": "object"
+  }
+}

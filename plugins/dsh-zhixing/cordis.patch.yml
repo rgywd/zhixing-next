@@ -6,6 +6,5 @@
         token: !!js process.env.ZHIXING_DSH_TOKEN
         host: !!js process.env.ZHIXING_DSH_HOST || '127.0.0.1'
         port: !!js Number(process.env.ZHIXING_DSH_PORT || 8001)
-        businessUrl: !!js process.env.ZHIXING_BUSINESS_URL
-        businessToken: !!js process.env.ZHIXING_BUSINESS_TOKEN
+        businessImport: !!js process.env.ZHIXING_DSH_BUSINESS_IMPORT
         webUrl: !!js process.env.ZHIXING_DSH_WEB_URL

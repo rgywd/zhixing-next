@@ -47,7 +47,7 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
     "./useHealthReminders": { useHealthReminders(_connection, revision, onOpen) { reminderVersions.push(revision); reminderOpen = onOpen; } }, "./storage": { draftKey: () => "draft", saveDraft: async () => {}, clearDraft: async () => {} },
     "./api": { ...api, request: async (_connection, path, options) => {
       calls.push({ path, ...options });
-      if (path === "/status") { if (failStatus) throw new Error("status unavailable"); return serviceStatus; }
+      if (path === "/status") { if (failStatus) throw new Error("status unavailable"); return { runtime: "dsh", ...serviceStatus }; }
       if (path === "/assistant") return { name: "知行" };
       if (path === "/models") { if (failModels) throw new Error("models unavailable"); return modelPage; }
       if (path === "/agents") return { items: ["finance", "health"].map((id) => ({ id, name: id === "finance" ? "财务助手" : "健康助手", model_id: null })) };
@@ -77,21 +77,21 @@ test("DSH uses the existing shell with its own renderer and host settings", asyn
   const app = appHarness({ serviceStatus: { runtime: "dsh", model_ready: true, worker_online: true } });
   app.render(); await settle();
   find(app, "HomePanel").props.onOpenConversation("main-history"); await settle();
-  assert.ok(find(app, "DshChatPanel")); assert.equal(find(app, "ChatPanel"), undefined);
+  assert.ok(find(app, "DshChatPanel")); assert.equal(app.render().some(n => n.type === "ChatPanel"), false);
   assert.ok(find(app, "AgentChatHeader"));
   find(app, "AgentChatHeader").props.onClose();
   app.renderTabs().find(node => node.props.accessibilityLabel === "设置").props.onPress();
-  find(app, "SettingsHome").props.onOpen("providers");
+  find(app, "SettingsHome").props.onOpen("host");
   assert.ok(find(app, "DshHostSettings")); assert.equal(find(app, "ProvidersPanel"), undefined);
   app.unmount();
 });
 
-test("legacy conversations remain accessible when status cannot be refreshed", async () => {
+test("native conversations keep their renderer when the status request fails", async () => {
   const app = appHarness({ failStatus: true });
   app.render(); await settle();
   find(app, "HomePanel").props.onOpenConversation("main-history"); await settle();
-  assert.ok(find(app, "ChatPanel"));
-  assert.equal(find(app, "DshChatPanel"), undefined);
+  assert.ok(find(app, "DshChatPanel"));
+  assert.equal(app.render().some(n => n.type === "ChatPanel"), false);
   app.unmount();
 });
 
@@ -124,7 +124,7 @@ test("settings groups password management in the toolbox", () => {
   assert.ok(toolbox);
   const row = walk(toolbox).find((node) => node.type === "ActionRow" && node.props.title === "密码管理");
   row.props.onPress(); assert.deepEqual(opened, ["vault"]);
-  assert.deepEqual(nodes.filter((node) => node.type === "SettingsGroup").map((node) => node.props.title), ["通用", "工具箱", "模型与服务", "助手", "数据与连接"]);
+  assert.deepEqual(nodes.filter((node) => node.type === "SettingsGroup").map((node) => node.props.title), ["通用", "工具箱", "模型与服务", "数据与连接"]);
 });
 
 function openLifeService(app, service) {
@@ -142,11 +142,9 @@ test("chat preferences are available locally and each agent can open them and re
   for (const agent of ["finance", "health"]) {
     const app = appHarness(); app.render(); await settle(); openLifeService(app, agent);
     find(app, agent === "finance" ? "FinanceDashboard" : "HealthPage").props.onChat(); await settle();
-    const id = find(app, "ChatPanel").props.conversation.id;
-    find(app, "AgentChatHeader").props.onSettings(); assert.equal(find(app, "ChatPanel").props.settingsOpen, true);
-    find(app, "ChatPanel").props.onOpenChatSettings(); assert.ok(find(app, "ChatSettingsPanel"));
-    assert.equal(find(app, "BackLink").props.label, "对话");
-    app.back(); assert.equal(find(app, "ChatPanel").props.conversation.id, id); assert.equal(find(app, "ChatPanel").props.settingsOpen, false);
+    const id = find(app, "DshChatPanel").props.conversation.id;
+    find(app, "AgentChatHeader").props.onSettings(); assert.equal(find(app, "DshChatPanel").props.settingsOpen, true);
+    find(app, "DshChatPanel").props.onSettingsClose(); assert.equal(find(app, "DshChatPanel").props.conversation.id, id); assert.equal(find(app, "DshChatPanel").props.settingsOpen, false);
     assert.equal(app.calls.some((call) => call.method === "POST"), false); app.unmount();
   }
 });
@@ -156,11 +154,11 @@ test("life services open their own agent chats and return to the exact service b
     const app = appHarness(); app.render(); await settle(); openLifeService(app, agent);
     const service = find(app, pageName); assert.ok(service); assert.equal(app.tabsVisible(), false);
     service.props.onChat(); await settle();
-    const chat = find(app, "ChatPanel"); assert.equal(chat.props.conversation.agent_id, agent); assert.equal(chat.props.conversation.id, `${agent}-history`); assert.equal(chat.props.initialKind, "chat");
+    const chat = find(app, "DshChatPanel"); assert.equal(chat.props.conversation.agent_id, agent); assert.equal(chat.props.conversation.id, `${agent}-history`);
     assert.equal(app.tabsVisible(), false);
     find(app, "AgentChatHeader").props.onClose();
     assert.ok(find(app, pageName));
-    find(app, pageName).props.onChat(); await settle(); assert.ok(find(app, "ChatPanel"));
+    find(app, pageName).props.onChat(); await settle(); assert.ok(find(app, "DshChatPanel"));
     assert.equal(app.back(), true); assert.ok(find(app, pageName));
     find(app, pageName).props.onBack(); assert.ok(find(app, "LifePanel")); assert.equal(app.tabsVisible(), true);
     assert.equal(app.calls.some((call) => call.method === "POST"), false, "opening an existing agent does not send a message or create a service record");
@@ -176,7 +174,7 @@ test("a service prompt starts the correct child agent and returns to the origina
   assert.equal(create.body.agent_id, "health"); assert.equal(create.body.project_id, null);
   const message = app.calls.find((call) => call.path === "/conversations/health-created/messages");
   assert.equal(message.body.kind, "chat"); assert.equal(message.body.content, "请按当前饮食约定推荐下一餐");
-  assert.equal(find(app, "ChatPanel").props.conversation.agent_id, "health");
+  assert.equal(find(app, "DshChatPanel").props.conversation.agent_id, "health");
   app.back(); assert.ok(find(app, "HealthPage")); app.back(); assert.ok(find(app, "LifePanel")); app.unmount();
 });
 
@@ -203,7 +201,7 @@ test("Android back dismisses the keyboard before leaving a life service, then re
 test("notification clicks open health inside life and retain the life return path", async () => {
   const app = appHarness(); app.render(); await settle(); find(app, "HomePanel").props.onWork();
   app.notification(); assert.ok(find(app, "HealthPage")); assert.equal(app.tabsVisible(), false);
-  find(app, "HealthPage").props.onChat(); await settle(); assert.ok(find(app, "ChatPanel")); app.back(); assert.ok(find(app, "HealthPage"));
+  find(app, "HealthPage").props.onChat(); await settle(); assert.ok(find(app, "DshChatPanel")); app.back(); assert.ok(find(app, "HealthPage"));
   app.back(); assert.ok(find(app, "LifePanel")); app.unmount();
 });
 
@@ -235,7 +233,7 @@ test("disconnected navigation exposes life services and construction before conn
 test("legacy project pins and visits do not produce an unopenable home entry", async () => {
   const app = appHarness(); app.render(); await settle(); const home = find(app, "HomePanel").props;
   assert.equal(home.preferences.pins.some((item) => item.kind === "project"), false);
-  const entries = homeEntries(home.conversations, home.projects ?? [], home.resources, home.preferences);
+  const entries = homeEntries(home.conversations, home.projects ?? [], home.resources ?? [], home.preferences);
   assert.equal(entries.recent.some((item) => item.kind === "project"), false);
   assert.equal(entries.pins.some((item) => item.kind === "conversation"), true);
   assert.equal(app.preferences.pins.some((item) => item.kind === "project"), true, "legacy saved data is retained");
@@ -261,15 +259,15 @@ test("today home appends its prepared prompt to the existing main draft without 
 
 test("home service cards retain the life return path when reusing the same finance chat", async () => {
   const app = appHarness(); app.render(); await settle();
-  find(app, "HomePanel").props.onOpenConversation("finance-history"); await settle(); assert.ok(find(app, "ChatPanel"));
+  find(app, "HomePanel").props.onOpenConversation("finance-history"); await settle(); assert.ok(find(app, "DshChatPanel"));
   app.back(); find(app, "HomePanel").props.onFinance();
   const finance = find(app, "FinanceDashboard"); assert.ok(finance); assert.equal(app.tabsVisible(), false);
-  finance.props.onChat(); await settle(); assert.equal(find(app, "ChatPanel").props.conversation.id, "finance-history");
+  finance.props.onChat(); await settle(); assert.equal(find(app, "DshChatPanel").props.conversation.id, "finance-history");
   app.back(); assert.ok(find(app, "FinanceDashboard"));
   find(app, "FinanceDashboard").props.onBack(); assert.ok(find(app, "LifePanel"));
   app.back(); find(app, "HomePanel").props.onHealth();
   assert.ok(find(app, "HealthPage")); app.back(); assert.ok(find(app, "LifePanel"));
-  app.back(); find(app, "HomePanel").props.onOpenConversation("finance-history"); await settle(); assert.ok(find(app, "ChatPanel"));
+  app.back(); find(app, "HomePanel").props.onOpenConversation("finance-history"); await settle(); assert.ok(find(app, "DshChatPanel"));
   app.back(); assert.ok(find(app, "HomePanel"), "a previous life visit cannot become the recent conversation's return destination");
   assert.equal(app.calls.some((call) => call.method === "POST"), false);
   app.unmount();
@@ -304,7 +302,7 @@ test("welcome, main and child conversations share one header with the correct id
   for (const [agent, title, pinned] of [[null, "知行", false], ["finance", "财务助手", true], ["health", "健康助手", false]]) {
     const id = `${agent ?? "main"}-history`;
     find(app, "HomePanel").props.onOpenConversation(id); await settle();
-    assert.equal(find(app, "ChatPanel").props.conversation.id, id);
+    assert.equal(find(app, "DshChatPanel").props.conversation.id, id);
     assert.equal(header().title, title); assert.equal(header().subtitle, `${agent ?? "main"} history`);
     assert.equal(header().status, undefined, "a conversation must not inherit the welcome readiness badge");
     assert.equal(header().pinned, pinned); assert.equal(header().pinReady, true);
@@ -320,14 +318,14 @@ test("a child header creates one empty conversation for the current agent and re
   for (const [agent, pageName] of [["finance", "FinanceDashboard"], ["health", "HealthPage"]]) {
     const app = appHarness(); app.render(); await settle(); openLifeService(app, agent);
     find(app, pageName).props.onChat(); await settle();
-    assert.equal(find(app, "ChatPanel").props.conversation.id, `${agent}-history`);
+    assert.equal(find(app, "DshChatPanel").props.conversation.id, `${agent}-history`);
     const header = find(app, "AgentChatHeader");
     header.props.onNew(); header.props.onNew(); await settle();
     const created = app.calls.filter((call) => call.method === "POST");
     assert.equal(created.length, 1, "repeated taps must not start multiple conversations or send a message");
     assert.equal(created[0].path, "/conversations"); assert.equal(created[0].body.agent_id, agent); assert.equal(created[0].body.project_id, null);
-    const chat = find(app, "ChatPanel"); assert.equal(chat.props.conversation.id, `${agent}-created`); assert.equal(chat.props.conversation.agent_id, agent);
-    assert.equal(chat.props.initialKind, "chat"); assert.equal(find(app, "AiHome"), undefined);
+    const chat = find(app, "DshChatPanel"); assert.equal(chat.props.conversation.id, `${agent}-created`); assert.equal(chat.props.conversation.agent_id, agent);
+    assert.equal(find(app, "AiHome"), undefined);
     assert.equal(app.welcome.value.text, "hello", "starting a child conversation preserves the main agent draft");
     assert.equal(find(app, "AgentChatHeader").props.status, undefined);
     find(app, "AgentChatHeader").props.onClose(); assert.ok(find(app, pageName));
@@ -340,9 +338,9 @@ test("new from the welcome or a main conversation returns to the preserved main 
     const app = appHarness(); app.render(); await settle();
     const home = find(app, "HomePanel");
     if (current === "welcome") app.renderTabs().find((node) => node.props.accessibilityLabel === "知行").props.onPress();
-    else { home.props.onOpenConversation("main-history"); await settle(); assert.ok(find(app, "ChatPanel")); }
+    else { home.props.onOpenConversation("main-history"); await settle(); assert.ok(find(app, "DshChatPanel")); }
     find(app, "AgentChatHeader").props.onNew(); await settle();
-    assert.equal(find(app, "AiHome").props.draft, "hello"); assert.equal(find(app, "ChatPanel"), undefined);
+    assert.equal(find(app, "AiHome").props.draft, "hello"); assert.equal(app.render().some(n => n.type === "ChatPanel"), false);
     assert.equal(find(app, "AgentChatHeader").props.onPin, undefined);
     assert.equal(app.calls.some((call) => call.method === "POST"), false);
     find(app, "AgentChatHeader").props.onClose(); assert.ok(find(app, "HomePanel")); app.unmount();
@@ -396,24 +394,13 @@ test("every welcome suggestion keeps chat mode and the composer exposes no task 
   assert.equal(controls.some((node) => /任务|切换模式/.test(node.props.accessibilityLabel)), false);
 });
 
-test("chat completion refreshes service data and reminders immediately while ordinary polling does not replan", async () => {
+test("native chat changes refresh the finance and health surfaces and local reminders", async () => {
   const app = appHarness(); app.render(); await settle(); openLifeService(app, "health");
   assert.equal(find(app, "HealthPage").props.refreshKey, 0);
   find(app, "HealthPage").props.onChat(); await settle();
-  const chat = () => find(app, "ChatPanel");
-  const run = (id, status) => ({ id, conversation_id: "health-history", status, kind: "chat" });
-  chat().props.onRefresh(); app.render();
-  assert.equal(app.reminderVersions.at(-1), 0, "sending or refreshing a chat does not imply a saved meal");
-  chat().props.onRunsChanged([run("meal-run", "running")]); app.render(); assert.equal(app.reminderVersions.at(-1), 0);
-  chat().props.onRunsChanged([run("meal-run", "completed")]); app.render(); assert.equal(app.reminderVersions.at(-1), 1);
-  chat().props.onRunsChanged([run("meal-run", "completed")]); app.render(); assert.equal(app.reminderVersions.at(-1), 1);
-  chat().props.onRunsChanged([run("partly-saved", "failed"), run("cancel-after-write", "cancelled")]); app.render();
-  assert.equal(app.reminderVersions.at(-1), 2, "a terminal batch triggers one latest-data sync even after partial failure");
-  chat().props.onRunsChanged([run("partly-saved", "running")]); app.render();
-  chat().props.onRunsChanged([run("partly-saved", "failed")]); app.render(); assert.equal(app.reminderVersions.at(-1), 3, "a resumed run can complete service writes before failing again");
-  app.back(); assert.equal(find(app, "HealthPage").props.refreshKey, 3);
-  find(app, "HealthPage").props.onChat(); await settle();
-  chat().props.onRunsChanged([run("meal-run", "completed")]); app.render(); assert.equal(app.reminderVersions.at(-1), 3, "opening the same saved chat does not reschedule old completion receipts");
+  find(app, "DshChatPanel").props.onRefresh(); app.render();
+  assert.equal(app.reminderVersions.at(-1), 1);
+  app.back(); assert.equal(find(app, "HealthPage").props.refreshKey, 1);
   app.unmount();
 });
 

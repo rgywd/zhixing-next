@@ -68,7 +68,7 @@ function session(cache, request) {
 }
 const conversation = { id: "c1", title: "已缓存会话", agent_id: null, updated_at: "2026-10-28" };
 function response(path) {
-  if (path === "/status") return { worker_online: true, model_ready: true };
+  if (path === "/status") return { runtime: "dsh", worker_online: true, model_ready: true };
   if (path === "/assistant") return { name: "知行", persona: "test" };
   if (path === "/models") return { items: [] };
   if (path === "/conversations/c1") return conversation;

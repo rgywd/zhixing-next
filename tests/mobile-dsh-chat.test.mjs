@@ -204,7 +204,7 @@ test('regenerate acts directly on the assistant reply; cancelling inline edit re
   assert.equal(sent.body.seq, 2); assert.equal(sent.body.kind, 'retry');
   assert.equal(app.store.draft.revision, undefined); assert.equal(app.composer().text, 'fix this'); app.unmount();
 });
-test('version changes replace reused native sequence numbers and cache published sidecars without fake events', async () => {
+test('version changes replace reused native sequence numbers and cache native history without an artifact store', async () => {
   const app = harness(); app.snapshot.events = revisionEvents; app.snapshot.next = 4;
   app.snapshot.history = { active: app.props.conversation.id, versions: [{ id: app.props.conversation.id, label: '原始版本' }] };
   app.render(); await settle();
@@ -214,10 +214,9 @@ test('version changes replace reused native sequence numbers and cache published
   const rows = app.render().find(n => n.type === 'FlatList').props.data;
   assert.equal(rows.length, 1); assert.equal(protocol.rowText(rows[0]), 'replacement');
   app.snapshot.events = [];
-  app.snapshot.artifacts = [{ id: 'publish', toolSeq: 5, content: [{ type: 'file', attachment: { attachmentId: 'published' } }] }];
   app.tick(); await settle();
   assert.equal(app.cache.at(-1).historyId, 'child'); assert.equal(app.cache.at(-1).events.length, 1);
-  assert.equal(app.cache.at(-1).artifacts[0].id, 'publish'); app.unmount();
+  assert.equal(Object.hasOwn(app.cache.at(-1), 'artifacts'), false); app.unmount();
 });
 
 test('stale search results cannot highlight a different message with a reused sequence number', async () => {

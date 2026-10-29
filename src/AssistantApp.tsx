@@ -4,7 +4,7 @@ import { ThemeProvider } from "./ThemeProvider";
 import { AgentChatHeader } from "./AgentChatHeader";
 import { ChatPreferencesProvider } from "./chatPreferences";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
-import { useUi, ActionLink, BackLink, Button, humanError, PageHeading, PageScrollView } from "./ui";
+import { useUi, BackLink, Button, humanError, PageHeading, PageScrollView } from "./ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
@@ -31,20 +31,12 @@ import {
   type MessageInput,
   type Page,
   type ReasoningEffort,
-  type Resource,
-  type Run,
 } from "./api";
 import { ConnectionStatusProvider, ServiceStatusNotice } from "./ConnectionStatus";
 import { NoticeProvider } from "./Notice";
-import { ChatPanel } from "./ChatPanel";
 import { DshChatPanel, DshHostSettings } from "./DshChatPanel";
-import { BottomSheet } from "./BottomSheet";
 import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
-import { ResourcesPanel } from "./ResourcesPanel";
-import { ModelsPanel } from "./ModelsPanel";
-import { ProvidersPanel } from "./ProvidersPanel";
-import { ResourcePreview } from "./ResourcePreview";
 import { useHomePreferences } from "./useHomePreferences";
 import { useWelcomeDraft } from "./useWelcomeDraft";
 import { usePhotoPicker } from "./usePhotoPicker";
@@ -57,11 +49,9 @@ import { LifeSummary } from "./LifeSummary";
 import { LifePanel } from "./LifePanel";
 import { ConstructionPage } from "./ConstructionPage";
 import { useHealthReminders } from "./useHealthReminders";
-import { ConnectionSettingsPanel, PersonaSettingsPanel } from "./SettingsPanel";
+import { ConnectionSettingsPanel } from "./SettingsPanel";
 import { SettingsHome, type SettingsDestination } from "./SettingsHome";
 import { PasswordVaultPanel } from "./PasswordVaultPanel";
-import { SearchPicker } from "./SearchPicker";
-import { AgentsPanel } from "./AgentsPanel";
 import { DeviceCapabilitiesPanel } from "./DeviceCapabilitiesPanel";
 import {
   draftKey,
@@ -244,32 +234,27 @@ function ConnectedSession({
   const todayDevice = useTodayDeviceContext(tab === "home");
   const [lifePage, setLifePage] = useState<LifePage>("overview");
   const [chatReturn, setChatReturn] = useState<ChatReturn>({ tab: "home", lifePage: "overview" });
-  const [settingsView, setSettingsView] = useState<"overview" | Exclude<SettingsDestination, "search">>("overview");
+  const [settingsView, setSettingsView] = useState<"overview" | SettingsDestination>("overview");
   const navigation = useRef(0);
-  const [resourceReturnTab, setResourceReturnTab] = useState<Tab>("settings");
-  const [previewResource, setPreviewResource] = useState<Resource | null>(null);
   const home = useHomePreferences(connection.url);
-  const { assistant, setAssistant, status, runtime, lastSyncFailed, conversations, setConversations, agents, catalog, setCatalog,
-    recentResources, selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive } = useSessionData(connection);
-  const [showSearchSettings, setShowSearchSettings] = useState(false);
-  const dsh = runtime === "dsh";
+  const { assistant, status, lastSyncFailed, conversations, setConversations, agents, catalog,
+     selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive } = useSessionData(connection);
   const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number; version?: string } | null>(null);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
 
   const [chatSettingsFor, setChatSettingsFor] = useState<string | null>(null);
   const [chatFilesFor, setChatFilesFor] = useState<string | null>(null);
-  const [chatPreferencesReturn, setChatPreferencesReturn] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
   const welcome = useWelcomeDraft(connection.url);
-  const { text: welcomeDraft, models: welcomeModels, efforts: welcomeEfforts, searchId: welcomeSearchId } = welcome.value;
+  const { text: welcomeDraft, models: welcomeModels, efforts: welcomeEfforts } = welcome.value;
   const welcomeKind = "chat" as const;
-  const { setText: setWelcomeDraft, setKind: setWelcomeKind, setSearch: setWelcomeSearchId } = welcome;
+  const { setText: setWelcomeDraft, setKind: setWelcomeKind } = welcome;
   const [chatStart, setChatStart] = useState<{ id: string; kind: "chat" | "task"; taskModelId: string | null; taskEffort: ReasoningEffort | null; searchId: string | null; files: boolean; send?: boolean } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const welcomePhotoPicker = usePhotoPicker({ scope: `${connection.url}\n${connection.token}\nwelcome`,
     ids: (welcome.value.photos ?? []).map((photo) => photo.id), locked: !welcome.ready || busy,
-    add: welcome.addPhotos, onError: setError, maxAttachments: dsh ? null : 8 });
+    add: welcome.addPhotos, onError: setError, maxAttachments: null });
   const creatingConversation = useRef(false);
   const creationReceipt = useRef<{ key: string; conversation: Conversation } | null>(null);
   const [keyboardVisible, setKeyboardVisible] = useState(() => Keyboard.isVisible());
@@ -277,7 +262,6 @@ function ConnectedSession({
   const selectedAgent = agents.find((item) => item.id === selected?.agent_id);
   const chatAssistantName = selected?.agent_id ? selectedAgent?.name ?? (selected.agent_id === "finance" ? "财务助手" : selected.agent_id === "health" ? "健康助手" : "专属助手") : assistant?.name ?? "知行";
   const [serviceVersion, setServiceVersion] = useState(0);
-  const observedRunStates = useRef(new Map<string, Run["status"]>());
   const showTabs = tab !== "chat" && (tab !== "life" || lifePage === "overview") && (tab !== "settings" || settingsView === "overview");
   const chatMenuScope = `${tab}:${selectedId ?? ""}:${showWelcome}`;
   const [previousChatMenuScope, setPreviousChatMenuScope] = useState(chatMenuScope);
@@ -298,13 +282,13 @@ function ConnectedSession({
       navigation.current++;
       if (Keyboard.isVisible()) { Keyboard.dismiss(); return true; }
       if (tab === "chat") { setTab(chatReturn.tab); setLifePage(chatReturn.lifePage); return true; }
-      if (tab === "settings" && settingsView !== "overview") { setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); if (settingsView === "chat" && chatPreferencesReturn) { setChatPreferencesReturn(false); setTab("chat"); } return true; }
+      if (tab === "settings" && settingsView !== "overview") { setSettingsView("overview"); return true; }
       if (tab === "life" && lifePage !== "overview") { setLifePage("overview"); return true; }
       if (tab !== "home") { setTab("home"); return true; }
       return false;
     });
     return () => listener.remove();
-  }, [tab, chatReturn, lifePage, settingsView, resourceReturnTab, chatPreferencesReturn]);
+  }, [tab, chatReturn, lifePage, settingsView]);
   function closeChat() {
     navigation.current++;
     setTab(chatReturn.tab);
@@ -326,7 +310,7 @@ function ConnectedSession({
     if (next === "chat") openMainChat();
     else setTab(next);
     if (next === "life") setLifePage("overview");
-    if (next === "settings") { setSettingsView("overview"); setChatPreferencesReturn(false); }
+    if (next === "settings") { setSettingsView("overview"); }
   }
   async function openConversation(id: string, messageSeq?: number, version?: string) {
     const requestId = ++navigation.current;
@@ -348,16 +332,6 @@ function ConnectedSession({
     if (tab !== "chat") setChatReturn({ tab, lifePage });
     setTab("chat");
     refresh();
-  }
-  function openResources() { navigation.current++; setResourceReturnTab(tab); setSettingsView("resources"); setTab("settings"); }
-  async function openResource(id: string) {
-    const requestId = ++navigation.current;
-    try {
-      const item = recentResources.find((resource) => resource.id === id) ?? await request<Resource>(connection, `/resources/${id}`);
-      if (!alive.current || requestId !== navigation.current) return;
-      home.opened({ kind: "resource", id, title: item.name });
-      setPreviewResource(item);
-    } catch (e) { if (alive.current && requestId === navigation.current) setError(humanError(e)); }
   }
   function focusHandled(seq: number) { setFocusMessage((old) => old?.seq === seq ? null : old); }
 
@@ -401,7 +375,6 @@ function ConnectedSession({
             : initial!.text,
           ...(initial?.kind === "task" && initial.modelId ? { model_id: initial.modelId } : {}),
           ...(initial?.kind === "task" && initial.effort ? { reasoning_effort: initial.effort } : {}),
-          ...(initial?.searchId ? { search_provider_id: initial.searchId } : {}),
         };
         const key = draftKey(connection.url, conversation.id);
         await saveDraft(key, { text: payload.content, pending: payload });
@@ -445,19 +418,17 @@ function ConnectedSession({
   const welcomeStatus = lastSyncFailed ? "重新连接" : !status || !catalog ? "连接中" : !status.worker_online ? "服务离线" : (!welcomePreference.modelId && !status.model_ready) || !welcomeModel?.ready ? "未就绪" : busy ? "处理中" : "待命中";
   function submitWelcome() {
     const text = welcomeDraft.trim();
-    if ((text || welcome.value.photos?.length) && welcome.ready && !busy && !welcomePhotoPicker.picking) void newConversation(false, null, true, { text, photos: welcome.value.photos, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId });
+    if ((text || welcome.value.photos?.length) && welcome.ready && !busy && !welcomePhotoPicker.picking) void newConversation(false, null, true, { text, photos: welcome.value.photos, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: null });
   }
   const welcomeControls = {
-    dsh,
-    connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchProviderId: welcomeSearchId,
+    connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort,
     draftReady: welcome.ready, draftError: welcome.error, onRetryDraft: welcome.retry,
     photos: welcome.value.photos, pickingPhotos: welcomePhotoPicker.picking,
     onPhotos: () => { void welcomePhotoPicker.pick(); },
     onRemovePhoto: (id: string) => { void welcome.removePhoto(id).catch((e) => setError(humanError(e))); },
     onModelId: (id: string | null) => welcome.setModel(welcomeKind, id),
     onEffort: (value: ReasoningEffort | null) => welcome.setEffort(welcomeKind, value),
-    onSearchProviderId: setWelcomeSearchId,
-    onFiles: () => { if (welcome.ready && !busy) void newConversation(false, null, true, { text: welcomeDraft, photos: welcome.value.photos, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: welcomeSearchId, filesOnly: true }); },
+    onFiles: () => { if (welcome.ready && !busy) void newConversation(false, null, true, { text: welcomeDraft, photos: welcome.value.photos, kind: welcomeKind, modelId: welcomePreference.modelId, effort: welcomePreference.effort, searchId: null, filesOnly: true }); },
   };
   function openAgent(agentId: string) {
     const existing = [...conversations].reverse().find((item) => item.agent_id === agentId);
@@ -465,16 +436,6 @@ function ConnectedSession({
     else void newConversation(false, agentId);
   }
   const serviceChanged = useCallback(() => { setServiceVersion((old) => old + 1); refresh(); }, [refresh]);
-  const chatRunsChanged = useCallback((runs: Run[]) => {
-    let settled = false;
-    for (const run of runs) {
-      const previous = observedRunStates.current.get(run.id);
-      observedRunStates.current.set(run.id, run.status);
-      // A failed/cancelled response can still have completed service writes.
-      if (previous !== run.status && ["completed", "failed", "cancelled", "interrupted"].includes(run.status)) settled = true;
-    }
-    if (settled) serviceChanged();
-  }, [serviceChanged]);
   function lifeChat(prompt: string) {
     setWelcomeDraft((old) => `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${prompt}`);
     openMainChat();
@@ -508,12 +469,12 @@ function ConnectedSession({
         </Text>
       ) : null}
       {tab === "home" ? (
-        <HomePanel device={todayDevice} conversations={conversations} resources={recentResources}
+        <HomePanel device={todayDevice} conversations={conversations}
           connection={connection} refreshKey={serviceVersion} status={status ? { ...status, model_ready: !!welcomeModel?.ready && (!!welcomePreference.modelId || status.model_ready) } : null}
           loading={loading || !catalog} syncFailed={lastSyncFailed} onPrompt={homeChat} promptReady={welcome.ready && !busy}
-          preferences={{ ...home.preferences, pins: home.preferences.pins.filter((item) => item.kind !== "project"), visited: home.preferences.visited?.filter((item) => item.kind !== "project") ?? [] }}
+          preferences={{ ...home.preferences, pins: home.preferences.pins.filter((item) => item.kind === "conversation"), visited: home.preferences.visited?.filter((item) => item.kind === "conversation") ?? [] }}
           preferencesReady={home.ready} preferenceError={home.error} onPreferenceRetry={home.retry} onTogglePin={home.toggle}
-          onOpenResource={openResource} onResources={openResources} onOpenConversation={openConversation}
+          onOpenConversation={openConversation}
           onLife={() => selectTab("life")} onWork={() => selectTab("work")}
           onFinance={() => openLifePage("finance")} onHealth={() => openLifePage("health")} />
       ) : tab === "work" ? (
@@ -536,14 +497,14 @@ function ConnectedSession({
             onNew={() => { if (!showWelcome && selected?.agent_id) void newConversation(false, selected.agent_id); else setShowWelcome(true); }}
             onClose={closeChat}
             onSettings={!showWelcome && selected ? () => { setChatFilesFor(null); setChatSettingsFor(selected.id); } : undefined}
-            onFiles={!showWelcome && selected && dsh ? () => { setChatSettingsFor(null); setChatFilesFor(selected.id); } : undefined}
+            onFiles={!showWelcome && selected ? () => { setChatSettingsFor(null); setChatFilesFor(selected.id); } : undefined}
             pinned={Boolean(selected && home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`))}
             pinReady={home.ready}
             onPin={!showWelcome && selected ? () => home.toggle({ kind: "conversation", id: selected.id, title: selected.title }) : undefined}
           />
           {showWelcome ? (
             <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />
-          ) : selected && dsh ? (
+          ) : selected ? (
             <DshChatPanel key={selected.id} connection={connection} conversation={selected} assistantName={chatAssistantName}
               focusMessageVersion={focusMessage?.conversationId === selected.id ? focusMessage.version : undefined}
               focusMessageSeq={focusMessage?.conversationId === selected.id ? focusMessage.seq : null} onFocusHandled={focusHandled}
@@ -556,47 +517,16 @@ function ConnectedSession({
               settingsOpen={chatSettingsFor === selected.id} onSettingsClose={() => setChatSettingsFor(null)}
               filesOpen={chatFilesFor === selected.id} onFilesClose={() => setChatFilesFor(null)}
               onFilesOpen={() => setChatFilesFor(selected.id)} />
-          ) : selected ? (
-            <ChatPanel
-              key={selected.id}
-              connection={connection}
-              conversation={selected}
-              focusMessageSeq={focusMessage?.conversationId === selected.id ? focusMessage.seq : null}
-              onFocusHandled={focusHandled}
-              assistantName={chatAssistantName}
-              catalog={catalog}
-              agentModelId={selectedAgent?.model_id ?? null}
-              initialKind={chatStart?.id === selected.id ? chatStart.kind : "chat"}
-              initialTaskModelId={chatStart?.id === selected.id ? chatStart.taskModelId : null}
-              initialTaskEffort={chatStart?.id === selected.id ? chatStart.taskEffort : null}
-              initialSearchId={chatStart?.id === selected.id ? chatStart.searchId : null}
-              startWithSend={chatStart?.id === selected.id && chatStart.send}
-              onSendStarted={() => setChatStart((old) => old ? { ...old, send: false } : null)}
-              startWithFiles={chatStart?.id === selected.id && chatStart.files}
-              onFilesOpened={() => setChatStart((old) => old ? { ...old, files: false } : null)}
-              onConversationChanged={(updated) => setConversations((old) => mergeById(old, [updated]))}
-              onRefresh={refresh}
-              onRunsChanged={chatRunsChanged}
-              settingsOpen={chatSettingsFor === selected.id}
-              onSettingsClose={() => setChatSettingsFor(null)}
-              onOpenChatSettings={() => { setChatSettingsFor(null); setChatPreferencesReturn(true); navigation.current++; setSettingsView("chat"); setTab("settings"); }}
-              pinned={home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`)}
-              pinReady={home.ready}
-              onPin={() => home.toggle({ kind: "conversation", id: selected.id, title: selected.title })}
-            />
           ) : <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy || loading} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />}
         </>
       ) : settingsView === "overview" ? (
-        <SettingsHome assistant={assistant} catalog={catalog} connectionUrl={connection.url} onOpen={(destination) => {
-          if (destination === "search") setShowSearchSettings(true);
-          else { if (destination === "resources") setResourceReturnTab("settings"); setChatPreferencesReturn(false); setSettingsView(destination); }
-        }} />
+        <SettingsHome connectionUrl={connection.url} onOpen={setSettingsView} />
       ) : settingsView === "vault" ? (
         <PasswordVaultPanel onBack={() => { navigation.current++; setSettingsView("overview"); }} />
       ) : (
         <>
-          <BackLink label={settingsView === "chat" && chatPreferencesReturn ? "对话" : settingsView === "resources" && resourceReturnTab === "home" ? "首页" : "设置"} onPress={() => { navigation.current++; setSettingsView("overview"); if (settingsView === "resources") setTab(resourceReturnTab); if (settingsView === "chat" && chatPreferencesReturn) { setChatPreferencesReturn(false); setTab("chat"); } }} />
-          {dsh && ["models", "providers", "agents", "persona"].includes(settingsView) ? (
+          <BackLink label="设置" onPress={() => { navigation.current++; setSettingsView("overview"); }} />
+          {settingsView === "host" ? (
             <DshHostSettings webUrl={status?.web_url} />
           ) : settingsView === "chat" ? (
             <ChatSettingsPanel />
@@ -605,24 +535,9 @@ function ConnectedSession({
               setWelcomeDraft((old) => `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${text}\n\n`);
               setShowWelcome(true); setChatReturn({ tab: "settings", lifePage }); setTab("chat");
             }} />
-          ) : settingsView === "agents" ? (
-            <AgentsPanel connection={connection} agents={agents} onChanged={refresh} onChat={openAgent} onNewChat={(id) => { void newConversation(false, id); }} />
-          ) : settingsView === "models" ? (
-            <ModelsPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
-          ) : settingsView === "providers" ? (
-            <ProvidersPanel connection={connection} catalog={catalog} onCatalog={setCatalog} />
-          ) : settingsView === "resources" ? (
-            <ResourcesPanel connection={connection} onOpenConversation={openConversation} />
           ) : settingsView === "connection" ? (
             <ConnectionSettingsPanel connection={connection} onConnect={onConnect} onDisconnect={onDisconnect} onExplore={() => { void newConversation(true); }} />
-          ) : assistant ? (
-            <PersonaSettingsPanel connection={connection} assistant={assistant} onAssistant={setAssistant} />
-          ) : (
-            <PageScrollView>
-              <PageHeading title="人格偏好" description="暂时无法读取人格设定，连接恢复后可继续编辑。" />
-              <ActionLink icon="refresh-outline" onPress={refresh}>重新加载</ActionLink>
-            </PageScrollView>
-          )}
+          ) : null}
         </>
       )}
       {showTabs && !keyboardVisible ? <BottomTabs value={tab} onChange={selectTab} /> : null}
@@ -639,9 +554,6 @@ function ConnectedSession({
         onMore={() => { void loadMore(); }}
         onNew={() => { setShowAiDrawer(false); openMainChat(); }}
       />
-      <ResourcePreview connection={connection} resource={previewResource} onClose={() => setPreviewResource(null)} />
-      {dsh ? <BottomSheet visible={showSearchSettings} title="搜索能力" onClose={() => setShowSearchSettings(false)}><DshHostSettings webUrl={status?.web_url} /></BottomSheet> : <SearchPicker visible={showSearchSettings} connection={connection} management selectedId={welcomeSearchId} onSelect={setWelcomeSearchId}
-        onRemoved={(id) => setChatStart((old) => old?.searchId === id ? { ...old, searchId: null } : old)} onClose={() => setShowSearchSettings(false)} />}
 
     </View>
   );

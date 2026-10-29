@@ -88,7 +88,6 @@ export function useWelcomeDraft(url: string) {
   async function addPhotos(photos: DraftPhoto[]) {
     if (!readable.current) throw new Error("草稿尚未读取，请先重试读取。");
     const merged = [...(current.current.photos ?? []), ...photos];
-    if (merged.length > 8) throw new Error("每条消息最多 8 份附件。");
     current.current = { ...current.current, photos: merged };
     setValue(current.current); await persist(current.current);
   }

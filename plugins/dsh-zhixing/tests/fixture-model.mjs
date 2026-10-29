@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 export const inject = ['llm'];
 export function apply(ctx, config) {
   class Fixture extends LlmAdapter {
-    async listModels(provider) { return [{ provider, id: 'fixture', name: 'Local acceptance fixture' }]; }
+    async listModels(provider) { return ['fixture', 'fixture-other'].map(id => ({ provider, id, name: `Local acceptance ${id}` })); }
     async resolveModel(provider, model) { return { provider, id: model, name: model, contextWindow: 128000, inputModalities: ['text', 'image'] }; }
     async *stream(options) {
       const messages = options.messages;

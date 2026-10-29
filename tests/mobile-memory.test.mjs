@@ -191,17 +191,10 @@ test("memory leave guard retains unsaved changes and blocks exit until a pending
   page.unmount(); assert.equal(leaveGuardRef.current, null);
 });
 
-test("drawer system back and backdrop both use the memory leave guard", () => {
-  const closed = [], attempts = [];
-  const page = mount({ visible: true, name: "知行", conversations: [], onClose: () => closed.push(true) }, "AiDrawer");
-  find(page, label("记忆")).props.onPress();
-  const panel = find(page, (node) => node.type === "MemoryPanel");
-  panel.props.leaveGuardRef.current = (leave) => attempts.push(leave);
+test("drawer delegates memory to DSH plugins and has no independent memory editor", () => {
+  const calls = [], page = mount({ visible: true, name: "知行", conversations: [], hasMore: false, onClose: () => calls.push("close"), onNew() {}, onMore() {}, onOpen() {} }, "AiDrawer");
+  assert.equal(find(page, label("记忆")), undefined);
+  assert.equal(find(page, (node) => node.type === "MemoryPanel"), undefined);
   find(page, (node) => node.type === "Modal").props.onRequestClose();
-  find(page, label("关闭侧边栏")).props.onPress();
-  assert.equal(attempts.length, 2);
-  assert.equal(closed.length, 0);
-  attempts[1]();
-  assert.equal(closed.length, 1);
-  assert.ok(!find(page, (node) => node.type === "MemoryPanel"));
+  assert.deepEqual(calls, ["close"]);
 });

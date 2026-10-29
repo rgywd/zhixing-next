@@ -1,12 +1,11 @@
 import type { ThemeColors } from "./theme";
 import { useUi, humanError, timeLabel } from "./ui";
 import { useThemedStyles } from "./ThemeProvider";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ActivityIndicator, Animated, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { request, type Connection, type Conversation, type ConversationSearchResult } from "./api";
-import { MemoryPanel } from "./MemoryPanel";
 
 import { layout, radius, space, typography } from "./theme";
 
@@ -38,13 +37,12 @@ export function AiDrawer({
 }) {
   const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
-  const [view, setView] = useState<"history" | "search" | "memory">("history");
+  const [view, setView] = useState<"history" | "search">("history");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SearchSort>("relevance");
   const [results, setResults] = useState<ConversationSearchResult[]>([]);
   const [searchBusy, setSearchBusy] = useState(false);
   const [searchError, setSearchError] = useState("");
-  const memoryLeaveGuardRef = useRef<((leave: () => void) => void) | null>(null);
   const [slide] = useState(() => new Animated.Value(-380));
   const [cutoff] = useState(() => Date.now() - 7 * 24 * 60 * 60 * 1000);
   useEffect(() => {
@@ -77,9 +75,7 @@ export function AiDrawer({
     setView("history"); setQuery(""); setResults([]); setSearchBusy(false); setSearchError("");
   }
   function close() {
-    const leave = () => { reset(); onClose(); };
-    if (view === "memory" && memoryLeaveGuardRef.current) memoryLeaveGuardRef.current(leave);
-    else leave();
+    reset(); onClose();
   }
   function changeQuery(value: string) {
     setQuery(value); setResults([]); setSearchError(""); setSearchBusy(!!value.trim());
@@ -95,7 +91,7 @@ export function AiDrawer({
       {item.blocked ? <Ionicons name="pause-circle-outline" size={16} color={colors.muted} /> : null}
     </Pressable>;
   }
-  function shortcut(label: string, icon: "search-outline" | "library-outline", onPress: () => void) {
+  function shortcut(label: string, icon: "search-outline", onPress: () => void) {
     return <Pressable key={label} accessibilityRole="button" accessibilityLabel={label} onPress={onPress} style={({ pressed }) => [styles.shortcut, pressed && s.pressed]}>
       <Ionicons name={icon} size={20} color={colors.accent} />
       <Text style={styles.shortcutText}>{label}</Text>
@@ -107,7 +103,7 @@ export function AiDrawer({
       <View style={styles.overlay}>
         <Animated.View style={[styles.panel, { transform: [{ translateX: slide }] }]}>
           <SafeAreaView style={styles.safeArea}>
-            {view === "memory" ? <MemoryPanel connection={connection} onBack={() => setView("history")} leaveGuardRef={memoryLeaveGuardRef} /> : view === "search" ? (
+            {view === "search" ? (
               <View style={styles.page}>
                 <View style={styles.topLine}>
                   <Pressable accessibilityRole="button" accessibilityLabel="返回对话历史" onPress={() => setView("history")} style={styles.iconButton}><Ionicons name="arrow-back" size={21} color={colors.ink} /></Pressable>
@@ -142,7 +138,6 @@ export function AiDrawer({
                 </View>
                 <View style={styles.shortcuts}>
                   {shortcut("搜索", "search-outline", () => { setView("search"); setSearchBusy(!!query.trim()); })}
-                  {shortcut("记忆", "library-outline", () => setView("memory"))}
                 </View>
                 <View style={styles.historyHead}><Text style={styles.heading}>对话历史</Text><Text style={styles.count}>{ordered.length}{hasMore ? "+" : ""}</Text></View>
                 <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.historyList}>
