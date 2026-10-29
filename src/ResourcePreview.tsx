@@ -18,13 +18,13 @@ export function resourceDetail(resource: Resource) {
   return `${type && type !== resource.name.toUpperCase() ? type : "文件"} · ${size}`;
 }
 
-export function ResourceImage({ connection, resource, style, contain = false, label }: {
-  connection: Connection; resource: Resource; style?: StyleProp<ViewStyle>; contain?: boolean; label?: string;
+export function ResourceImage({ connection, resource, style, contain = false, label, contentPath }: {
+  connection: Connection; resource: Pick<Resource, "id" | "name">; style?: StyleProp<ViewStyle>; contain?: boolean; label?: string; contentPath?: string;
 }) {
   const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
   const [attempt, setAttempt] = useState(0);
-  const uri = `${connection.url}/v1/resources/${encodeURIComponent(resource.id)}/content?preview=true${attempt ? `&retry=${attempt}` : ""}`;
+  const uri = `${connection.url}/v1${contentPath ?? `/resources/${encodeURIComponent(resource.id)}/content`}?preview=true${attempt ? `&retry=${attempt}` : ""}`;
   const source = useMemo(() => ({ uri, headers: { Authorization: `Bearer ${connection.token}` } }), [uri, connection.token]);
   const [imageState, setImageState] = useState<{ source: typeof source; status: "loading" | "loaded" | "error" }>({ source, status: "loading" });
   const status = imageState.source === source ? imageState.status : "loading";

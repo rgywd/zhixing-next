@@ -2,6 +2,8 @@
 
 2026-10-29：新增独立 [DSH App 插件接口](../plugins/dsh-zhixing/README.md#接口与行为)。连接该入口时 `/v1/status.runtime` 为 `dsh`，会话／执行由 DSH 管理。Python 新增认证的 `GET /v1/business/schema`，从真实 OpenAPI 中导出业务路由及所需 schema，供插件调用数据服务；以下运行 API 仍描述旧 Python 兼容路径，不套用于 DSH。
 
+DSH 聊天快照的 `queue` 来自原生 Session state，保留 `queued`／`steering` 位置；`POST /v1/conversations/{id}/dsh/queue/{itemId}` 接收原生 `remove`、`steer`、`edit` action，并在持久化后返回。`GET /v1/conversations/{id}/dsh/images/{attachmentId}` 需要连接令牌，仅解析本对话历史中的原生图片引用，返回真实图片字节和媒体类型；不存在于该会话的引用返回 404，不接受任意文件路径。客户端提交附件前持久保存上传 receipt，发送重试复用 receipt 与消息请求 ID。
+
 状态：2026-10-23，当前源码包含数据库 v15 的人格成长、主动偏好、目标跟进与心跳，保留既有工具契约与 Agent 协作。历史安装、部署及验收状态以各版发布说明为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
 
 ## 交付范围

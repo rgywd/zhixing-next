@@ -10,11 +10,14 @@ import { useThemedStyles } from "./ThemeProvider";
 import { mediaColors, radius, space, typography, type ThemeColors } from "./theme";
 import { humanError, useUi } from "./ui";
 
-type Photo = { id: string; uri?: string; resource?: Resource; error?: string };
+type NativePhoto = { id: string; name: string; path: string };
+type Photo = { id: string; uri?: string; resource?: Resource; image?: NativePhoto; error?: string };
 
 function PhotoImage({ connection, photo, contain = false }: { connection?: Connection; photo: Photo; contain?: boolean }) {
   if (photo.uri) return <Image source={{ uri: photo.uri }} accessibilityLabel="照片" resizeMode={contain ? "contain" : "cover"} style={StyleSheet.absoluteFill} />;
-  return connection && photo.resource ? <ResourceImage connection={connection} resource={photo.resource} label="照片" contain={contain} style={StyleSheet.absoluteFill} /> : null;
+  const style = contain ? [StyleSheet.absoluteFill, { backgroundColor: mediaColors.background, borderRadius: 0 }] : StyleSheet.absoluteFill;
+  if (connection && photo.image) return <ResourceImage connection={connection} resource={photo.image} contentPath={photo.image.path} label="照片" contain={contain} style={style} />;
+  return connection && photo.resource ? <ResourceImage connection={connection} resource={photo.resource} label="照片" contain={contain} style={style} /> : null;
 }
 
 export function PhotoViewer({ connection, photos, selectedId, close }: {
@@ -88,18 +91,22 @@ export function DraftAttachments({ connection, attachments = [], photos = [], re
   </>;
 }
 
-export function MessagePhotos({ connection, items }: { connection: Connection; items: Resource[] }) {
+export function MessagePhotos({ connection, items = [], images = [] }: { connection: Connection; items?: Resource[]; images?: NativePhoto[] }) {
   const styles = useThemedStyles(createStyles);
   const { width } = useWindowDimensions();
   const [selected, setSelected] = useState<string | null>(null);
-  const photos = items.map((resource) => ({ id: resource.id, resource }));
+  const photos: Photo[] = [...items.map((resource) => ({ id: resource.id, resource })), ...images.map(image => ({ id: image.id, image }))];
   const available = Math.max(160, Math.min(width - 88, 360));
   const [measured, setMeasured] = useState(available);
-  const size = items.length === 1 ? Math.min(240, measured) : Math.floor((measured - space.xs) / 2);
+  const size = photos.length === 1 ? Math.min(240, measured) : Math.floor((measured - space.xs) / 2);
   return <>
-    <View onLayout={(event) => setMeasured(event.nativeEvent.layout.width)} style={[styles.messagePhotos, { width: items.length === 1 ? Math.min(240, available) : available, maxWidth: "100%" }]}>{photos.map((photo, index) => <Pressable key={photo.id} accessibilityRole="button" accessibilityLabel={`查看第 ${index + 1} 张照片`} onPress={() => setSelected(photo.id)} style={[styles.image, { width: size, height: size }]}>
-      <PhotoImage connection={connection} photo={photo} />
-    </Pressable>)}</View>
+    <View onLayout={event => setMeasured(event.nativeEvent.layout.width)} style={[styles.messagePhotos, { width: photos.length === 1 ? Math.min(240, available) : available, maxWidth: "100%" }]}>
+      {Array.from({ length: Math.ceil(photos.length / 2) }, (_, row) => <View key={row} style={{ flexDirection: "row", gap: space.xs }}>
+        {photos.slice(row * 2, row * 2 + 2).map((photo, index) => <Pressable key={photo.id} accessibilityRole="button" accessibilityLabel={`查看第 ${row * 2 + index + 1} 张照片`} onPress={() => setSelected(photo.id)} style={[styles.image, { width: size, height: size }]}>
+          <PhotoImage connection={connection} photo={photo} />
+        </Pressable>)}
+      </View>)}
+    </View>
     <PhotoViewer connection={connection} photos={photos} selectedId={selected} close={() => setSelected(null)} />
   </>;
 }
@@ -123,5 +130,5 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   file: { height: 64, width: 178, flexDirection: "row", alignItems: "center", borderRadius: radius.small, backgroundColor: colors.blueSoft },
   fileBody: { flex: 1, flexDirection: "row", alignItems: "center", gap: space.sm, paddingLeft: space.sm },
   fileRemove: { width: 44, height: 44, alignItems: "center", justifyContent: "center" },
-  messagePhotos: { flexDirection: "row", flexWrap: "wrap", gap: space.xs, marginVertical: space.xs },
+  messagePhotos: { gap: space.xs, marginVertical: space.xs },
 });
