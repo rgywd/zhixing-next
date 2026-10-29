@@ -4,31 +4,19 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { createRevisions } from './revisions.mjs';
-import { publishFile } from './artifacts.mjs';
 import { declaredFile, deliveryBytes } from './deliveries.mjs';
+import { businessPath } from './business/service.mjs';
 
 const page = items => ({ items, next_cursor: null, previous_cursor: null });
 const own = id => /^zhixing-(main|finance|health)-[a-f0-9-]+$/.test(id);
 const routeId = selection => JSON.stringify([selection.provider, selection.model]);
 const failure = (message, status = 400) => Object.assign(new Error(message), { status });
-const businessPath = path => /^\/v1\/(finance|health|life|memories|resources|business\/schema)(\/|\?|$)/.test(path);
 const textFile = name => /\.(txt|md|markdown|csv|json|jsonl|log|js|jsx|ts|tsx|py|sh|yaml|yml|toml|xml|html|css|sql|diff|patch|svg)$/i.test(name);
 const messageText = event => {
   if (event.type !== 'assistant/message' && !(event.type === 'user/message' && event.data.source?.kind === 'user')) return '';
   const content = event.data.message?.content ?? event.data.content;
   return Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text).join('\n') : '';
 };
-
-export async function businessRequest(config, path, method = 'GET', body, signal, raw = false) {
-  if (!config.businessUrl) throw failure('尚未连接知行业务数据服务。', 503);
-  if (!businessPath(path)) throw failure('不是知行业务数据接口。');
-  const base = new URL(config.businessUrl);
-  const url = new URL(path, base);
-  if (url.origin !== base.origin || (!businessPath(url.pathname))) throw failure('无效的业务接口路径。');
-  return fetch(url, { method, signal, redirect: 'error', headers: {
-    Authorization: `Bearer ${config.businessToken ?? ''}`, 'Content-Type': raw ? 'application/octet-stream' : 'application/json',
-  }, ...(body === undefined ? {} : { body: raw ? body : JSON.stringify(body) }), ...(raw ? { duplex: 'half' } : {}) });
-}
 
 async function json(req) {
   let source = '';
@@ -110,7 +98,6 @@ export function createInteractions(ctx, owns = own) {
 export async function startServer(ctx, config, native = {}) {
   if (typeof config.token !== 'string' || !config.token.trim()) throw new Error('ZHIXING_DSH_TOKEN is required');
   const token = Buffer.from(`Bearer ${config.token}`);
-  const artifacts = id => native.metadata.artifacts.get(id) ?? [];
   const children = new Set([...native.metadata.revisions.entries()].flatMap(([, state]) => state.entries.map(entry => entry.child)));
   const owns = id => own(id) || children.has(id);
   const interactions = createInteractions(ctx, owns);
@@ -148,6 +135,16 @@ export async function startServer(ctx, config, native = {}) {
     if (result.error) throw result.error;
     return result.agent;
   };
+  const selectModel = async (sessionId, body) => {
+    const defaults = (await ctx.sessionController.modelCatalog()).default;
+    let selected;
+    try { selected = body.model_id ? JSON.parse(body.model_id) : [defaults.provider, defaults.model]; }
+    catch { throw failure('无效的模型标识。'); }
+    if (!Array.isArray(selected) || selected.length !== 2 || selected.some(value => typeof value !== 'string' || !value)) throw failure('无效的模型标识。');
+    const [provider, model] = selected;
+    await ctx.sessionController.selectModel({ sessionId, provider, model,
+      ...(body.reasoning_effort && body.reasoning_effort !== 'auto' ? { reasoningEffort: body.reasoning_effort } : {}) });
+  };
   const flush = async id => { const session = ctx.sessions.get(id); if (session) await ctx.sessions.flush(session); };
   async function* records(id) {
     await flush(id);
@@ -163,8 +160,6 @@ export async function startServer(ctx, config, native = {}) {
   }
   const revisions = createRevisions(ctx, { records, resolve, flush, ...native, register: id => children.add(id) });
   const attachmentFor = async (id, attachmentId, type) => {
-    const published = artifacts(id).flatMap(a => a.content).find(b => b.type === type && b.attachment?.attachmentId === attachmentId);
-    if (published) return published.attachment;
     for await (const event of records(id)) {
       const content = event.data?.message?.content ?? event.data?.content;
       const ref = Array.isArray(content) ? content.find(block => block.type === type && block.attachment?.attachmentId === attachmentId)?.attachment : undefined;
@@ -198,7 +193,7 @@ export async function startServer(ctx, config, native = {}) {
       if (method === 'GET' && path === '/v1/status') {
         const catalog = await ctx.sessionController.modelCatalog();
         return reply({ runtime: 'dsh', model_ready: catalog.routableProviders.includes(catalog.default.provider) && catalog.groups.some(g => g.id === catalog.default.provider && g.models.some(m => m.id === catalog.default.model)), worker_online: true,
-          execution_available: true, business_connected: !!config.businessUrl, web_url: config.webUrl ?? null });
+          execution_available: true, business_connected: !!native.business, web_url: config.webUrl ?? null });
       }
       if (method === 'GET' && path === '/v1/assistant') return reply({ name: '知行', persona: '' });
       if (method === 'GET' && path === '/v1/models') {
@@ -209,7 +204,7 @@ export async function startServer(ctx, config, native = {}) {
         })));
         return reply(modelCatalog(catalog, images));
       }
-      if (method === 'GET' && path === '/v1/agents') return reply(page(config.businessUrl ? ['finance', 'health'].map(id => ({ id,
+      if (method === 'GET' && path === '/v1/agents') return reply(page(native.business ? ['finance', 'health'].map(id => ({ id,
         kind: 'service', service: id, name: id === 'finance' ? '财务助手' : '健康助手', description: 'DSH · 知行业务服务',
         instructions: '', tools: [], visible: true })) : []));
       if (method === 'GET' && ['/v1/conversations', '/v1/conversations/recent'].includes(path)) return reply(page((await list()).map(conversation)));
@@ -241,7 +236,10 @@ export async function startServer(ctx, config, native = {}) {
         const body = await json(req);
         const service = ['finance', 'health'].includes(body.agent_id) ? body.agent_id : 'main';
         const { sessionId } = await ctx.sessionController.create({ sessionId: `zhixing-${service}-${randomUUID()}` });
-        if (body.title?.trim()) await ctx.sessionController.rename({ sessionId, title: body.title.trim() });
+        // An upload may create the thread before its first message. Keep the
+        // placeholder out of native rename so DSH can generate the real title.
+        if (body.title?.trim() && body.title.trim() !== '新的对话') await ctx.sessionController.rename({ sessionId, title: body.title.trim() });
+        if (body.model_id || body.reasoning_effort) await selectModel(sessionId, body);
         await flush(sessionId);
         return reply(await get(sessionId), 201);
       }
@@ -268,10 +266,7 @@ export async function startServer(ctx, config, native = {}) {
         }
         if (method === 'PUT' && suffix === '/model') {
           const body = await json(req);
-          const defaults = (await ctx.sessionController.modelCatalog()).default;
-          const [provider, model] = body.model_id ? JSON.parse(body.model_id) : [defaults.provider, defaults.model];
-          await ctx.sessionController.selectModel({ sessionId: id, provider, model,
-            ...(body.reasoning_effort && body.reasoning_effort !== 'auto' ? { reasoningEffort: body.reasoning_effort } : {}) });
+          await selectModel(id, body);
           await flush(id); return reply(await get(root));
         }
         if (method === 'GET' && suffix === '/dsh') {
@@ -290,7 +285,7 @@ export async function startServer(ctx, config, native = {}) {
               kind: 'question', questions: question.questions, callId: question.callId });
           }
           const state = await ctx.sessionController.state({ sessionId: id }, signal());
-          return reply({ history, artifacts: artifacts(id), events, next: offset + events.length, hasMore: events.length === 256,
+          return reply({ history, events, next: offset + events.length, hasMore: events.length === 256,
             running: agent?.status === 'running', active: !!agent, pending,
             queue: (state.queue ?? []).filter(item => item.placement !== 'context'), live: live.get(id) ?? null });
         }
@@ -323,28 +318,6 @@ export async function startServer(ctx, config, native = {}) {
             await pipeline(Readable.from(deliveryBytes(ctx, target, abort.signal)), res);
             return;
           } finally { res.removeListener('close', disconnected); }
-        }
-        if (method === 'POST' && suffix === '/dsh/artifacts') {
-          const body = await json(req);
-          if (typeof body.id !== 'string' || !body.id || !Number.isSafeInteger(body.seq)) throw failure('无效的文件发布操作。');
-          if (body.version !== id) throw failure('对话版本已改变，请重新打开工具详情。', 409);
-          const events = []; for await (const event of records(id)) events.push(event);
-          const previous = artifacts(id).find(a => a.id === body.id);
-          if (previous) {
-            if (previous.toolSeq !== body.seq) throw failure('这次发布的文件已改变。', 409);
-            return reply(previous);
-          }
-          const call = events.find(e => e.seq === body.seq && e.type === 'tool/call' && ['read', 'write', 'edit'].includes(e.data.name));
-          const result = call && events.find(e => e.seq > call.seq && e.type === 'tool/result' &&
-            (e.data.message?.toolCallId ?? e.data.callId) === call.data.callId && e.data.turn === call.data.turn);
-          if (!result || result.data.error || result.data.message?.isError) throw failure('这一步没有成功的文件回执。');
-          let args; try { args = JSON.parse(call.data.arguments); } catch { args = call.data.arguments; }
-          const path = result.data.meta?.path ?? args?.file_path;
-          const agent = await resolve(id);
-          const value = await publishFile(ctx, agent, path);
-          const data = { id: body.id, toolSeq: call.seq, path: value.path, content: [{ type: 'file', attachment: value.attachment }] };
-          await native.metadata.artifacts.put(id, [...artifacts(id), data]);
-          return reply(data);
         }
         if (method === 'GET' && suffix.startsWith('/dsh/images/')) {
           const attachmentId = decodeURIComponent(suffix.slice('/dsh/images/'.length));
@@ -411,13 +384,9 @@ export async function startServer(ctx, config, native = {}) {
         const independent = method === 'GET' || suffix === '/dsh/cancel' || suffix.startsWith('/dsh/answers/') || (method === 'PUT' && suffix === '/dsh/files');
         return await (independent ? handle() : serial(root, handle));
       }
-      if (method === 'GET' && path === '/v1/resources' && !config.businessUrl) return reply(page([]));
       if (businessPath(path)) {
-        const raw = req.headers['content-type']?.startsWith('application/octet-stream');
-        const response = await businessRequest(config, path + url.search, method, ['GET', 'HEAD'].includes(method) ? undefined : raw ? req : await json(req), undefined, raw);
-        res.writeHead(response.status, { 'Content-Type': response.headers.get('content-type') ?? 'application/json', 'Cache-Control': 'no-store' });
-        if (response.body) await pipeline(Readable.fromWeb(response.body), res); else res.end();
-        return;
+        if (!native.business) throw failure('知行业务插件尚未就绪。', 503);
+        return reply(await native.business.request(path + url.search, method, method === 'GET' ? undefined : await json(req)));
       }
       throw failure('此入口由 DSH 宿主管理，请在 DSH 中配置。', 404);
     } catch (error) {

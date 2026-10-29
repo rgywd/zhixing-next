@@ -1,0 +1,22 @@
+[Unit]
+Description=Zhixing DSH host and mobile outlet
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=zhixing-next
+Group=zhixing-next
+WorkingDirectory=/var/lib/zhixing-next/dsh-workspace
+Environment=HOME=/var/lib/zhixing-next
+Environment=DSH_HOME=/var/lib/zhixing-next/dsh
+Environment=PATH=/opt/zhixing-next/runtimes/dsh-0.2.2-alpha.2/node-v24.21.0-linux-x64/bin:/opt/zhixing-next/runtimes/dsh-0.2.2-alpha.2/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+EnvironmentFile=/etc/zhixing-next/dsh.env
+ExecStart=/opt/zhixing-next/runtimes/dsh-0.2.2-alpha.2/node_modules/.bin/dsh web --patch /var/lib/zhixing-next/dsh/host.patch.yml --no-open --port 18791
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=90
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

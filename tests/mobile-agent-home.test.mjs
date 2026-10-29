@@ -52,7 +52,7 @@ test("welcome locks every entry and composer mutation while busy or waiting for 
     composer.props.onText("replace"); composer.props.onSend(); composer.props.onFiles(); composer.props.onKind("task");
     await nodes.find((node) => node.type === "ModelPicker").props.onSelect("task-model");
     await nodes.find((node) => node.type === "ReasoningPicker").props.onSelect("high");
-    nodes.find((node) => node.type === "SearchPicker").props.onSelect("search");
+    assert.equal(composer.props.onSearch, undefined);
     assert.deepEqual(app.calls, []);
   }
 });
@@ -69,20 +69,19 @@ test("welcome composer stays outside the scroll body and uses chat defaults desp
   assert.equal(picker.props.selectedId, "chat-model"); assert.equal(picker.props.title, "选择聊天模型");
 });
 
-test("welcome keeps draft recovery and model, reasoning, and search pickers working", async () => {
+test("welcome keeps draft recovery and model and reasoning controls while search belongs to the host", async () => {
   const app = harness({ draftError: "本机草稿尚未读取", draftReady: false }); let page = app.render();
   const retry = page.nodes.find((node) => node.type === "ActionLink");
   assert.equal(retry.props.children, "重新读取草稿"); retry.props.onPress();
   assert.deepEqual(app.calls, [["RetryDraft"]]);
   app.props.draftReady = true;
   let composer = app.render().nodes.find((node) => node.type === "ConversationComposer");
-  composer.props.onModel(); composer.props.onReasoning(); composer.props.onSearch();
+  composer.props.onModel(); composer.props.onReasoning(); assert.equal(composer.props.onSearch, undefined);
   page = app.render();
   assert.equal(page.nodes.find((node) => node.type === "ModelPicker").props.visible, true);
   assert.equal(page.nodes.find((node) => node.type === "ReasoningPicker").props.visible, true);
-  assert.equal(page.nodes.find((node) => node.type === "SearchPicker").props.visible, true);
+  assert.equal(page.nodes.some((node) => node.type === "SearchPicker"), false);
   await page.nodes.find((node) => node.type === "ModelPicker").props.onSelect("new-model");
   await page.nodes.find((node) => node.type === "ReasoningPicker").props.onSelect("high");
-  page.nodes.find((node) => node.type === "SearchPicker").props.onSelect("web");
-  assert.deepEqual(app.calls.slice(1), [["ModelId", "new-model"], ["Effort", null], ["Effort", "high"], ["SearchProviderId", "web"]]);
+  assert.deepEqual(app.calls.slice(1), [["ModelId", "new-model"], ["Effort", null], ["Effort", "high"]]);
 });

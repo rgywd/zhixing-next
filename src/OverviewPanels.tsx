@@ -61,7 +61,7 @@ export function HomePanel({ conversations, projects = [], resources = [], prefer
         <View style={s.row}><Text accessibilityRole="header" style={s.heading}>最近动态</Text><Text style={s.muted}>{recent.length} 条记录</Text></View>
         {onResources ? <ActionLink icon="folder-open-outline" tone="blue" onPress={onResources}>资源库</ActionLink> : null}
       </View>
-      {recent.length ? <View style={s.card}>{recent.map((item, index) => <ActionRow key={targetKey(item)} icon={icon(item)} title={item.title} description={`${kindLabel(item)} · ${timeLabel(item.time)}`} compact last={index === recent.length - 1} onPress={() => open(item)} tone={item.kind === "conversation" ? "red" : "blue"} />)}</View> : <Text style={s.description}>聊过的话题和最近的文件会出现在这里。</Text>}
+      {recent.length ? <View style={s.card}>{recent.map((item, index) => <ActionRow key={targetKey(item)} icon={icon(item)} title={item.title} description={`${kindLabel(item)} · ${timeLabel(item.time)}`} compact last={index === recent.length - 1} onPress={() => open(item)} tone={item.kind === "conversation" ? "red" : "blue"} />)}</View> : <Text style={s.description}>最近聊过的话题会出现在这里。</Text>}
       <BottomSheet visible={managing} title="整理常用" subtitle="固定在首页，按加入顺序排列；偏好保存在这台设备。" onClose={() => setManaging(false)}>
         <View style={{ paddingHorizontal: 20, paddingBottom: 12 }}>
           <Field label="查找对话" value={query} onChangeText={setQuery} placeholder="输入名称" />

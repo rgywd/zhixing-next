@@ -1,5 +1,7 @@
 # 文档入口
 
+- [DSH 业务迁移](DSH-BUSINESS-MIGRATION.md)：财务健康的原生存储、仅保留附件传输、旧资料归档与 Python 服务退役。
+
 - [0.2.10 DSH 对话与本机缓存](RELEASE-0.2.10.md)：聊天体验重做、消息编辑重答、原生文件交付与缓存，versionCode 12，同签覆盖升级。
 
 - [AI 对话重做与真实模型验收](AI-CHAT-REDESIGN-2026-10-29.md)：统一设计语言、原位编辑、直接重答、原生 present、工具与文件交付；先通过模拟器产品验收再合并。
@@ -10,7 +12,7 @@
 
 - [RikkaHub 与知行 DSH 对话详情产品对照](CHAT-EXPERIENCE-RIKKAHUB-COMPARISON.md)：布局、消息与输入、52 个界面条目、功能差距、实施优先级及验收清单；附[模拟器截图](CHAT-EXPERIENCE-RIKKAHUB-SCREENSHOTS.md)。
 
-- [DSH 插件接入](../plugins/dsh-zhixing/README.md)：移动端出口、原生宿主会话、工具事件、问答／取消、业务桥接与验收命令。
+- [DSH 插件接入](../plugins/dsh-zhixing/README.md)：移动端出口、原生宿主会话、工具事件、问答／取消、原生财务健康存储与验收命令。
 
 - [DSH 聊天与 Android 模拟器验收](DSH-ACCEPTANCE-2026-10-29.md)：消息展示、原生工具、队列、附件重试、历史恢复及测试模型边界。
 

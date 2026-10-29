@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
-import { startServer, createInteractions, businessRequest } from '../server.mjs';
+import { startServer, createInteractions } from '../server.mjs';
 
 const table = () => { const values = new Map(); return { get: id => values.get(id), entries: () => values.entries(), put: async (id, value) => values.set(id, structuredClone(value)) }; };
 function fixture() {
@@ -142,12 +142,6 @@ test('human decisions are session bound, validated, and invalidated by DSH cance
   assert.deepEqual(await question, { answers: [{ id: 'a', selected: ['Yes'] }] });
   assert.equal(await f.listeners.get('approval/request')({ agent: { id: 'telegram-session' } }, async () => 'other-channel'), 'other-channel');
   input.close();
-});
-
-test('business bridge rejects arbitrary targets without forwarding credentials', async () => {
-  await assert.rejects(businessRequest({ businessUrl: 'http://127.0.0.1:1' }, '//external.example/path'), /不是/);
-  await assert.rejects(businessRequest({ businessUrl: 'http://127.0.0.1:1' }, '/v1/finance/../../admin'), /无效/);
-  await assert.rejects(businessRequest({}, '/v1/finance'), /尚未连接/);
 });
 
 test('a slow file upload never holds up actual cancellation', async t => {

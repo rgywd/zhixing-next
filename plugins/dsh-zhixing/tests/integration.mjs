@@ -33,7 +33,7 @@ await writeFile(patch, `- id: agent-default-model
       config:
         token: ${JSON.stringify(token)}
         port: ${appPort}
-${process.env.ZHIXING_TEST_BUSINESS_URL ? `        businessUrl: ${JSON.stringify(process.env.ZHIXING_TEST_BUSINESS_URL)}\n        businessToken: ${JSON.stringify(process.env.ZHIXING_TEST_BUSINESS_TOKEN)}\n` : ''}`);
+`);
 let host;
 const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 async function api(path, body, method) {
@@ -68,7 +68,9 @@ async function start() {
 async function stop() { if (host && host.exitCode === null) { host.kill('SIGTERM'); await once(host, 'exit'); } }
 try {
   await start();
-  const chat = await api('/conversations', { title: 'Native DSH acceptance' });
+  const selectedModel = JSON.stringify(['zhixing-fixture', 'fixture-other']);
+  const chat = await api('/conversations', { title: 'Native DSH acceptance', model_id: selectedModel });
+  assert.equal(chat.model_id, selectedModel, 'creation honors the selected native model');
   const path = `/conversations/${chat.id}`;
   const snapshot = () => api(`${path}/dsh`);
   await api(`${path}/messages`, { id: 'read-write-check', content: 'READ-WRITE-CHECK' });
@@ -105,6 +107,7 @@ try {
   const count = state.events.filter(e => e.type === 'user/message' && e.data.source?.rpcId === 'read-write-check').length;
   await stop(); await start();
   state = await snapshot(); assert.equal(state.active, false);
+  assert.equal((await api(path)).model_id, selectedModel, 'native model selection survives host restart');
   await api(`${path}/messages`, { id: 'read-write-check', content: 'READ-WRITE-CHECK' });
   state = await snapshot();
   assert.equal(state.events.filter(e => e.type === 'user/message' && e.data.source?.rpcId === 'read-write-check').length, count);
@@ -177,6 +180,7 @@ try {
   await rejected(`${rp}/dsh/version`, { expected: regenerated.active, version: chat.id }, 404, 'PUT');
   await stop(); await start();
   assert.equal((await revisions()).history.active, regenerated.active);
+  assert.deepEqual((await revisions()).history.versions, regenerated.versions, 'native storage preserves message positions and version groups across restart');
   await api(`${rp}/dsh/revisions`, retry); // Durable lost-ACK retry after host restart.
   assert.equal((await revisions()).history.versions.length, 3);
   await api(`${rp}/dsh/version`, { expected: regenerated.active, version: revisionChat.id }, 'PUT');
@@ -201,23 +205,8 @@ try {
   assert.equal(withImage.events.find(e => e.type === 'user/message' && e.data.source?.rpcId === 'edit-image').data.content.find(b => b.type === 'image').attachment.attachmentId, imageRef.attachmentId);
   await api(`${path}/dsh/version`, { expected: imageEdit.active, version: chat.id }, 'PUT');
 
-  // Both user-triggered publication and model-triggered publication freeze exact real bytes.
-  const writeCall = (await snapshot()).events.find(e => e.type === 'tool/call' && e.data.name === 'write');
-  const artifact = await api(`${path}/dsh/artifacts`, { id: 'publish-once', seq: writeCall.seq, version: chat.id });
-  const publishedRef = artifact.content[0].attachment;
-  await writeFile(join(workspace, 'sample.js'), 'changed after publication\n');
-  await stop(); await start();
-  const duplicateArtifact = await api(`${path}/dsh/artifacts`, { id: 'publish-once', seq: writeCall.seq, version: chat.id });
-  assert.equal(duplicateArtifact.content[0].attachment.attachmentId, publishedRef.attachmentId);
-  const artifactBytes = await (await fetch(`http://127.0.0.1:${appPort}/v1${path}/dsh/files/${encodeURIComponent(publishedRef.attachmentId)}`, { headers })).text();
-  assert.equal(artifactBytes, 'export const answer = 42;\n');
-  assert.equal((await snapshot()).artifacts[0].content[0].attachment.attachmentId, publishedRef.attachmentId);
-  await rejected(`${rp}/dsh/files/${encodeURIComponent(publishedRef.attachmentId)}`, undefined, 404, 'GET');
-  const inherited = await api(`${path}/dsh/revisions`, { id: 'edit-with-published-file', kind: 'edit', version: chat.id, seq: uploadedUser.seq,
-    text: 'RESUME-CHECK inherit earlier publication', attachments: [] });
-  const inheritedState = await until(snapshot, s => !s.running && s.events.some(e => e.type === 'user/message' && e.data.source?.rpcId === 'edit-with-published-file'), 'inherited publication');
-  assert.equal(inheritedState.artifacts[0].content[0].attachment.attachmentId, publishedRef.attachmentId);
-  await api(`${path}/dsh/version`, { expected: inherited.active, version: chat.id }, 'PUT');
+  // Deliveries are native present declarations, with host access checks on each read.
+  await rejected(`${path}/dsh/artifacts`, { id: 'obsolete', seq: 0, version: chat.id }, 404);
   await api(`${path}/messages`, { id: 'publish-model', content: 'PUBLISH-CHECK' });
   const publishedState = await until(snapshot, s => !s.running && s.events.some(e => e.type === 'user/message' && e.data.source?.rpcId === 'publish-model'), 'model publishes file');
   const publishResult = publishedState.events.findLast(e => e.type === 'tool/result');
@@ -226,22 +215,36 @@ try {
   assert.ok(declaration, 'native present must append its own durable declaration');
   const deliveryPath = `${path}/dsh/deliveries/${declaration.seq}/0`;
   const download = () => fetch(`http://127.0.0.1:${appPort}/v1${deliveryPath}`, { headers }).then(r => r.text());
-  assert.equal(await download(), 'changed after publication\n');
-  assert.equal((await api(`${deliveryPath}/text`)).content, 'changed after publication');
+  assert.equal(await download(), 'export const answer = 42;\n');
+  assert.equal((await api(`${deliveryPath}/text`)).content, 'export const answer = 42;');
   await writeFile(join(workspace, 'sample.js'), 'native current file\n');
   await stop(); await start();
   assert.equal(await download(), 'native current file\n', 'native present opens current source bytes after restart');
   await rejected(`${rp}/dsh/deliveries/${declaration.seq}/0`, undefined, 404, 'GET');
   await rejected(`${deliveryPath}?version=${"foreign-session"}`, undefined, 404, 'GET');
   console.log('PASS native present, source file preview/download, restart and conversation ownership');
-  if (process.env.ZHIXING_TEST_BUSINESS_URL) {
-    const schema = await api('/business/schema'); assert.ok(schema.paths['/v1/finance/summary']);
-    const summary = await api('/finance/summary'); assert.ok(summary);
-    await api(`${path}/messages`, { id: 'business', content: 'BUSINESS-SCHEMA' });
-    state = await until(snapshot, s => !s.running, 'business tool');
-    assert.ok(state.events.some(e => e.type === 'tool/result' && !e.data.message.isError && JSON.stringify(e).includes('知行业务数据')));
-    console.log('PASS actual Python business API and DSH business tool');
-  }
+  const schema = await api('/business/schema?domain=finance'); assert.ok(schema.schemas.TransactionInput);
+  const meal = { source_id: 'native-source', entry_key: 'lunch', conversation_id: chat.id,
+    meal: { occurred_at: '2026-10-29T12:30:00+08:00', description: '鸡肉饭' }, amount: '28', occurred_on: '2026-10-29' };
+  const saved = await api('/life/meals', meal);
+  assert.equal(saved.finance.amount, '28.00'); assert.equal(saved.meal.description, '鸡肉饭');
+  await stop(); await start();
+  assert.deepEqual(await api('/life/meals', meal), saved);
+  assert.equal((await api('/finance/summary?month=2026-10')).totals.expense, '28.00');
+  assert.equal((await api('/health/summary?date=2026-10-29')).meals.length, 1);
+  await rejected('/life/meals', { ...meal, entry_key: 'invalid', meal: { ...meal.meal, description: '' } }, 422);
+  assert.equal((await api('/finance/transactions?month=2026-10')).total, 1);
+  await api(`${path}/messages`, { id: 'business', content: 'BUSINESS-SCHEMA' });
+  state = await until(snapshot, s => !s.running && s.events.some(e => e.type === 'user/message' && e.data.source?.rpcId === 'business'), 'native business tool');
+  assert.ok(state.events.some(e => e.type === 'tool/call' && e.data.name === 'zhixing_service'));
+  const result = state.events.findLast(e => e.type === 'tool/result');
+  assert.ok(!result.data.message.isError && JSON.stringify(result).includes('schemas'));
+  for (const retired of ['/resources', '/memories', '/search-providers']) await rejected(retired, undefined, 404, 'GET');
+  console.log('PASS native DSH business storage, restart replay, atomic rollback and model tool; no Python service');
+  const untitled = await api('/conversations', { title: '新的对话' });
+  await api(`/conversations/${untitled.id}/messages`, { id: 'native-title', content: 'UPLOAD-TITLE-CHECK' });
+  await until(() => api(`/conversations/${untitled.id}`), c => c.title && c.title !== '新的对话', 'native title after upload-first placeholder');
+  console.log('PASS native title generation after an upload-first conversation');
   await writeFile(join(root, 'final-events.json'), JSON.stringify(await snapshot(), null, 2));
   console.log(`Evidence: ${root}`);
 } finally { await stop(); }

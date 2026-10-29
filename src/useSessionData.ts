@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
-import { mergeById, request, type Agent, type Assistant, type Connection, type Conversation, type ModelCatalog, type Page, type Resource, type ServiceStatus } from "./api";
+import { mergeById, request, type Agent, type Assistant, type Connection, type Conversation, type ModelCatalog, type Page, type ServiceStatus } from "./api";
 import { useSyncStatus } from "./ConnectionStatus";
 import { readCache, writeCache } from "./localCache";
 
 /** Restore the app's reading surface before synchronizing each server section independently. */
 export function useSessionData(connection: Connection) {
-  const [recentResources, setRecentResources] = useState<Resource[]>([]);
   const [assistant, setAssistant] = useState<Assistant | null>(null);
   const [runtime, setRuntime] = useState<ServiceStatus["runtime"]>();
   const [status, setStatus] = useState<ServiceStatus | null>(null);
@@ -25,7 +24,7 @@ export function useSessionData(connection: Connection) {
   const alive = useRef(true);
   const refresh = useCallback(() => refreshRef.current(), []);
   const reportSync = useSyncStatus(refresh);
-  const snapshot = JSON.stringify({ runtime, assistant, conversations, agents, catalog, recentResources, conversationCursor });
+  const snapshot = JSON.stringify({ runtime, assistant, conversations, agents, catalog, conversationCursor });
   useEffect(() => {
     if (!cacheReady) return;
     void writeCache(connection, "app", JSON.parse(snapshot)).catch(() => undefined);
@@ -52,16 +51,15 @@ export function useSessionData(connection: Connection) {
           request<Page<Agent>>(connection, "/agents", { signal: controller.signal }),
           request<ModelCatalog>(connection, "/models", { signal: controller.signal }),
           selectedRef.current ? request<Conversation>(connection, `/conversations/${selectedRef.current}`, { signal: controller.signal }) : Promise.resolve(null),
-          request<Page<Resource>>(connection, "/resources?latest=true&limit=10", { signal: controller.signal }),
           request<Page<Conversation>>(connection, "/conversations/recent?limit=10", { signal: controller.signal }),
         ]);
         if (!active) return;
-        const [health, person, chats, agentPage, modelPage, current, resources, recentChats] = results;
+        const [health, person, chats, agentPage, modelPage, current, recentChats] = results;
+        if (health.status === "fulfilled" && health.value.runtime !== "dsh") throw new Error("当前连接尚未切换到 DSH，请检查服务连接。");
         const failure = results.find((result) => result.status === "rejected");
         if (health.status === "fulfilled") { setStatus(health.value); setRuntime(health.value.runtime); }
         setLastSyncFailed(!!failure);
         if (person.status === "fulfilled") setAssistant(person.value);
-        if (resources.status === "fulfilled") setRecentResources(resources.value.items);
         setConversations((old) =>
           mergeById(old, [
             ...(chats.status === "fulfilled" ? chats.value.items : []),
@@ -93,12 +91,12 @@ export function useSessionData(connection: Connection) {
       void poll();
     };
     void readCache<{ runtime?: ServiceStatus["runtime"]; assistant: Assistant | null; conversations: Conversation[]; agents: Agent[]; catalog: ModelCatalog | null;
-      recentResources: Resource[]; conversationCursor: string | null }>(connection, "app").then((cached) => {
+      conversationCursor: string | null }>(connection, "app").then((cached) => {
       if (!active) return;
-      if (cached && Array.isArray(cached.conversations) && Array.isArray(cached.agents) && Array.isArray(cached.recentResources)) {
+      if (cached && Array.isArray(cached.conversations) && Array.isArray(cached.agents) && cached.runtime === "dsh") {
         setRuntime(cached.runtime);
         setAssistant(cached.assistant); setConversations(cached.conversations); setAgents(cached.agents);
-        setCatalog(cached.catalog); setRecentResources(cached.recentResources); setConversationCursor(cached.conversationCursor);
+        setCatalog(cached.catalog); setConversationCursor(cached.conversationCursor);
         setSelectedId((old) => old ?? [...cached.conversations].reverse().find((item) => !item.agent_id)?.id ?? null);
         setLoading(false);
       }
@@ -121,5 +119,5 @@ export function useSessionData(connection: Connection) {
   }, [connection, reportSync]);
 
   return { assistant, setAssistant, status, runtime, lastSyncFailed, conversations, setConversations, agents, catalog, setCatalog,
-    recentResources, selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive };
+    selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive };
 }

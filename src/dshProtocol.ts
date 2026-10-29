@@ -8,7 +8,6 @@ export type DshPending = { id: string; sessionId: string; kind: "approval" | "qu
   toolName?: string; reason?: string; questions?: DshQuestion[] };
 export type DshSnapshot = { events: DshEvent[]; next: number; hasMore: boolean; running: boolean; active: boolean;
   history?: { active: string; versions: { id: string; label: string; source?: string; seq?: number; userIndex?: number; group?: string; kind?: string }[] };
-  artifacts?: { id: string; toolSeq: number; content: unknown }[];
   queue: { id: string; placement?: "queued" | "steering" | "context"; content: unknown }[]; pending: DshPending[];
   live: { attemptId: string; turn: number; step: number; chunks: Record<string, unknown>[] } | null };
 
@@ -119,12 +118,6 @@ export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshC
       const reason = record(data.reason).kind;
       if (reason === "forked") { if (current.row) current.row.status = "interrupted"; continue; }
       assistant(eventTurn).status = reason === "completed" ? "completed" : reason === "aborted" ? "cancelled" : "failed";
-    }
-  }
-  for (const artifact of snapshot?.artifacts ?? []) {
-    const owner = rows.find(row => row.parts.some(p => p.type === "tool" && p.seq === artifact.toolSeq));
-    if (owner) for (const attachment of contentAttachments(artifact.content)) {
-      if (!owner.attachments.some(a => a.id === attachment.id)) owner.attachments.push(attachment);
     }
   }
   const live = snapshot?.live;

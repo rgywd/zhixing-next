@@ -1,6 +1,6 @@
 # HTTP 与运行接口
 
-2026-10-29：新增独立 [DSH App 插件接口](../plugins/dsh-zhixing/README.md#接口与行为)。连接该入口时 `/v1/status.runtime` 为 `dsh`，会话／执行由 DSH 管理。Python 新增认证的 `GET /v1/business/schema`，从真实 OpenAPI 中导出业务路由及所需 schema，供插件调用数据服务；以下运行 API 仍描述旧 Python 兼容路径，不套用于 DSH。
+2026-10-29：当前 App 仅连接 [DSH 插件接口](../plugins/dsh-zhixing/README.md)，`/v1/status.runtime` 为 `dsh`。财务、健康、联合餐费和 `GET /v1/business/schema?domain=finance|health|life` 由同进程原生业务插件提供，使用 DSH `storageDomain` 持久保存；不转发 Python 服务。记忆、资料、搜索供应商、旧人格与任务路由不再由此出口提供。以下先列当前 DSH 协议，后面的 Python 部分仅为历史契约参考。
 
 DSH 聊天快照的 `queue` 来自原生 Session state，保留 `queued`／`steering` 位置；`POST /v1/conversations/{id}/dsh/queue/{itemId}` 接收原生 `remove`、`steer`、`edit` action，并在持久化后返回。`GET /v1/conversations/{id}/dsh/images/{attachmentId}` 需要连接令牌，仅解析本对话历史中的原生图片引用，返回真实图片字节和媒体类型；不存在于该会话的引用返回 404，不接受任意文件路径。客户端提交附件前持久保存上传 receipt，发送重试复用 receipt 与消息请求 ID。
 
@@ -13,7 +13,7 @@ DSH 对话体验第一轮增加以下接口（均需连接令牌）：
 | `GET /v1/conversations/{id}/dsh/files/{attachmentId}` | 从本会话的持久消息／工具结果解析原生 file 引用，流式读取原件；不接受客户端文件路径。跨会话引用 404。HTTP 流结束前等待宿主完整性校验；失败中断下载。 |
 | `GET /v1/conversations/{id}/dsh/files/{attachmentId}/text` | 文本／代码文件的 UTF-8 预览，返回 `resource_id/content/format/truncated`；最多展示前 256 KiB，仍校验完整原件。Markdown 的 format 为 markdown，其余为 text；不支持预览的二进制文件返回 415，仍可下载。 |
 
-文件接口消费 DSH 原生附件引用。新的工作区交付使用下述原生 present 声明；旧快照附件继续可读；文本预览长度是显示边界，不限制宿主执行或原文件下载。
+文件接口消费 DSH 原生附件引用。新的工作区交付使用下述原生 present 声明；文本预览长度是显示边界，不限制宿主执行或原文件下载。
 
 DSH 对话体验第二轮增加历史版本与工作区交付（认证与逻辑对话 ID 不变）：
 
@@ -23,11 +23,10 @@ DSH 对话体验第二轮增加历史版本与工作区交付（认证与逻辑�
 | --- | --- |
 | `POST /v1/conversations/{id}/dsh/revisions` | `{id, kind: "edit"或"retry", version, seq, text?, attachments?}`。id 是稳定请求编号，version 是当前原生会话 ID，seq 是所选用户消息或助手回复的原生事件位置。edit 提供 text 与保留的原附件 ID 数组；不能引用外部附件。retry 使用对应用户消息的原始正文与附件。返回 `{active, versions}`；同请求重试不重复执行，同编号改内容、版本过期或执行中返回 409。 |
 | `PUT /v1/conversations/{id}/dsh/version` | `{expected, version}`，仅可切换本逻辑对话已接受的版本，检查当前版本与原生空闲／队列状态。外部版本 404。未来发送、取消、模型选择和附件读取作用于所选版本；标题属于逻辑对话。 |
-| `GET /v1/conversations/{id}/dsh?offset=N&version=...` | 增加 `history: {active, versions:[{id,label,source?,seq?,userIndex?,group?,kind?}]}` 与 `artifacts:[{id,toolSeq,path,content}]`。版本不一致时从原生 seq 0 返回，客户端清空旧版本事件。artifacts 是持久发布回执，不占用或伪造 DSH seq。 |
-| `POST /v1/conversations/{id}/dsh/artifacts`（旧客户端兼容） | `{id, seq, version}`。从当前版本成功的 read／write／edit 回执确定路径，发布文件的**当前**字节；返回 `{id,toolSeq,path,content:[原生file块]}`，同编号返回同一结果。不能自传路径。读取前后检查版本；变化、权限拒绝、缺失或非普通文件不产生发布回执。 |
+| `GET /v1/conversations/{id}/dsh?offset=N&version=...` | 增加 `history: {active, versions:[{id,label,source?,seq?,userIndex?,group?,kind?}]}` 。版本不一致时从原生 seq 0 返回，客户端清空旧版本事件。 |
 | `POST /v1/conversations/{id}/messages` | 增加可选 version；必须匹配当前版本，否则 409，客户端保留草稿。不传时作用于当前版本。 |
 
-DSH 历史追加写入。本插件使用宿主 `buildForkSeed` 与 Agent 创建／恢复服务，从对应用户消息之前建立原生分支，清空历史中尚未消费的 inbox 后重新提交。保留预设、工作目录、模型选择与工作区关联；不是向原会话末尾追加修改要求。分支选择和手动发布回执保存在宿主 `storageDomain` 的 `zhixing_chat` 域，写盘后确认；准备记录与确定的子会话 ID 支持中断恢复。原版与后续回答保留，**版本切换不回滚工作区和工具副作用**。
+DSH 历史追加写入。本插件使用宿主 `buildForkSeed` 与 Agent 创建／恢复服务，从对应用户消息之前建立原生分支，清空历史中尚未消费的 inbox 后重新提交。保留预设、工作目录、模型选择与工作区关联；不是向原会话末尾追加修改要求。分支选择保存在宿主 `storageDomain` 的 `zhixing_chat` 域，写盘后确认；准备记录与确定的子会话 ID 支持中断恢复。原版与后续回答保留，**版本切换不回滚工作区和工具副作用**。
 
 2026-10-29 重做后的文件交付复用 DSH 标准预设的 `present(files)`，不注册自建的发布工具。App 从 `deliverables/presented` 事件显示文件卡；同一回复再次交付同一路径时更新原卡片。
 
@@ -36,9 +35,17 @@ DSH 历史追加写入。本插件使用宿主 `buildForkSeed` 与 Agent 创建�
 | `GET /v1/conversations/{id}/dsh/deliveries/{seq}/{index}` | seq/index 指向当前或 `?version=` 指定的本逻辑对话版本内的真实交付声明。通过宿主 `workspaceFiles.stat/readBytes` 按页流式读取，无额外文件总量限制；下载中版本变化会中断。不接受自传路径或其他逻辑对话的版本。 |
 | `GET /v1/conversations/{id}/dsh/deliveries/{seq}/{index}/text` | 通过宿主 `workspaceFiles.read` 返回 `resource_id/content/format/truncated`，预览页长度沿用宿主默认值。Markdown 格式化呈现，其余文字按原文呈现。 |
 
-原生 `present` 指向工作区文件的**当前内容**，不承诺不可变快照；删除或失去权限后显示真实错误。老 `zhixing_publish_file` 已有记录及 `/dsh/artifacts` 的不可变附件仍可读取，新 UI 不提供手动发布步骤。没有新增宿主工具白名单、预算或执行轮数限制。
+原生 `present` 指向工作区文件的**当前内容**，不承诺不可变快照；删除或失去权限后显示真实错误。自建 `zhixing_publish_file`、`/dsh/artifacts` 与发布副本已经移除；保留旧文件备份，不为旧客户端维护这套流程。没有新增宿主工具白名单、预算或执行轮数限制。
 
 历史摘要新增 `userIndex`（逻辑用户消息序号）、`group`（同一分叉点）与 `kind`（edit/retry），让前端把真实版本放到对应回复下方；旧数据缺少这些字段时仍可从对话设置访问完整版本列表。
+
+## 当前 DSH 业务接口
+
+财务、健康与联合餐费沿用下文对应数据字段和结果语义；以 `/v1/business/schema` 返回的路由和 schema 为准。`/v1/finance/observations` 只读取迁入的早期资产观察，不把它伪装成即时余额，也不重复计入账本。金额与汇总使用十进制计算；同餐饮食与付款在一个原生存储提交内变更，持久化失败不返回成功。请求去重、版本冲突和取消分别验证。
+
+`zhixing_service` 在原生工具上下文中自动带入创建记录或联合餐费纠正的来源消息与会话编号，模型不用填写或查找这些内部字段。直接调用 HTTP 的客户端仍按 schema 提供自己的稳定请求编号。旧数据只通过操作员指定的启动导入文件迁移，不提供远程导入接口。
+
+## 历史 Python 接口（新客户端不调用）
 
 状态：2026-10-23，当前源码包含数据库 v15 的人格成长、主动偏好、目标跟进与心跳，保留既有工具契约与 Agent 协作。历史安装、部署及验收状态以各版发布说明为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
 

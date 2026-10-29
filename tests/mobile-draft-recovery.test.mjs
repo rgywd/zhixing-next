@@ -245,7 +245,7 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
       if (path.endsWith("/messages")) return submit ? submit(options.body) : {};
       if (path === "/models") return { items: [{ id: "model", ready: true, reasoning_levels: [], name: "Model" }], roles: { chat: "model" } };
       if (path === "/assistant") return { name: "知行" };
-      if (path === "/status") return { model_ready: true, worker_online: true };
+      if (path === "/status") return { runtime: "dsh", model_ready: true, worker_online: true };
       if (path === "/finance/observations") return { balances: [], recent: [] };
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
@@ -328,6 +328,6 @@ test("welcome photo-only Send durably transfers photos before opening the normal
   app.render().find((node) => node.type === "AiHome").props.onSend(); await settle();
   assert.equal(saved[0].photos[0].id, "p1"); assert.equal(consumed.length, 0);
   assert.equal(app.calls.filter((call) => call.path.endsWith("/messages") && call.method === "POST").length, 0);
-  handoff.resolve(); await settle(); const panel = app.render().find((node) => node.type === "ChatPanel");
+  handoff.resolve(); await settle(); const panel = app.render().find((node) => node.type === "DshChatPanel");
   assert.equal(panel.props.startWithSend, true); assert.deepEqual(plain(consumed), [["", ["p1"]]]); app.unmount();
 });

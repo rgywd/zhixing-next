@@ -33,7 +33,7 @@ import { shareNativeDownload } from "./resources";
 
 type LocalFile = { id: string; uri: string; name: string; mediaType?: string };
 type DshDraft = Draft & { revision?: MessageRevision; sendVersion?: string; files?: LocalFile[]; receipts?: Record<string, string> };
-type DshCache = { historyId: string; events: DshEvent[] } & Pick<DshSnapshot, "history" | "artifacts">;
+type DshCache = { historyId: string; events: DshEvent[] } & Pick<DshSnapshot, "history">;
 const imageType = (uri: string, name: string) => {
   const suffix = (uri.match(/\.([a-z]+)(?:[?#]|$)/i)?.[1] ?? name.split(".").at(-1) ?? "jpeg").toLowerCase();
   return `image/${suffix === "jpg" ? "jpeg" : suffix}`;
@@ -135,9 +135,10 @@ function InputCard({ pending, busy, answer }: { pending: DshPending; busy: boole
 export function DshHostSettings({ webUrl }: { webUrl?: string | null }) {
   const { s } = useUi();
   return <View style={[s.card, { margin: 20, gap: 12 }]}>
-    <Text style={s.label}>DSH 宿主设置</Text>
-    <Text style={s.text}>模型供应商、插件、工作目录与权限沿用 DSH 的设置。在这里发送的消息直接由 DSH 执行。</Text>
-    {webUrl && /^https?:\/\//.test(webUrl) ? <ActionLink onPress={() => { void Linking.openURL(webUrl); }}>打开 DSH</ActionLink> : <Text style={s.muted}>在服务器的 DSH 页面管理宿主配置。</Text>}
+    <Text style={s.label}>模型与插件</Text>
+    <Text style={s.text}>模型、搜索、记忆和其他扩展由 DSH 提供。可以在对话里让知行检查并配置所需的插件。</Text>
+    <Text style={s.muted}>聊天与文件由 DSH 管理，知行负责发送、展示、预览和分享。</Text>
+    {webUrl && /^https?:\/\//.test(webUrl) ? <ActionLink onPress={() => { void Linking.openURL(webUrl); }}>打开 DSH 设置</ActionLink> : null}
   </View>;
 }
 
@@ -249,10 +250,10 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         setSnapshot(next); report();
         if (wasRunning && !next.running) onRefreshRef.current();
         wasRunning = next.running;
-        const nextMetadata = JSON.stringify([next.history, next.artifacts]);
+        const nextMetadata = JSON.stringify(next.history);
         if (changed || metadata !== nextMetadata) {
           metadata = nextMetadata;
-          void writeCache(connection, cacheKey, { historyId, events: accumulated, history: next.history, artifacts: next.artifacts }).catch(() => {});
+          void writeCache(connection, cacheKey, { historyId, events: accumulated, history: next.history }).catch(() => {});
         }
       } catch (e) { if (active) report(e); }
       finally { polling = false; }
@@ -264,8 +265,8 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         accumulated = Array.isArray(cached) ? cached : cached.events;
         historyId = Array.isArray(cached) ? conversation.id : cached.historyId;
         if (!Array.isArray(cached)) {
-          metadata = JSON.stringify([cached.history, cached.artifacts]);
-          setSnapshot({ history: cached.history, artifacts: cached.artifacts, events: [], next: 0, hasMore: false,
+          metadata = JSON.stringify(cached.history);
+          setSnapshot({ history: cached.history, events: [], next: 0, hasMore: false,
             running: false, active: false, queue: [], pending: [], live: null });
         }
         cursor = accumulated.length ? accumulated[accumulated.length - 1].seq + 1 : 0; setEvents(accumulated);

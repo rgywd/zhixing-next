@@ -74,9 +74,6 @@ export function createRevisions(ctx, { records, resolve, flush, metadata, forkRe
       const source = await resolve(entry.source);
       const child = await forkRevision(entry.child, source, events, entry.cut);
       await flush(child.id);
-      if (!metadata.artifacts.get(child.id)) {
-        await metadata.artifacts.put(child.id, (metadata.artifacts.get(entry.source) ?? []).filter(a => a.toolSeq <= entry.cut));
-      }
       const childEvents = []; for await (const event of records(child.id)) childEvents.push(event);
       const accepted = childEvents.some(e => isUser(e) && e.data.source.rpcId === body.id) ||
         (await ctx.sessionController.state({ sessionId: child.id }, new AbortController().signal)).queue?.some(q => q.rpcId === body.id);

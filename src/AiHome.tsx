@@ -9,7 +9,6 @@ import { ReasoningPicker } from "./ReasoningPicker";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { type Connection, type DraftPhoto, type ModelCatalog, type ReasoningEffort } from "./api";
 import { ModelPicker } from "./ModelPicker";
-import { SearchPicker } from "./SearchPicker";
 
 type Kind = "chat" | "task";
 
@@ -21,7 +20,6 @@ const suggestions = [
 ] as const;
 
 export function AiHome({
-  dsh = false,
   name,
   draft,
   busy,
@@ -32,12 +30,10 @@ export function AiHome({
   catalog,
   modelId,
   effort,
-  searchProviderId,
   onDraft,
   onKind,
   onModelId,
   onEffort,
-  onSearchProviderId,
   onFiles,
   onPhotos,
   photos = [],
@@ -45,7 +41,6 @@ export function AiHome({
   pickingPhotos = false,
   onSend,
 }: {
-  dsh?: boolean;
   name: string;
   draft: string;
   kind: Kind;
@@ -57,12 +52,10 @@ export function AiHome({
   catalog: ModelCatalog | null;
   modelId: string | null;
   effort: ReasoningEffort | null;
-  searchProviderId: string | null;
   onDraft: (text: string) => void;
   onKind: (kind: Kind) => void;
   onModelId: (id: string | null) => void;
   onEffort: (value: ReasoningEffort | null) => void;
-  onSearchProviderId: (id: string | null) => void;
   onFiles: () => void;
   onPhotos?: () => void;
   photos?: DraftPhoto[];
@@ -74,7 +67,6 @@ export function AiHome({
   const styles = useThemedStyles(createStyles);
   const [showModels, setShowModels] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
   const locked = busy || !draftReady;
   const selectedModelId = modelId ?? catalog?.roles.chat ?? null;
   const model = catalog?.items.find((item) => item.id === selectedModelId);
@@ -100,7 +92,7 @@ export function AiHome({
           </Pressable>)}
         </View>
       </ScrollView>
-      <ConversationComposer unlimitedText={dsh} text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!locked} onText={(text) => { if (!locked) onDraft(text); }} onSend={() => { if (!locked && !pickingPhotos && (draft.trim() || photos.length)) onSend(); }} onFiles={() => { if (!locked) onFiles(); }} onPhotos={onPhotos} attachmentLocked={locked || pickingPhotos} canSend={!locked && !pickingPhotos && !!(draft.trim() || photos.length)} busy={busy} kind="chat" onKind={() => { if (!locked) onKind("chat"); }} kindLocked={locked} connection={connection} model={model} depth={depth} searchId={searchProviderId} optionsLocked={locked || !catalog} onModel={() => { if (!locked && catalog) setShowModels(true); }} onReasoning={() => { if (!locked && catalog) setShowReasoning(true); }} onSearch={dsh ? undefined : () => { if (!locked && catalog) setShowSearch(true); }}>
+      <ConversationComposer unlimitedText text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!locked} onText={(text) => { if (!locked) onDraft(text); }} onSend={() => { if (!locked && !pickingPhotos && (draft.trim() || photos.length)) onSend(); }} onFiles={() => { if (!locked) onFiles(); }} onPhotos={onPhotos} attachmentLocked={locked || pickingPhotos} canSend={!locked && !pickingPhotos && !!(draft.trim() || photos.length)} busy={busy} kind="chat" onKind={() => { if (!locked) onKind("chat"); }} kindLocked={locked} connection={connection} model={model} depth={depth} optionsLocked={locked || !catalog} onModel={() => { if (!locked && catalog) setShowModels(true); }} onReasoning={() => { if (!locked && catalog) setShowReasoning(true); }}>
         <DraftAttachments connection={connection} photos={photos} removePhoto={locked ? undefined : onRemovePhoto} />
       </ConversationComposer>
       {draftError ? <View style={styles.draftError}>
@@ -109,7 +101,6 @@ export function AiHome({
       </View> : null}
       <ModelPicker visible={showModels} title="选择聊天模型" connectionUrl={connection.url} models={catalog?.items ?? []} selectedId={selectedModelId} onSelect={async (id) => { if (!locked) { onModelId(id); onEffort(null); } }} onUseDefault={modelId ? async () => { if (!locked) { onModelId(null); onEffort(null); } } : undefined} defaultLabel="跟随默认聊天模型" onClose={() => setShowModels(false)} />
       <ReasoningPicker visible={showReasoning} model={model} selected={effort} onSelect={async (value) => { if (!locked) onEffort(value); }} onClose={() => setShowReasoning(false)} />
-      <SearchPicker visible={showSearch} connection={connection} selectedId={searchProviderId} onSelect={(id) => { if (!locked) onSearchProviderId(id); }} onClose={() => setShowSearch(false)} />
     </View>
   );
 }
