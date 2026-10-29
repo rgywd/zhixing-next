@@ -34,6 +34,7 @@
 
 ```sh
 npm ci
+npm ci --prefix plugins/dsh-zhixing
 npm start
 ```
 
