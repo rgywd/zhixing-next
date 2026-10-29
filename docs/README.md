@@ -1,5 +1,7 @@
 # 文档入口
 
+- [RikkaHub 与知行 DSH 对话详情产品对照](CHAT-EXPERIENCE-RIKKAHUB-COMPARISON.md)：布局、消息与输入、52 个界面条目、功能差距、实施优先级及验收清单；附[模拟器截图](CHAT-EXPERIENCE-RIKKAHUB-SCREENSHOTS.md)。
+
 - [DSH 插件接入](../plugins/dsh-zhixing/README.md)：现有 App 壳子、原生宿主会话、工具事件、问答／取消、业务桥接与验收命令。
 
 - [DSH 聊天与 Android 模拟器验收](DSH-ACCEPTANCE-2026-10-29.md)：消息展示、原生工具、队列、附件重试、历史恢复及测试模型边界。
