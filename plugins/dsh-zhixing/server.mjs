@@ -209,9 +209,42 @@ export async function startServer(ctx, config) {
             if (question.state === 'continued') pending.push({ id: `continued:${question.callId}`, sessionId: id,
               kind: 'question', questions: question.questions, callId: question.callId });
           }
+          const state = await ctx.sessionController.state({ sessionId: id }, signal());
           return reply({ events, next: offset + events.length, hasMore: events.length === 256,
             running: agent?.status === 'running', active: !!agent, pending,
-            queue: agent ? [...agent.inbox.nextStep, ...agent.inbox.nextTurn] : [], live: live.get(id) ?? null });
+            queue: (state.queue ?? []).filter(item => item.placement !== 'context'), live: live.get(id) ?? null });
+        }
+        if (method === 'POST' && suffix.startsWith('/dsh/queue/')) {
+          const itemId = decodeURIComponent(suffix.slice('/dsh/queue/'.length));
+          const action = await json(req);
+          if (!['remove', 'steer', 'edit'].includes(action.kind)) throw failure('无效的队列操作。');
+          const result = await ctx.sessionController.updateQueue({ sessionId: id, itemId, action });
+          await flush(id); return reply(result);
+        }
+        if (method === 'GET' && suffix.startsWith('/dsh/images/')) {
+          await get(id);
+          const attachmentId = decodeURIComponent(suffix.slice('/dsh/images/'.length));
+          // DSH's attachment reader validates bytes, but not session ownership.
+          // Resolve the immutable reference from this conversation, never from a client path.
+          await flush(id);
+          const reader = await ctx.sessionPersistence.open(id, 'read');
+          let attachment;
+          try {
+            for (let offset = 0; !attachment;) {
+              const { events } = await reader.read(offset, 256);
+              for (const event of events) {
+                const content = event.data?.message?.content ?? event.data?.content;
+                attachment = Array.isArray(content) ? content.find(block => block.type === 'image' && block.attachment?.attachmentId === attachmentId)?.attachment : undefined;
+                if (attachment) break;
+              }
+              if (events.length < 256) break;
+              offset += events.length;
+            }
+          } finally { await reader.close(); }
+          if (!attachment) throw failure('这段对话中没有这张图片。', 404);
+          const result = await ctx.sessionController.attachment({ sessionId: id, attachment });
+          res.writeHead(200, { 'Content-Type': result.attachment.mediaType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+          return res.end(Buffer.from(result.data, 'base64'));
         }
         if (method === 'POST' && suffix === '/dsh/cancel') {
           const agent = ctx.agents.get(id);

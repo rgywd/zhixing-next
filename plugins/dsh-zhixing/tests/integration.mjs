@@ -84,6 +84,15 @@ try {
   console.log('PASS native question answer');
   await api(`${path}/messages`, { id: 'cancel', content: 'CANCEL-SHELL' });
   const pid = await until(async () => { try { return Number(await readFile(join(workspace, 'running.pid'), 'utf8')); } catch { return null; } }, Boolean, 'real shell start');
+  await api(`${path}/messages`, { id: 'queued-message', content: 'QUEUE-MUST-NOT-RUN', intent: 'queue' });
+  state = await snapshot();
+  const queued = state.queue.find(item => item.rpcId === 'queued-message');
+  assert.ok(queued); assert.equal(queued.placement, 'queued');
+  await api(`${path}/dsh/queue/${queued.id}`, { kind: 'steer' });
+  assert.equal((await snapshot()).queue.find(item => item.id === queued.id)?.placement, 'steering');
+  await api(`${path}/dsh/queue/${queued.id}`, { kind: 'remove' });
+  assert.equal((await snapshot()).queue.some(item => item.id === queued.id), false);
+  console.log('PASS native queue inspection, steering and withdrawal');
   await api(`${path}/dsh/cancel`, {});
   assert.throws(() => process.kill(pid, 0));
   state = await snapshot(); assert.equal(state.running, false);
@@ -114,7 +123,15 @@ try {
   assert.ok(image.ok, await image.clone().text());
   const imageReceipt = await image.json();
   await api(`${path}/messages`, { id: 'image', parts: [{ type: 'text', text: 'RESUME-CHECK with image' }, { type: 'file', receiptId: imageReceipt.receiptId }] });
-  await until(snapshot, s => !s.running, 'image reply'); console.log('PASS native image upload and prompt');
+  state = await until(snapshot, s => !s.running, 'image reply');
+  const imageMessage = state.events.find(e => e.type === 'user/message' && e.data.source?.rpcId === 'image');
+  const imageRef = imageMessage.data.content.find(block => block.type === 'image').attachment;
+  const imageResponse = await fetch(`http://127.0.0.1:${appPort}/v1${path}/dsh/images/${imageRef.attachmentId}`, { headers });
+  assert.ok(imageResponse.ok); assert.equal(imageResponse.headers.get('content-type'), 'image/png');
+  assert.equal((await imageResponse.arrayBuffer()).byteLength, imageRef.bytes);
+  await api(`${path}/messages`, { id: 'image', parts: [{ type: 'file', receiptId: imageReceipt.receiptId }] });
+  assert.equal((await snapshot()).events.filter(e => e.type === 'user/message' && e.data.source?.rpcId === 'image').length, 1);
+  console.log('PASS native image upload, authenticated preview and receipt retry');
   if (process.env.ZHIXING_TEST_BUSINESS_URL) {
     const schema = await api('/business/schema'); assert.ok(schema.paths['/v1/finance/summary']);
     const summary = await api('/finance/summary'); assert.ok(summary);

@@ -146,6 +146,19 @@ test("resource images expose failed or timed-out loading and retry without dropp
   stalled.unmount();
 });
 
+test("native DSH images use the session image route and retain authorization on retry", () => {
+  const contentPath = "/conversations/zhixing-main-aaaa/dsh/images/immutable-image";
+  const page = mount("ResourcePreview.tsx", "ResourceImage", { connection, resource: { id: "immutable-image:0", name: "photo.png" }, contentPath });
+  const first = find(page, node => node.type === "Image");
+  assert.equal(first.props.source[0].uri, `${connection.url}/v1${contentPath}?preview=true`);
+  assert.equal(first.props.source[0].headers.Authorization, "Bearer test-only");
+  first.props.onError(); find(page, label("重试加载图片 photo.png")).props.onPress({ stopPropagation() {} });
+  const retry = find(page, node => node.type === "Image");
+  assert.match(retry.props.source[0].uri, /\/dsh\/images\/immutable-image\?preview=true&retry=1$/);
+  assert.equal(retry.props.source[0].headers.Authorization, "Bearer test-only");
+  page.unmount();
+});
+
 test("report preview reads authenticated text, cancels stale results and retries failures", async () => {
   const props = { connection, resource: file("first", "report.md") };
   const page = mount("ResourcePreview.tsx", "TextResourcePreview", props);
