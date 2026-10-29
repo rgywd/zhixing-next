@@ -33,9 +33,12 @@ jobs:
           version: "0.12.19"
           enable-cache: true
       - run: npm ci
+      - name: Install locked DSH plugin dependencies
+        run: npm ci --prefix plugins/dsh-zhixing
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test:mobile
+      - run: npm run test:dsh
       - run: python3 -m unittest discover -s tests -p test_github_release.py
       - run: npm run bundle:android
       - run: npm run bundle:ios
