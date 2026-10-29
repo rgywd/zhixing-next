@@ -257,6 +257,7 @@ function ConnectedSession({
   const [showAiDrawer, setShowAiDrawer] = useState(false);
 
   const [chatSettingsFor, setChatSettingsFor] = useState<string | null>(null);
+  const [chatFilesFor, setChatFilesFor] = useState<string | null>(null);
   const [chatPreferencesReturn, setChatPreferencesReturn] = useState(false);
   const [showWelcome, setShowWelcome] = useState(true);
   const welcome = useWelcomeDraft(connection.url);
@@ -283,6 +284,7 @@ function ConnectedSession({
   if (previousChatMenuScope !== chatMenuScope) {
     setPreviousChatMenuScope(chatMenuScope);
     setChatSettingsFor(null);
+    setChatFilesFor(null);
   }
   useHealthReminders(connection, serviceVersion, () => openLifePage("health"));
   useEffect(() => {
@@ -533,7 +535,8 @@ function ConnectedSession({
             onMenu={() => setShowAiDrawer(true)}
             onNew={() => { if (!showWelcome && selected?.agent_id) void newConversation(false, selected.agent_id); else setShowWelcome(true); }}
             onClose={closeChat}
-            onSettings={!showWelcome && selected ? () => setChatSettingsFor(selected.id) : undefined}
+            onSettings={!showWelcome && selected ? () => { setChatFilesFor(null); setChatSettingsFor(selected.id); } : undefined}
+            onFiles={!showWelcome && selected && dsh ? () => { setChatSettingsFor(null); setChatFilesFor(selected.id); } : undefined}
             pinned={Boolean(selected && home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`))}
             pinReady={home.ready}
             onPin={!showWelcome && selected ? () => home.toggle({ kind: "conversation", id: selected.id, title: selected.title }) : undefined}
@@ -550,7 +553,9 @@ function ConnectedSession({
               onFilesOpened={() => setChatStart(old => old ? { ...old, files: false } : null)}
               startWithSend={chatStart?.id === selected.id && chatStart.send}
               onSendStarted={() => setChatStart(old => old ? { ...old, send: false } : null)}
-              settingsOpen={chatSettingsFor === selected.id} onSettingsClose={() => setChatSettingsFor(null)} />
+              settingsOpen={chatSettingsFor === selected.id} onSettingsClose={() => setChatSettingsFor(null)}
+              filesOpen={chatFilesFor === selected.id} onFilesClose={() => setChatFilesFor(null)}
+              onFilesOpen={() => setChatFilesFor(selected.id)} />
           ) : selected ? (
             <ChatPanel
               key={selected.id}

@@ -8,9 +8,9 @@ import { radius, space, typography, type ThemeColors } from "./theme";
 import { ActionLink, useUi } from "./ui";
 
 /** All agents share this chrome; identity and navigation remain caller-owned. */
-export function AgentChatHeader({ title, subtitle, status, pinned = false, pinReady = true, busy = false, onMenu, onNew, onClose, onPin, onSettings }: {
+export function AgentChatHeader({ title, subtitle, status, pinned = false, pinReady = true, busy = false, onMenu, onNew, onClose, onPin, onSettings, onFiles }: {
   title: string; subtitle: string; status?: string; pinned?: boolean; pinReady?: boolean; busy?: boolean;
-  onMenu: () => void; onNew: () => void; onClose: () => void; onPin?: () => void; onSettings?: () => void;
+  onMenu: () => void; onNew: () => void; onClose: () => void; onPin?: () => void; onSettings?: () => void; onFiles?: () => void;
 }) {
   const { s, colors } = useUi();
   const [menu, setMenu] = useState(false);
@@ -31,6 +31,7 @@ export function AgentChatHeader({ title, subtitle, status, pinned = false, pinRe
     <Pressable accessibilityRole="button" accessibilityLabel="对话菜单" onPress={() => setMenu(true)} style={styles.action}><Ionicons name="ellipsis-horizontal" size={22} color={colors.ink} /></Pressable>
     <BottomSheet visible={menu} title="对话" onClose={() => setMenu(false)} onDismiss={() => { const next = afterMenu.current; afterMenu.current = null; next?.(); }}>
       <View style={s.content}>
+        {onFiles ? <ActionLink icon="folder-open-outline" onPress={() => { afterMenu.current = onFiles; setMenu(false); }}>本对话文件</ActionLink> : null}
         {onSettings ? <ActionLink icon="options-outline" onPress={() => { afterMenu.current = onSettings; setMenu(false); }}>对话设置</ActionLink> : null}
         {onPin ? <ActionLink icon="bookmark-outline" disabled={!pinReady} onPress={() => { onPin(); setMenu(false); }}>{pinned ? "取消固定" : "固定对话"}</ActionLink> : null}
         <View style={s.row}><AppearanceControl /><Text style={s.description}>外观</Text></View>

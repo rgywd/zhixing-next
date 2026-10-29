@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as jsxRuntime from 'react/jsx-runtime';
 import * as protocol from '../src/dshProtocol.ts';
+import * as conversationFiles from '../src/conversationFiles.ts';
 import * as theme from '../src/theme.ts';
 
 const plain = value => JSON.parse(JSON.stringify(value));
@@ -43,9 +44,10 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
       clearDraft: async (_key, id) => { await clear(id); if (store.draft.pending?.id === id) store.draft = { text: '', pending: null }; } },
     './localCache': { readCache: async () => null, writeCache: async (_connection, _key, value) => cache.push(plain(value)) },
     './ConnectionStatus': { useSyncStatus: () => report }, './dshProtocol': protocol, './chatPhotos': { discardDraftPhotos() {} },
+    './conversationFiles': conversationFiles,
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
   };
-  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard']) dependencies[`./${component}`] = { [component]: component };
+  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard', 'ConversationFilesSheet']) dependencies[`./${component}`] = { [component]: component };
   dependencies['./PhotoAttachments'] = { DraftAttachments: 'DraftAttachments', MessagePhotos: 'MessagePhotos' };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../src/DshChatPanel.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -226,5 +228,58 @@ test('stale search results cannot highlight a different message with a reused se
   assert.deepEqual(handled, [1]);
   const list = app.render().find(n => n.type === 'FlatList');
   assert.equal(list.props.renderItem({ item: list.props.data[0] }).props.highlighted, false);
+  app.unmount();
+});
+
+test('the conversation file sheet hands the preview between native layers instead of stacking them', async () => {
+  const app = harness();
+  app.snapshot.history = { active: 'version-b', versions: [{ id: 'version-b', label: '原始版本' }] };
+  app.snapshot.events = [
+    { seq: 1, type: 'user/message', data: { turn: 1, source: { kind: 'user' }, content: [{ type: 'text', text: '整理清单' }, { type: 'file', attachment: { attachmentId: 'upload', name: '我的上传.pdf', bytes: 9 } }] } },
+    { seq: 2, type: 'deliverables/presented', data: { turn: 1, files: [{ path: '采购清单.md', description: '六人份' }, { path: '旧版方案.md' }] } },
+    { seq: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+  ];
+  // Mirror the App: the sheet is driven by filesOpen, so closing and reopening
+  // it is observable instead of an assumed prop value.
+  app.props.filesOpen = true;
+  app.props.onFilesClose = () => { app.props.filesOpen = false; };
+  app.props.onFilesOpen = () => { app.props.filesOpen = true; };
+  app.render(); await settle();
+  const sheet = () => app.render().find(n => n.type === 'ConversationFilesSheet');
+  const preview = () => app.render().find(n => n.type === 'DshFilePreview');
+  const stacked = () => sheet().props.visible && !!preview().props.file;
+  assert.equal(sheet().props.visible, true);
+  assert.deepEqual(sheet().props.files.map(item => item.file.name), ['旧版方案.md', '采购清单.md']);
+  assert.equal(sheet().props.files.some(item => item.file.name === '我的上传.pdf'), false);
+  assert.equal(preview().props.file, null);
+  assert.equal(stacked(), false);
+
+  app.composer().onText('还没发出的草稿'); await settle();
+  assert.equal(app.store.draft.text, '还没发出的草稿');
+
+  sheet().props.onOpen(sheet().props.files[0].file);
+  assert.equal(sheet().props.visible, false, 'opening a file closes the list first');
+  assert.equal(preview().props.file, null, 'the preview waits for the list to finish dismissing');
+  assert.ok(sheet(), 'the list component stays mounted so its query and share state survive');
+  assert.equal(stacked(), false);
+
+  sheet().props.onDismiss();
+  assert.equal(preview().props.file.name, '旧版方案.md');
+  assert.equal(sheet().props.visible, false, 'the list is hidden while the preview is open');
+  assert.equal(stacked(), false);
+
+  preview().props.onClose(); await settle();
+  assert.equal(preview().props.file, null);
+  assert.equal(sheet().props.visible, false, 'the list waits for the preview dismissal');
+  assert.equal(stacked(), false);
+
+  preview().props.onDismiss();
+  assert.equal(sheet().props.visible, true, 'the list reopens only after the preview is gone');
+  assert.equal(stacked(), false);
+  assert.equal(app.composer().text, '还没发出的草稿', 'the draft survives the whole round trip');
+  assert.equal(app.calls.some(call => call.path.endsWith('/messages')), false, 'listing files sends nothing');
+
+  sheet().props.onClose();
+  assert.equal(sheet().props.visible, false);
   app.unmount();
 });
