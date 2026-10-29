@@ -2,7 +2,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools';
 import { startServer, businessRequest } from './server.mjs';
 
 export const name = 'zhixing-app';
-export const inject = ['sessionController', 'sessionPersistence', 'sessions', 'agents', 'tools', 'fileUploads', 'userQuestions', 'systemPrompt', 'llm'];
+export const inject = ['sessionController', 'sessionPersistence', 'sessions', 'agents', 'tools', 'fileUploads', 'attachments', 'userQuestions', 'systemPrompt', 'llm'];
 
 export async function apply(ctx, config) {
   const server = await startServer(ctx, config);

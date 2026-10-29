@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chatRows, contentText, eventPresentation, liveText, mergeDshEvents, rowText } from '../src/dshProtocol.ts';
+import { chatRows, contentText, eventPresentation, liveText, mergeDshEvents, rowText, rowHasMessage } from '../src/dshProtocol.ts';
+import { toolDetails } from '../src/toolPresentation.ts';
 
 const event = (seq, type, data) => ({ seq, type, data });
 const user = (seq, text) => event(seq, 'user/message', { id: `user-${seq}`, source: { kind: 'user' }, content: [{ type: 'text', text }] });
@@ -75,4 +76,36 @@ test('late background events do not move the active turn back into an older repl
   const rows = chatRows(events, { running: true, live: null });
   assert.equal(rows.at(-1).active, true); assert.match(rows.at(-1).id, /^turn:2:/);
   assert.equal(rows[1].active, false); assert.equal(rows[1].events.at(-1).type, 'job/completed');
+});
+
+test('tool details retain native arguments, failed outputs and metadata across replay without call-ID collisions', () => {
+  const events = [event(0, 'turn/start', { turn: 1 }), user(1, 'inspect'),
+    { ...event(2, 'tool/call', { turn: 1, callId: 'same', name: 'custom_plugin', arguments: '{"q":"中文"}' }), time: 100 },
+    { ...event(3, 'tool/result', { turn: 1, message: { toolCallId: 'same', isError: true, content: [{ type: 'text', text: 'Permission denied' }, { type: 'custom', value: 42 }] }, error: { reason: 'denied' }, meta: { retryable: true } }), time: 123 },
+    event(4, 'turn/end', { turn: 1, reason: { kind: 'completed' } }), event(5, 'turn/start', { turn: 2 }), user(6, 'retry'),
+    event(7, 'tool/call', { turn: 2, callId: 'same', name: 'bash', arguments: '{"command":"false"}' }),
+    event(8, 'tool/result', { turn: 2, message: { toolCallId: 'same', content: [{ type: 'text', text: 'shell output' }] }, meta: { exitCode: 1 } })];
+  const before = JSON.stringify(events), rows = chatRows(events, null);
+  const first = rows[1].parts[0], second = rows[3].parts[0];
+  assert.equal(first.status, 'failed'); assert.equal(second.status, 'completed');
+  const detail = toolDetails(first);
+  assert.match(detail.input, /中文/); assert.match(detail.output, /Permission denied/); assert.match(detail.output, /42/);
+  assert.match(detail.error, /denied/); assert.equal(detail.duration, 23);
+  assert.equal(toolDetails(second).exitCode, 1);
+  assert.equal(toolDetails({ ...second, detail: {} }).exitCode, null, 'no invented shell exit status');
+  assert.equal(JSON.stringify(events), before);
+});
+
+test('native edit metadata shows actual before and after, and plain plugin arguments survive', () => {
+  const detail = toolDetails({ type: 'tool', name: 'edit', detail: { input: '{incomplete', meta: { path: 'a.ts', diffs: [{ oldText: 'a = 0', newText: 'a = 42' }] } } });
+  assert.equal(detail.input, '{incomplete'); assert.deepEqual(detail.diffs, [{ path: 'a.ts', before: 'a = 0', after: 'a = 42' }]);
+});
+
+test('message focus distinguishes steering segments sharing the same turn log, including sequence zero', () => {
+  const events = [user(0, 'first'), event(1, 'turn/start', { turn: 1 }), answer(2, 1, 1, [{ type: 'text', text: 'before' }]),
+    user(3, 'steer'), answer(4, 1, 2, [{ type: 'text', text: 'after' }])];
+  const rows = chatRows(events, null);
+  assert.equal(rows.findIndex(row => rowHasMessage(row, 0)), 0);
+  assert.equal(rows.findIndex(row => rowHasMessage(row, 4)), 3);
+  assert.equal(rows.findIndex(row => rowHasMessage(row, 2)), 1);
 });

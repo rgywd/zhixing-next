@@ -9,7 +9,7 @@ function fixture() {
     on(name, callback) { listeners.set(name, callback); return () => listeners.delete(name); },
     agents: { get: id => agents.get(id) },
     sessions: { get: id => agents.get(id)?.session, flush: async () => {} },
-    sessionPersistence: { open: async id => ({ read: async offset => ({ events: records.get(id).slice(offset) }), close: async () => {} }) },
+    sessionPersistence: { open: async id => ({ read: async (offset, limit) => ({ events: records.get(id).slice(offset, offset + limit) }), close: async () => {} }) },
     sessionController: {
       async modelCatalog() { return { default: { provider: 'fixture', model: 'fixture' }, routableProviders: ['fixture'], groups: [{ id: 'fixture', name: 'fixture', models: [{ id: 'fixture', name: 'fixture' }] }] }; },
       async list() { return { items: rows }; },
@@ -68,6 +68,43 @@ test('outlet authentication, full prompt admission, duplicate retry and durable 
   assert.equal((await request(`/conversations/${chat.id}/dsh`)).queue[0].placement, 'steering');
   await request(`/conversations/${chat.id}/dsh/queue/queued`, { kind: 'remove' });
   assert.equal((await request(`/conversations/${chat.id}/dsh`)).queue.length, 0);
+});
+
+test('file retrieval uses only session-owned immutable references, streams bytes and provides bounded text previews', async t => {
+  const f = fixture(), bytes = Buffer.from('中文文件\n' + 'x'.repeat(300000));
+  f.ctx.attachments = { async *readFileStream(ref) { assert.equal(ref.attachmentId, 'file-1'); yield bytes.subarray(0, 1000); yield bytes.subarray(1000); } };
+  const server = await startServer(f.ctx, { token: 'files', port: 0 }); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address.port}/v1/conversations`, headers = { Authorization: 'Bearer files' };
+  for (const sessionId of ['zhixing-main-aaaa', 'zhixing-main-bbbb']) await f.ctx.sessionController.create({ sessionId });
+  f.records.get('zhixing-main-aaaa').push(...Array.from({ length: 260 }, (_, seq) => ({ seq, type: 'system/message', data: {} })),
+    { seq: 260, type: 'tool/result', data: { message: { content: [{ type: 'file', attachment: { attachmentId: 'file-1', name: '报告.txt', bytes: bytes.length } }] } } });
+  const path = `${base}/zhixing-main-aaaa/dsh/files/file-1`;
+  assert.equal((await fetch(path)).status, 401);
+  assert.equal((await fetch(`${base}/zhixing-main-bbbb/dsh/files/file-1`, { headers })).status, 404);
+  assert.equal((await fetch(`${base}/zhixing-main-aaaa/dsh/files/%2Fetc%2Fpasswd`, { headers })).status, 404);
+  const downloaded = await fetch(path, { headers });
+  assert.equal(downloaded.status, 200);
+  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), bytes);
+  const preview = await (await fetch(`${path}/text`, { headers })).json();
+  assert.equal(preview.truncated, true); assert.equal(preview.content, bytes.subarray(0, 256 * 1024).toString('utf8'));
+  f.ctx.attachments.readFileStream = async function* () { yield bytes; await new Promise(resolve => setTimeout(resolve, 20)); throw new Error('integrity mismatch'); };
+  await assert.rejects(async () => { const corrupt = await fetch(path, { headers }); await corrupt.arrayBuffer(); }, /terminated|fetch failed/);
+});
+
+test('rename returns the accepted native title and search anchors only visible message content', async t => {
+  const f = fixture(), server = await startServer(f.ctx, { token: 'search', port: 0 }); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address.port}/v1`, headers = { Authorization: 'Bearer search' }, id = 'zhixing-main-aaaa';
+  await f.ctx.sessionController.create({ sessionId: id });
+  const rename = title => fetch(`${base}/conversations/${id}/title`, { method: 'PUT', headers, body: JSON.stringify({ title }) });
+  assert.equal((await rename('  ')).status, 400);
+  assert.equal((await (await rename('  本周代码改进  ')).json()).title, '本周代码改进');
+  f.ctx.sessionController.search = async () => ({ items: [{ sessionId: id, snippet: 'host summary' }, { sessionId: 'telegram-private', snippet: 'not this outlet' }] });
+  f.records.get(id).push({ seq: 0, type: 'user/message', data: { source: { kind: 'runtime-context' }, content: [{ type: 'text', text: '需要调整模型' }] } },
+    { seq: 1, type: 'assistant/message', data: { message: { id: 'm1', content: [{ type: 'reasoning', text: '需要调整模型' }, { type: 'text', text: '后面再说' }] } } },
+    { seq: 2, type: 'user/message', data: { id: 'm2', source: { kind: 'user' }, content: [{ type: 'text', text: '需要调整模型' }] } });
+  const result = await (await fetch(`${base}/conversations/search?q=${encodeURIComponent('调整模型')}`, { headers })).json();
+  assert.equal(result.items.length, 1); assert.equal(result.items[0].message_seq, 2); assert.equal(result.items[0].message_id, 'm2');
+  assert.equal(result.items[0].title, '本周代码改进'); assert.equal(result.items[0].snippet, '需要调整模型');
 });
 
 test('native image bytes require authorization and a durable reference in the requested session', async t => {

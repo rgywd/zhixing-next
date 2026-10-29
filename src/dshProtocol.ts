@@ -37,6 +37,7 @@ export type DshAttachment = { id: string; name: string; type: "image" | "file"; 
 export type DshChatRow = { id: string; role: "user" | "assistant"; parts: ReplyPart[]; attachments: DshAttachment[];
   events: DshEvent[]; active: boolean; status?: "completed" | "cancelled" | "failed" | "interrupted" };
 export const rowText = (row: DshChatRow) => row.parts.flatMap(p => p.type === "text" && p.attempt_status !== "failed" ? [p.text] : []).join("\n\n");
+export const rowHasMessage = (row: DshChatRow, seq: number) => row.role === "user" ? row.events[0]?.seq === seq : row.parts.some(p => p.type !== "tool" && p.seq === seq);
 export function contentAttachments(content: unknown): DshAttachment[] {
   return (Array.isArray(content) ? content : []).flatMap(value => {
     const block = record(value), attachment = record(block.attachment);
@@ -48,6 +49,7 @@ export function contentAttachments(content: unknown): DshAttachment[] {
 /** Presentation only: the complete native log stays intact for replay and details. */
 export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshChatRow[] {
   const rows: DshChatRow[] = [];
+  const calls = new Map<string, ReplyPart & { type: "tool" }>();
   const turns = new Map<number, { events: DshEvent[]; row?: DshChatRow; segment: string; ended: boolean; steps: Set<number> }>();
   let turn = 0;
   const context = (number: number) => {
@@ -79,16 +81,23 @@ export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshC
       current.row = undefined; current.segment = String(event.seq);
     } else if (event.type === "assistant/message" || event.type === "assistant/attempt") {
       const row = assistant(eventTurn), message = record(data.message);
-      row.parts.push(...contentParts(message.content, `message:${event.seq}`).map(part => event.type === "assistant/attempt" ? { ...part, attempt_status: "failed" as const } : part));
+      row.parts.push(...contentParts(message.content, `message:${event.seq}`).map(part => ({ ...part, seq: event.seq,
+        ...(event.type === "assistant/attempt" ? { attempt_status: "failed" as const } : {}) })));
       row.attachments.push(...contentAttachments(message.content));
       if (event.type === "assistant/message") current.steps.add(Number(data.step));
       if (data.interrupted) row.status = "interrupted";
     } else if (event.type === "tool/call") {
-      assistant(eventTurn).parts.push({ id: `tool:${data.callId}`, type: "tool", name: String(data.name), tool_call_id: String(data.callId), status: "started" });
+      const part: ReplyPart & { type: "tool" } = { id: `tool:${eventTurn}:${data.callId}:${event.seq}`, seq: event.seq, type: "tool", name: String(data.name), tool_call_id: String(data.callId), status: "started",
+        detail: { input: data.arguments, startedAt: event.time } };
+      assistant(eventTurn).parts.push(part); calls.set(`${eventTurn}:${data.callId}`, part);
     } else if (event.type === "tool/result") {
       const message = record(data.message), callId = message.toolCallId ?? record(message.source).callId ?? data.callId;
-      const part = rows.flatMap(row => row.parts).find(p => p.type === "tool" && p.tool_call_id === callId);
-      if (part?.type === "tool") part.status = message.isError || data.error ? "failed" : "completed";
+      const part = calls.get(`${eventTurn}:${callId}`);
+      if (part) {
+        part.status = message.isError || data.error ? "failed" : "completed";
+        part.detail = { ...part.detail, output: message.content, meta: data.meta, error: data.error, finishedAt: event.time };
+      }
+      assistant(eventTurn).attachments.push(...contentAttachments(message.content));
     } else if (event.type === "turn/end") {
       current.ended = true;
       const reason = record(data.reason).kind;

@@ -44,16 +44,16 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     './ConnectionStatus': { useSyncStatus: () => report }, './dshProtocol': protocol, './chatPhotos': { discardDraftPhotos() {} },
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
   };
-  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent']) dependencies[`./${component}`] = { [component]: component };
+  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview']) dependencies[`./${component}`] = { [component]: component };
   dependencies['./PhotoAttachments'] = { DraftAttachments: 'DraftAttachments', MessagePhotos: 'MessagePhotos' };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../src/DshChatPanel.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
-  }).outputText, { exports, AbortController, Uint8Array, encodeURIComponent, setInterval: fn => { tick = fn; return 1; }, clearInterval() {}, require: name => {
+  }).outputText, { exports, AbortController, Uint8Array, setTimeout, clearTimeout, encodeURIComponent, setInterval: fn => { tick = fn; return 1; }, clearInterval() {}, require: name => {
     assert.ok(name in dependencies, `Unexpected dependency: ${name}`); return dependencies[name];
   } });
   const props = { connection: { url: 'https://example.test', token: 'test' }, conversation: { id: 'zhixing-main-aaaa', model_id: null }, assistantName: '知行', catalog: null, onRefresh() {}, onConversationChanged() {} };
   const render = () => walk(lifecycle.render(() => exports.DshChatPanel(props)));
-  return { render, store, calls, uploads, removed, cache, snapshot, tick: () => tick(), composer: () => render().find(n => n.type === 'ConversationComposer').props, unmount: lifecycle.unmount };
+  return { render, props, store, calls, uploads, removed, cache, snapshot, tick: () => tick(), composer: () => render().find(n => n.type === 'ConversationComposer').props, unmount: lifecycle.unmount };
 }
 
 test('DSH send retains the accepted request ID until draft clearing is durable', async () => {
@@ -117,5 +117,20 @@ test('DSH follows streamed growth and keyboard resizing while preserving manual 
   list = app.render().find(n => n.type === 'FlatList');
   list.props.onScroll(event(300)); list.props.onContentSizeChange(400, 1700);
   assert.equal(scrolls.at(-1).animated, false); assert.equal(scrolls.length, 4);
+  app.unmount();
+});
+
+test('search focus waits for the exact visible row and disables automatic following during positioning', async () => {
+  const app = harness(), positions = [], handled = [];
+  app.props.focusMessageSeq = 0; app.props.onFocusHandled = seq => handled.push(seq);
+  app.snapshot.events = [{ seq: 0, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'target' }] } }];
+  app.render(); await settle();
+  const list = app.render().find(n => n.type === 'FlatList');
+  list.props.ref.current = { scrollToIndex: value => positions.push(value), scrollToOffset: () => assert.fail('must not follow latest before focus') };
+  list.props.onContentSizeChange(300, 2000);
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.equal(positions[0].index, 0); assert.equal(handled.length, 0);
+  list.props.onViewableItemsChanged({ viewableItems: [{ index: 1, isViewable: true }] }); assert.equal(handled.length, 0);
+  list.props.onViewableItemsChanged({ viewableItems: [{ index: 0, isViewable: true }] }); assert.deepEqual(handled, [0]);
   app.unmount();
 });

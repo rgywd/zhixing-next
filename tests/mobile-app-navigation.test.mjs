@@ -23,7 +23,7 @@ function hooks() {
   }, render(fn) { cursor = 0; effects = []; const result = fn(); effects.forEach((effect) => effect()); return result; }, unmount() { slots.forEach((slot) => slot?.cleanup?.()); } };
 }
 function load(filename, dependencies, suffix = "") {
-  dependencies = { "./localCache": cacheHarness(), "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, "./PhotoAttachments": { DraftAttachments: "DraftAttachments" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, ...dependencies };
+  dependencies = { "./localCache": cacheHarness(), "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, "./PhotoAttachments": { DraftAttachments: "DraftAttachments" }, "./ChatTextEditor": { ChatTextEditor: "ChatTextEditor" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, ...dependencies };
   const exports = {};
   runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/${filename}`, import.meta.url), "utf8") + suffix, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
     exports, AbortController, Error, Date, encodeURIComponent, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},

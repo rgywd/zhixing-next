@@ -77,7 +77,7 @@ function uiHarness(initial) {
   const { ReplyContent } = load("ReplyContent.tsx", { react, "react/jsx-runtime": jsx,
     "react-native": { View: "View", Text: "Text", Pressable: "Pressable", ActivityIndicator: "Spinner", ScrollView: "ScrollView" },
     "@react-native-vector-icons/ionicons": { Ionicons: "Icon" }, "./MessageBody": { MessageBody: "Markdown" },
-    "./BottomSheet": { BottomSheet: "BottomSheet" }, "./replyParts": { replyParts, replySections },
+    "./ToolDetails": { ToolDetails: "ToolDetails" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, "./replyParts": { replyParts, replySections },
     "./theme": { layout: { touchTarget: 44 } }, "./ui": { useUi: () => ({ s: { row: {}, muted: {}, description: {}, text: {} }, colors: { line: "#333", muted: "#aaa", gold: "#ca8", red: "#f88" } }) } });
   function visit(node, path = "root") {
     if (!node || typeof node !== "object") return node;
@@ -157,7 +157,7 @@ test("MessageBody renders the complete final source immediately and disables sel
     "react/jsx-runtime": jsx, "react-native": { Text: "Text", View: "View" },
     "@ronradtke/react-native-markdown-display": { __esModule: true, default: "Markdown", createMarkdownIt, parser, sealIncompleteMarkdown },
     "./ThemeProvider": { useTheme: () => ({ mode: "dark" }), useThemedStyles: (factory) => factory({ ink: "#fff", muted: "#aaa", line: "#333" }) },
-    "./messageMarkdown": { markdownBlockSignature } });
+    "./CopyAction": { CopyAction: "CopyAction" }, "./messageMarkdown": { markdownBlockSignature } });
   const current = MessageBody({ children: "Current complete", streaming: true }).props.children[0];
   let rendered = current.type(current.props); assert.equal(rendered.props.children[0].children[0].children[0].content, "Previous");
   assert.equal(rendered.props.textcomponent({}).props.selectable, false);
@@ -173,7 +173,7 @@ test("Markdown tables share fixed column boundaries across unequal headers, rows
     "react/jsx-runtime": jsx, "react-native": { Text: "Text", View: "View", ScrollView: "ScrollView" },
     "@ronradtke/react-native-markdown-display": { __esModule: true, default: "Markdown", createMarkdownIt, parser, sealIncompleteMarkdown },
     "./ThemeProvider": { useTheme: () => ({ mode: "dark" }), useThemedStyles: (factory) => factory({ ink: "#fff", muted: "#aaa", line: "#333" }) },
-    "./messageMarkdown": { markdownBlockSignature } });
+    "./CopyAction": { CopyAction: "CopyAction" }, "./messageMarkdown": { markdownBlockSignature } });
   const sources = [
     "| 事项 | 现在可以做 |\n| --- | --- |\n| 开销 | 记下一笔，看看本月余量 |\n| 饮食 | 记录这一餐，给下一餐留余地 |",
     "| A | Much longer heading | Third |\n| --- | --- | --- |\n| A very long first cell | 1 | [Link](https://fixture.test) |\n| B | Incomplete |",

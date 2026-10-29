@@ -9,6 +9,12 @@ const own = id => /^zhixing-(main|finance|health)-[a-f0-9-]+$/.test(id);
 const routeId = selection => JSON.stringify([selection.provider, selection.model]);
 const failure = (message, status = 400) => Object.assign(new Error(message), { status });
 const businessPath = path => /^\/v1\/(finance|health|life|memories|resources|business\/schema)(\/|\?|$)/.test(path);
+const textFile = name => /\.(txt|md|markdown|csv|json|jsonl|log|js|jsx|ts|tsx|py|sh|yaml|yml|toml|xml|html|css|sql|diff|patch|svg)$/i.test(name);
+const messageText = event => {
+  if (event.type !== 'assistant/message' && !(event.type === 'user/message' && event.data.source?.kind === 'user')) return '';
+  const content = event.data.message?.content ?? event.data.content;
+  return Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text).join('\n') : '';
+};
 
 export async function businessRequest(config, path, method = 'GET', body, signal, raw = false) {
   if (!config.businessUrl) throw failure('尚未连接知行业务数据服务。', 503);
@@ -123,6 +129,27 @@ export async function startServer(ctx, config) {
     return result.agent;
   };
   const flush = async id => { const session = ctx.sessions.get(id); if (session) await ctx.sessions.flush(session); };
+  async function* records(id) {
+    await flush(id);
+    const reader = await ctx.sessionPersistence.open(id, 'read');
+    try {
+      for (let offset = 0;;) {
+        const { events } = await reader.read(offset, 256);
+        yield* events;
+        if (events.length < 256) break;
+        offset += events.length;
+      }
+    } finally { await reader.close(); }
+  }
+  const attachmentFor = async (id, attachmentId, type) => {
+    await get(id);
+    for await (const event of records(id)) {
+      const content = event.data?.message?.content ?? event.data?.content;
+      const ref = Array.isArray(content) ? content.find(block => block.type === type && block.attachment?.attachmentId === attachmentId)?.attachment : undefined;
+      if (ref) return ref;
+    }
+    throw failure('这段对话中没有这个附件。', 404);
+  };
   const send = (id, body) => {
     if (typeof body.id !== 'string' || !body.id) throw failure('消息缺少请求编号。');
     // Serialize admission as well as using DSH's durable rpcId deduplication.
@@ -165,14 +192,27 @@ export async function startServer(ctx, config) {
         instructions: '', tools: [], visible: true })) : []));
       if (method === 'GET' && ['/v1/conversations', '/v1/conversations/recent'].includes(path)) return reply(page((await list()).map(conversation)));
       if (method === 'GET' && path === '/v1/conversations/search') {
-        const query = url.searchParams.get('q') ?? '';
-        const chats = (await list()).map(conversation);
-        const matches = await ctx.sessionController.search({ query }, signal());
-        return reply(page(matches.items.flatMap(item => {
-          const chat = chats.find(c => c.id === item.sessionId);
-          return chat ? [{ conversation_id: chat.id, title: chat.title, agent_id: chat.agent_id,
-            updated_at: chat.updated_at, message_id: null, message_seq: null, snippet: item.snippet }] : [];
-        })));
+        const needle = (url.searchParams.get('q') ?? '').trim().toLocaleLowerCase();
+        if (!needle) return reply(page([]));
+        const chats = (await list()).map(conversation).sort((a, b) =>
+          url.searchParams.get('sort') === 'oldest' ? a.updated_at.localeCompare(b.updated_at) : b.updated_at.localeCompare(a.updated_at));
+        // The stock Web profile may disable the optional DSH search index.
+        // Search this outlet's cold-readable message records directly; no host configuration changes.
+        const items = [];
+        for (const chat of chats) {
+          if (res.destroyed) return;
+          let hit;
+          for await (const event of records(chat.id)) {
+            if (res.destroyed) return;
+            const text = messageText(event), index = text.toLocaleLowerCase().indexOf(needle);
+            if (index >= 0) { hit = { seq: event.seq, id: event.data.message?.id ?? event.data.id,
+              snippet: text.slice(Math.max(0, index - 50), index + needle.length + 140) }; break; }
+          }
+          if (!hit && !chat.title.toLocaleLowerCase().includes(needle)) continue;
+          items.push({ conversation_id: chat.id, title: chat.title, agent_id: chat.agent_id,
+            updated_at: chat.updated_at, message_id: hit?.id ?? null, message_seq: hit?.seq ?? null, snippet: hit?.snippet ?? '' });
+        }
+        return reply(page(items));
       }
       if (method === 'POST' && path === '/v1/conversations') {
         const body = await json(req);
@@ -186,6 +226,13 @@ export async function startServer(ctx, config) {
       if (match && own(match[1])) {
         const [, id, suffix] = match;
         if (method === 'GET' && !suffix) return reply(await get(id));
+        if (method === 'PUT' && suffix === '/title') {
+          await get(id);
+          const body = await json(req);
+          if (typeof body.title !== 'string' || !body.title.trim()) throw failure('请填写对话名称。');
+          await ctx.sessionController.rename({ sessionId: id, title: body.title.trim() });
+          await flush(id); return reply(await get(id));
+        }
         if (method === 'POST' && suffix === '/messages') return reply(await send(id, await json(req)));
         if (method === 'PUT' && suffix === '/model') {
           const body = await json(req);
@@ -222,29 +269,38 @@ export async function startServer(ctx, config) {
           await flush(id); return reply(result);
         }
         if (method === 'GET' && suffix.startsWith('/dsh/images/')) {
-          await get(id);
           const attachmentId = decodeURIComponent(suffix.slice('/dsh/images/'.length));
           // DSH's attachment reader validates bytes, but not session ownership.
           // Resolve the immutable reference from this conversation, never from a client path.
-          await flush(id);
-          const reader = await ctx.sessionPersistence.open(id, 'read');
-          let attachment;
-          try {
-            for (let offset = 0; !attachment;) {
-              const { events } = await reader.read(offset, 256);
-              for (const event of events) {
-                const content = event.data?.message?.content ?? event.data?.content;
-                attachment = Array.isArray(content) ? content.find(block => block.type === 'image' && block.attachment?.attachmentId === attachmentId)?.attachment : undefined;
-                if (attachment) break;
-              }
-              if (events.length < 256) break;
-              offset += events.length;
-            }
-          } finally { await reader.close(); }
-          if (!attachment) throw failure('这段对话中没有这张图片。', 404);
+          const attachment = await attachmentFor(id, attachmentId, 'image');
           const result = await ctx.sessionController.attachment({ sessionId: id, attachment });
           res.writeHead(200, { 'Content-Type': result.attachment.mediaType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
           return res.end(Buffer.from(result.data, 'base64'));
+        }
+        const file = suffix.match(/^\/dsh\/files\/([^/]+)(\/text)?$/);
+        if (method === 'GET' && file) {
+          const attachment = await attachmentFor(id, decodeURIComponent(file[1]), 'file');
+          const abort = new AbortController();
+          const disconnected = () => { if (!res.writableFinished) abort.abort(); };
+          res.once('close', disconnected);
+          try {
+            if (file[2]) {
+              if (!textFile(attachment.name)) throw failure('此文件请下载后在其他应用打开。', 415);
+              const limit = 256 * 1024, chunks = []; let bytes = 0, total = 0;
+              for await (const chunk of ctx.attachments.readFileStream(attachment, abort.signal)) {
+                total += chunk.length;
+                if (bytes < limit) { const kept = Buffer.from(chunk.subarray(0, limit - bytes)); chunks.push(kept); bytes += kept.length; }
+              }
+              return reply({ resource_id: attachment.attachmentId, content: Buffer.concat(chunks).toString('utf8'),
+                format: /\.(md|markdown)$/i.test(attachment.name) ? 'markdown' : 'text', truncated: total > limit });
+            }
+            res.writeHead(200, { 'Content-Type': textFile(attachment.name) ? 'text/plain; charset=utf-8' : 'application/octet-stream',
+              'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(attachment.name)}`,
+              // End the chunked response only after DSH's stream verifies integrity.
+              'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' });
+            await pipeline(Readable.from(ctx.attachments.readFileStream(attachment, abort.signal)), res);
+            return;
+          } finally { res.removeListener('close', disconnected); }
         }
         if (method === 'POST' && suffix === '/dsh/cancel') {
           const agent = ctx.agents.get(id);

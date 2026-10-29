@@ -4,6 +4,17 @@
 
 DSH 聊天快照的 `queue` 来自原生 Session state，保留 `queued`／`steering` 位置；`POST /v1/conversations/{id}/dsh/queue/{itemId}` 接收原生 `remove`、`steer`、`edit` action，并在持久化后返回。`GET /v1/conversations/{id}/dsh/images/{attachmentId}` 需要连接令牌，仅解析本对话历史中的原生图片引用，返回真实图片字节和媒体类型；不存在于该会话的引用返回 404，不接受任意文件路径。客户端提交附件前持久保存上传 receipt，发送重试复用 receipt 与消息请求 ID。
 
+DSH 对话体验第一轮增加以下接口（均需连接令牌）：
+
+| 接口 | 请求与回执 |
+| --- | --- |
+| `PUT /v1/conversations/{id}/title` | `{ "title": "名称" }`；非空名称交给 DSH 原生 rename，flush 后返回更新的会话。 |
+| `GET /v1/conversations/search?q=...&sort=...` | 从本出口会话的原生持久记录做字面匹配，兼容宿主未开启搜索索引。每个会话返回首条用户／助手正文命中的 `message_seq`、`message_id`、摘要；仅标题命中则位置为 null。运行上下文、思考、工具参数不作为正文命中。`oldest` 按会话更新时间升序，其余按降序；没有声称实现全文相关性评分。 |
+| `GET /v1/conversations/{id}/dsh/files/{attachmentId}` | 从本会话的持久消息／工具结果解析原生 file 引用，流式读取原件；不接受客户端文件路径。跨会话引用 404。HTTP 流结束前等待宿主完整性校验；失败中断下载。 |
+| `GET /v1/conversations/{id}/dsh/files/{attachmentId}/text` | 文本／代码文件的 UTF-8 预览，返回 `resource_id/content/format/truncated`；最多展示前 256 KiB，仍校验完整原件。Markdown 的 format 为 markdown，其余为 text；不支持预览的二进制文件返回 415，仍可下载。 |
+
+文件接口消费 DSH 已产生的原生附件引用，不会自动将 `write`／`edit` 输出中的工作目录路径发布成附件。文本预览长度是显示边界，不限制宿主执行或原文件下载。
+
 状态：2026-10-23，当前源码包含数据库 v15 的人格成长、主动偏好、目标跟进与心跳，保留既有工具契约与 Agent 协作。历史安装、部署及验收状态以各版发布说明为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
 
 ## 交付范围

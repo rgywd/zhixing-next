@@ -8,6 +8,7 @@ import type { Run } from "./api";
 import { replyParts, replySections } from "./replyParts";
 import { layout } from "./theme";
 import { useUi } from "./ui";
+import { ToolDetails } from "./ToolDetails";
 
 const toolLabels: Record<string, string> = {
   read: "读取文件", write: "保存文件", edit: "修改文件", bash: "执行命令", subagent: "调用子助手", zhixing_service: "处理知行数据",
@@ -25,9 +26,9 @@ const toolLabels: Record<string, string> = {
   record_life_meal: "记录餐费与饮食", correct_life_meal: "纠正餐费与饮食", query_life_events: "查看生活记录",
   task: "调用子助手", inspect_environment: "检查运行环境",
 };
-const toolName = (name: string) => toolLabels[name] ?? "使用工具";
+const toolName = (name: string) => toolLabels[name] ?? name;
 const toolStatus = (part: ReplyPart & { type: "tool" }, active: boolean) => part.status === "started" ? active ? "进行中" : "结果未确认"
-  : part.status === "completed" ? "已完成" : "未完成";
+  : part.status === "completed" ? "已完成" : "执行失败";
 type Disclosure = "collapsed" | "preview" | "expanded";
 
 function ReasoningStep({ part, active, onExpand }: { part: ReplyPart & { type: "text" | "reasoning" }; active: boolean; onExpand: () => void }) {
@@ -84,12 +85,12 @@ function ProcessGroup({ parts, active, onOpenRun }: { parts: ReplyPart[]; active
         <Ionicons name="chevron-forward" size={14} color={colors.muted} />
       </Pressable> : <ReasoningStep key={part.id} part={part} active={active} onExpand={() => setChoice("expanded")} />)}
     </View> : null}
-    {detail ? <BottomSheet visible title={toolName(detail.name)} subtitle="这条回复的工具过程" onClose={() => setDetail(null)}>
+    {detail ? <BottomSheet visible title={toolName(detail.name)} subtitle="这条回复的工具过程" tall={!!detail.detail} onClose={() => setDetail(null)}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 16, gap: 12 }}>
         <Text style={s.text}>{toolStatus(detail, active)}</Text>
-        <Text style={s.description}>{detail.status === "completed" ? "这一步已收到工具完成回执，回复正文会结合结果继续说明。"
+        {detail.detail ? <ToolDetails part={detail} /> : <Text style={s.description}>{detail.status === "completed" ? "这一步已收到工具完成回执，回复正文会结合结果继续说明。"
           : detail.status === "failed" ? "这一步未完成，请结合回复正文或处理记录查看后续情况。"
-          : active ? "助手正在处理这一步，完成后会更新状态。" : "这一步没有收到明确的完成回执。"}</Text>
+          : active ? "助手正在处理这一步，完成后会更新状态。" : "这一步没有收到明确的完成回执。"}</Text>}
         {onOpenRun ? <Pressable accessibilityRole="button" accessibilityLabel="查看这条回复的处理记录" onPress={() => { setDetail(null); onOpenRun(); }}
           style={[s.row, { minHeight: layout.touchTarget }]}><Text style={[s.description, { color: colors.gold }]}>查看处理记录</Text></Pressable> : null}
       </ScrollView>

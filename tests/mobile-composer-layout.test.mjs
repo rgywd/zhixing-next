@@ -25,17 +25,36 @@ function harness({ colors = darkColors, request = async () => ({ items: [] }), .
   const lifecycle = hooks(), exports = {}, actions = [];
   const props = { text: "草稿", onText: (value) => actions.push(["text", value]), onSend: () => actions.push("send"), onFiles: () => actions.push("files"), onModel: () => actions.push("model"), onReasoning: () => actions.push("reasoning"), onSearch: () => actions.push("search"), editable: true, canSend: true, busy: false, kind: "chat", onKind() {}, model, depth: "high", searchId: null, ...initial };
   const dependencies = {
-    "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "./BottomSheet": { BottomSheet: "BottomSheet" },
+    "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "./ChatTextEditor": { ChatTextEditor: "ChatTextEditor" }, "./BottomSheet": { BottomSheet: "BottomSheet" },
     "react-native": { ...Object.fromEntries(["ActivityIndicator", "Pressable", "ScrollView", "Text", "TextInput", "View"].map((name) => [name, name])), StyleSheet: { create: (styles) => styles } },
     "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./api": { request }, "./BrandIcon": { BrandIcon: "BrandIcon" }, "./reasoning": { thinkingLabel }, "./theme": theme,
     "./ThemeProvider": { useTheme: () => ({ colors }), useThemedStyles: (factory) => factory(colors) },
   };
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/ConversationComposer.tsx", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
-    exports, AbortController, require(name) { assert.ok(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name]; },
+    exports, AbortController, setTimeout, require(name) { assert.ok(name in dependencies, `Unexpected dependency ${name}`); return dependencies[name]; },
   });
   return { props, actions, render(next = {}) { Object.assign(props, next); return walk(lifecycle.render(() => exports.ConversationComposer(props))); }, unmount: lifecycle.unmount };
 }
 const control = (nodes, label) => nodes.find((node) => node.type === "Pressable" && node.props.accessibilityLabel?.startsWith(label));
+
+test("expanded editing keeps the same draft and attachments, restores selection and never submits", async () => {
+  const app = harness({ text: '长需求\n第二段', children: 'photo draft' });
+  let nodes = app.render();
+  nodes.find(n => n.type === 'TextInput').props.onSelectionChange({ nativeEvent: { selection: { start: 4, end: 6 } } });
+  control(nodes, '展开编辑消息').props.onPress();
+  nodes = app.render();
+  const editor = nodes.find(n => n.type === 'ChatTextEditor');
+  assert.deepEqual({ ...editor.props.initialSelection }, { start: 4, end: 6 });
+  editor.props.onText('修改后的长需求');
+  nodes = app.render({ text: '修改后的长需求' });
+  assert.equal(nodes.find(n => n.type === 'ChatTextEditor').props.text, '修改后的长需求');
+  const restored = [];
+  nodes.find(n => n.type === 'TextInput').props.ref.current = { focus() {}, setNativeProps: value => restored.push(value) };
+  editor.props.onSelection({ start: 2, end: 2 }); editor.props.onClose();
+  await new Promise(resolve => setTimeout(resolve, 120));
+  assert.deepEqual({ ...restored[0].selection }, { start: 2, end: 2 });
+  assert.ok(content(app.render()[0]).includes('photo draft')); assert.ok(!app.actions.includes('send')); app.unmount();
+});
 
 test("the shared default composer places real choices above the attachment, input and send row", () => {
   const app = harness(); const nodes = app.render();
@@ -107,7 +126,7 @@ test("queued content floats above the model viewport without adding a persistent
   assert.equal(anchor.props.children[1].type, "ScrollView");
   const empty = app.render({ floating: undefined });
   assert.equal(empty[0].props.children[0].props.children[0], null);
-  assert.equal(empty[0].props.children.filter((node) => node.type !== "BottomSheet").length, 2);
+  assert.equal(empty[0].props.children.filter((node) => node && node.type !== "BottomSheet").length, 2);
   app.unmount();
 });
 

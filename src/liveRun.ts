@@ -3,7 +3,8 @@ import type { Message, Run, RunEvent } from "./api";
 export type LiveTool = { id: string; name: string; status: "started" | "completed" | "failed" };
 type ReplyPartBase = { id: string; seq?: number; stream_id?: string; message_id?: string; truncated?: boolean; attempt_status?: "completed" | "failed" };
 export type ReplyPart = ReplyPartBase & ({ type: "text"; text: string } | { type: "reasoning"; text: string }
-  | { type: "tool"; name: string; status: LiveTool["status"]; tool_call_id?: string });
+  | { type: "tool"; name: string; status: LiveTool["status"]; tool_call_id?: string;
+      detail?: { input?: unknown; output?: unknown; meta?: unknown; error?: unknown; startedAt?: number; finishedAt?: number } });
 type Segment = { id: string; content: string; reasoning: string };
 export type LiveRunBuffer = {
   runId: string; cursor: number; streamId: string | null; segments: Segment[];

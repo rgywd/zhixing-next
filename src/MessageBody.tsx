@@ -1,9 +1,25 @@
 import { memo, useDeferredValue, useMemo, type ReactNode } from "react";
 import { ScrollView, Text, View, type TextProps } from "react-native";
-import Markdown, { createMarkdownIt, parser, sealIncompleteMarkdown, type ASTNode, type MarkdownStyleMap } from "@ronradtke/react-native-markdown-display";
+import Markdown, { createMarkdownIt, parser, renderRules, sealIncompleteMarkdown, type ASTNode, type MarkdownStyleMap } from "@ronradtke/react-native-markdown-display";
 import type { ThemeColors } from "./theme";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
 import { markdownBlockSignature } from "./messageMarkdown";
+import { CopyAction } from "./CopyAction";
+
+function CodeFence({ node, styles }: { node: ASTNode; styles: MarkdownStyleMap }) {
+  const { colors, mode } = useTheme();
+  const language = typeof node.sourceInfo === "string" ? node.sourceInfo.trim().split(/\s+/)[0] : "";
+  return <View style={[styles._VIEW_SAFE_fence, { minWidth: 0 }]}>
+    <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, paddingHorizontal: 12, backgroundColor: colors.pale }}>
+      <Text numberOfLines={1} style={[styles.fence_language_label, { flex: 1 }]}>{language || "代码"}</Text>
+      <CopyAction text={node.content} label="复制代码" />
+    </View>
+    {renderRules(SelectableText).fence!(node, [], [], { ...styles,
+      _VIEW_SAFE_fence: { borderWidth: 0, marginVertical: 0 },
+      _VIEW_SAFE_fence_header: { display: "none" },
+    }, undefined, mode)}
+  </View>;
+}
 
 function SelectableText(props: TextProps) {
   return <Text selectable {...props} />;
@@ -18,6 +34,8 @@ const tableWidth = (node: ASTNode) => Math.max(1, ...node.children.flatMap((part
 const cellStyle = { width: tableColumnWidth, minWidth: tableColumnWidth, maxWidth: tableColumnWidth, flex: 0, flexGrow: 0, flexShrink: 0 };
 
 const createMarkdownRules = (colors: ThemeColors) => ({
+  fence: (node: ASTNode, _children: ReactNode[], _parents: ASTNode[], styles: MarkdownStyleMap) => <CodeFence key={node.key} node={node} styles={styles} />,
+  code_block: (node: ASTNode, _children: ReactNode[], _parents: ASTNode[], styles: MarkdownStyleMap) => <CodeFence key={node.key} node={node} styles={styles} />,
   image: (node: ASTNode) => (
     <Text key={node.key} style={{ color: colors.muted }}>
       {node.attributes.alt || "[图片]"}

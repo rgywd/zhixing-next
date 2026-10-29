@@ -96,7 +96,7 @@ test("Markdown switches syntax highlighting as well as the surrounding reading s
     "react-native": { Text: "Text", View: "View" },
     "@ronradtke/react-native-markdown-display": { __esModule: true, default: "Markdown", createMarkdownIt: () => ({}),
       parser: (_source, render) => render([node]), sealIncompleteMarkdown: (source) => source },
-    "./messageMarkdown": { markdownBlockSignature: () => "fence-signature" },
+    "./CopyAction": { CopyAction: "CopyAction" }, "./messageMarkdown": { markdownBlockSignature: () => "fence-signature" },
     "./ThemeProvider": { useTheme: () => ({ mode: "dark" }), useThemedStyles: (factory) => factory(theme.darkColors) },
   });
   const block = markdown.MessageBody({ children: "Code" }).props.children[0];

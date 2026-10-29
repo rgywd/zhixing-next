@@ -8,6 +8,7 @@ import { BrandIcon } from "./BrandIcon";
 import { thinkingLabel } from "./reasoning";
 import { radius, space, typography } from "./theme";
 import { BottomSheet } from "./BottomSheet";
+import { ChatTextEditor, type TextSelection } from "./ChatTextEditor";
 
 type Props = {
   unlimitedText?: boolean;
@@ -25,6 +26,9 @@ export function ConversationComposer(props: Props) {
   const { colors } = useTheme();
   const styles = useThemedStyles(createStyles);
   const [showAttachments, setShowAttachments] = useState(false);
+  const [expanded, setExpanded] = useState<TextSelection | null>(null);
+  const input = useRef<TextInput>(null);
+  const selection = useRef<TextSelection>({ start: props.text.length, end: props.text.length });
   const nextAttachment = useRef<(() => void) | null>(null);
   const { text, placeholder, onText, onSend, onFiles, editable, canSend, busy, pending, kind,
     model, depth = "auto", searchId, onModel, onReasoning, onSearch, optionsLocked, children, hint } = props;
@@ -61,9 +65,14 @@ export function ConversationComposer(props: Props) {
       {children ? <View style={styles.attachments}>{children}</View> : null}
       <View style={styles.inputRow}>
         <Pressable accessibilityRole="button" accessibilityLabel="添加资料" accessibilityState={{ disabled: props.attachmentLocked }} disabled={props.attachmentLocked} onPress={() => { if (props.onPhotos) setShowAttachments(true); else onFiles(); }} style={[styles.files, props.attachmentLocked && styles.disabled]}><Ionicons name="add" size={26} color={colors.ink} /></Pressable>
-        <TextInput accessibilityLabel="消息" multiline maxLength={props.unlimitedText ? undefined : 20000} placeholder={placeholder ?? "说说你的想法…"} placeholderTextColor={colors.muted} value={text} editable={editable} onChangeText={onText} style={styles.input} />
+        <TextInput ref={input} accessibilityLabel="消息" multiline maxLength={props.unlimitedText ? undefined : 20000} placeholder={placeholder ?? "说说你的想法…"} placeholderTextColor={colors.muted} value={text} editable={editable && !expanded} onChangeText={onText}
+          onSelectionChange={e => { selection.current = e.nativeEvent.selection; }} style={styles.input} />
         <Pressable accessibilityRole="button" accessibilityLabel={props.stopping ? props.stopDisabled ? "正在停止回复" : "停止回复" : pending ? "重试发送" : "发送消息"} accessibilityState={{ disabled: props.stopping ? props.stopDisabled || busy : !canSend }} disabled={props.stopping ? props.stopDisabled || busy : !canSend} onPress={props.stopping ? props.onStop : onSend} style={[styles.send, (props.stopping ? props.stopDisabled : !canSend) && styles.sendDisabled]}>{busy ? <ActivityIndicator size="small" color={colors.onInk} /> : <Ionicons name={props.stopping ? "stop" : pending ? "refresh" : "arrow-up"} size={25} color={colors.onInk} />}</Pressable>
       </View>
+      {text.length > 0 ? <Pressable accessibilityRole="button" accessibilityLabel="展开编辑消息" disabled={!editable}
+        onPress={() => setExpanded({ start: Math.min(selection.current.start, text.length), end: Math.min(selection.current.end, text.length) })} style={{ minHeight: 44, alignSelf: "flex-end", flexDirection: "row", alignItems: "center", gap: 6, paddingHorizontal: 12 }}>
+        <Ionicons name="expand-outline" size={16} color={colors.muted} /><Text style={styles.chipText}>展开编辑</Text>
+      </Pressable> : null}
       {hint ? <View style={styles.hint}>{hint}</View> : null}
     </View>
     <BottomSheet visible={showAttachments} title="添加到消息" onClose={() => setShowAttachments(false)} onDismiss={() => {
@@ -78,6 +87,12 @@ export function ConversationComposer(props: Props) {
         </Pressable>
       </View>
     </BottomSheet>
+    {expanded ? <ChatTextEditor text={text} onText={onText} editable={editable} maxLength={props.unlimitedText ? undefined : 20000}
+      initialSelection={expanded}
+      onSelection={value => { selection.current = value; }} onClose={() => {
+        setExpanded(null);
+        setTimeout(() => { input.current?.focus(); input.current?.setNativeProps({ selection: selection.current }); }, 100);
+      }} /> : null}
   </View>;
 }
 
