@@ -3,6 +3,8 @@ import { Buffer } from 'node:buffer';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
+import { createRevisions } from './revisions.mjs';
+import { publishFile } from './artifacts.mjs';
 
 const page = items => ({ items, next_cursor: null, previous_cursor: null });
 const own = id => /^zhixing-(main|finance|health)-[a-f0-9-]+$/.test(id);
@@ -57,7 +59,7 @@ export function modelCatalog(catalog, images = new Map()) {
 }
 
 /** Answer only requests for this outlet. Other channel answerers keep their scope. */
-export function createInteractions(ctx) {
+export function createInteractions(ctx, owns = own) {
   const pending = new Map();
   const wait = (kind, req) => new Promise((resolve, reject) => {
     const id = randomUUID();
@@ -74,8 +76,8 @@ export function createInteractions(ctx) {
     if (req.signal?.aborted) abort();
   });
   const disposers = [
-    ctx.on('approval/request', (req, next) => own(req.agent?.id ?? '') ? wait('approval', req) : next(), { prepend: true }),
-    ctx.on('user-questions/request', (req, next) => own(req.agent?.id ?? '') ? wait('question', req) : next(), { prepend: true }),
+    ctx.on('approval/request', (req, next) => owns(req.agent?.id ?? '') ? wait('approval', req) : next(), { prepend: true }),
+    ctx.on('user-questions/request', (req, next) => owns(req.agent?.id ?? '') ? wait('question', req) : next(), { prepend: true }),
   ];
   return {
     list: sessionId => [...pending.values()].filter(p => p.sessionId === sessionId).map(({ finish: _finish, ...p }) => p),
@@ -104,20 +106,37 @@ export function createInteractions(ctx) {
   };
 }
 
-export async function startServer(ctx, config) {
+export async function startServer(ctx, config, native = {}) {
   if (typeof config.token !== 'string' || !config.token.trim()) throw new Error('ZHIXING_DSH_TOKEN is required');
   const token = Buffer.from(`Bearer ${config.token}`);
-  const interactions = createInteractions(ctx);
+  const artifacts = id => native.metadata.artifacts.get(id) ?? [];
+  const children = new Set([...native.metadata.revisions.entries()].flatMap(([, state]) => state.entries.map(entry => entry.child)));
+  const owns = id => own(id) || children.has(id);
+  const interactions = createInteractions(ctx, owns);
+  const mutations = new Map();
+  const serial = (id, action) => {
+    const next = (mutations.get(id) ?? Promise.resolve()).catch(() => {}).then(action);
+    mutations.set(id, next);
+    void next.finally(() => { if (mutations.get(id) === next) mutations.delete(id); }).catch(() => {});
+    return next;
+  };
   const live = new Map();
   const sends = new Map();
   const stopStream = ctx.on('agent/assistant-stream', ({ agent, frame }) => {
-    if (!own(agent.id)) return;
+    if (!owns(agent.id)) return;
     if (frame.type === 'start') live.set(agent.id, { attemptId: frame.attemptId, turn: frame.turn, step: frame.step, chunks: [] });
     if (frame.type === 'chunk') live.get(agent.id)?.chunks.push(frame.chunk);
     if (frame.type === 'end') live.delete(agent.id);
   });
   const signal = () => new AbortController().signal;
-  const list = async () => (await ctx.sessionController.list({}, signal())).items.filter(row => own(row.sessionId));
+  const list = async () => {
+    const all = (await ctx.sessionController.list({}, signal())).items;
+    return Promise.all(all.filter(row => own(row.sessionId)).map(async root => {
+      const activeId = await revisions.active(root.sessionId);
+      const active = all.find(row => row.sessionId === activeId);
+      return active ? { ...active, sessionId: root.sessionId, projections: { values: { ...active.projections?.values, title: root.projections?.values.title } } } : root;
+    }));
+  };
   const get = async id => {
     const row = (await list()).find(row => row.sessionId === id);
     if (!row) throw failure('对话不存在。', 404);
@@ -141,8 +160,10 @@ export async function startServer(ctx, config) {
       }
     } finally { await reader.close(); }
   }
+  const revisions = createRevisions(ctx, { records, resolve, flush, ...native, register: id => children.add(id) });
   const attachmentFor = async (id, attachmentId, type) => {
-    await get(id);
+    const published = artifacts(id).flatMap(a => a.content).find(b => b.type === type && b.attachment?.attachmentId === attachmentId);
+    if (published) return published.attachment;
     for await (const event of records(id)) {
       const content = event.data?.message?.content ?? event.data?.content;
       const ref = Array.isArray(content) ? content.find(block => block.type === type && block.attachment?.attachmentId === attachmentId)?.attachment : undefined;
@@ -202,7 +223,8 @@ export async function startServer(ctx, config) {
         for (const chat of chats) {
           if (res.destroyed) return;
           let hit;
-          for await (const event of records(chat.id)) {
+          const version = await revisions.active(chat.id);
+          for await (const event of records(version)) {
             if (res.destroyed) return;
             const text = messageText(event), index = text.toLocaleLowerCase().indexOf(needle);
             if (index >= 0) { hit = { seq: event.seq, id: event.data.message?.id ?? event.data.id,
@@ -210,7 +232,7 @@ export async function startServer(ctx, config) {
           }
           if (!hit && !chat.title.toLocaleLowerCase().includes(needle)) continue;
           items.push({ conversation_id: chat.id, title: chat.title, agent_id: chat.agent_id,
-            updated_at: chat.updated_at, message_id: hit?.id ?? null, message_seq: hit?.seq ?? null, snippet: hit?.snippet ?? '' });
+            updated_at: chat.updated_at, message_id: hit?.id ?? null, message_seq: hit?.seq ?? null, message_version: version, snippet: hit?.snippet ?? '' });
         }
         return reply(page(items));
       }
@@ -224,27 +246,37 @@ export async function startServer(ctx, config) {
       }
       const match = path.match(/^\/v1\/conversations\/([^/]+)(.*)$/);
       if (match && own(match[1])) {
-        const [, id, suffix] = match;
-        if (method === 'GET' && !suffix) return reply(await get(id));
+        const [, root, suffix] = match;
+        const handle = async () => {
+        await get(root);
+        const history = await revisions.summary(root);
+        const id = history.active;
+        if (method === 'GET' && !suffix) return reply(await get(root));
+        if (method === 'POST' && suffix === '/dsh/revisions') return reply(await revisions.revise(root, await json(req)));
+        if (method === 'PUT' && suffix === '/dsh/version') return reply(await revisions.select(root, await json(req)));
         if (method === 'PUT' && suffix === '/title') {
-          await get(id);
           const body = await json(req);
           if (typeof body.title !== 'string' || !body.title.trim()) throw failure('请填写对话名称。');
-          await ctx.sessionController.rename({ sessionId: id, title: body.title.trim() });
-          await flush(id); return reply(await get(id));
+          await ctx.sessionController.rename({ sessionId: root, title: body.title.trim() });
+          await flush(root); return reply(await get(root));
         }
-        if (method === 'POST' && suffix === '/messages') return reply(await send(id, await json(req)));
+        if (method === 'POST' && suffix === '/messages') {
+          const body = await json(req);
+          if (body.version && body.version !== id) throw failure('对话版本已改变，消息仍在草稿中。', 409);
+          return reply(await send(id, body));
+        }
         if (method === 'PUT' && suffix === '/model') {
           const body = await json(req);
           const defaults = (await ctx.sessionController.modelCatalog()).default;
           const [provider, model] = body.model_id ? JSON.parse(body.model_id) : [defaults.provider, defaults.model];
           await ctx.sessionController.selectModel({ sessionId: id, provider, model,
             ...(body.reasoning_effort && body.reasoning_effort !== 'auto' ? { reasoningEffort: body.reasoning_effort } : {}) });
-          await flush(id); return reply(await get(id));
+          await flush(id); return reply(await get(root));
         }
         if (method === 'GET' && suffix === '/dsh') {
-          const offset = Number(url.searchParams.get('offset') ?? 0);
-          if (!Number.isSafeInteger(offset) || offset < 0) throw failure('无效的事件位置。');
+          const requested = Number(url.searchParams.get('offset') ?? 0);
+          const offset = (url.searchParams.get('version') ?? id) === id ? requested : 0;
+          if (!Number.isSafeInteger(requested) || requested < 0) throw failure('无效的事件位置。');
           await flush(id);
           const reader = await ctx.sessionPersistence.open(id, 'read');
           let events;
@@ -257,7 +289,7 @@ export async function startServer(ctx, config) {
               kind: 'question', questions: question.questions, callId: question.callId });
           }
           const state = await ctx.sessionController.state({ sessionId: id }, signal());
-          return reply({ events, next: offset + events.length, hasMore: events.length === 256,
+          return reply({ history, artifacts: artifacts(id), events, next: offset + events.length, hasMore: events.length === 256,
             running: agent?.status === 'running', active: !!agent, pending,
             queue: (state.queue ?? []).filter(item => item.placement !== 'context'), live: live.get(id) ?? null });
         }
@@ -267,6 +299,28 @@ export async function startServer(ctx, config) {
           if (!['remove', 'steer', 'edit'].includes(action.kind)) throw failure('无效的队列操作。');
           const result = await ctx.sessionController.updateQueue({ sessionId: id, itemId, action });
           await flush(id); return reply(result);
+        }
+        if (method === 'POST' && suffix === '/dsh/artifacts') {
+          const body = await json(req);
+          if (typeof body.id !== 'string' || !body.id || !Number.isSafeInteger(body.seq)) throw failure('无效的文件发布操作。');
+          if (body.version !== id) throw failure('对话版本已改变，请重新打开工具详情。', 409);
+          const events = []; for await (const event of records(id)) events.push(event);
+          const previous = artifacts(id).find(a => a.id === body.id);
+          if (previous) {
+            if (previous.toolSeq !== body.seq) throw failure('这次发布的文件已改变。', 409);
+            return reply(previous);
+          }
+          const call = events.find(e => e.seq === body.seq && e.type === 'tool/call' && ['read', 'write', 'edit'].includes(e.data.name));
+          const result = call && events.find(e => e.seq > call.seq && e.type === 'tool/result' &&
+            (e.data.message?.toolCallId ?? e.data.callId) === call.data.callId && e.data.turn === call.data.turn);
+          if (!result || result.data.error || result.data.message?.isError) throw failure('这一步没有成功的文件回执。');
+          let args; try { args = JSON.parse(call.data.arguments); } catch { args = call.data.arguments; }
+          const path = result.data.meta?.path ?? args?.file_path;
+          const agent = await resolve(id);
+          const value = await publishFile(ctx, agent, path);
+          const data = { id: body.id, toolSeq: call.seq, path: value.path, content: [{ type: 'file', attachment: value.attachment }] };
+          await native.metadata.artifacts.put(id, [...artifacts(id), data]);
+          return reply(data);
         }
         if (method === 'GET' && suffix.startsWith('/dsh/images/')) {
           const attachmentId = decodeURIComponent(suffix.slice('/dsh/images/'.length));
@@ -327,6 +381,11 @@ export async function startServer(ctx, config) {
           const mediaType = url.searchParams.get('mediaType');
           return reply(await (mediaType?.startsWith('image/') ? ctx.fileUploads.uploadImageStream({ ...args, mediaType }) : ctx.fileUploads.uploadStream(args)));
         }
+        throw failure('接口不存在。', 404);
+        };
+        // Stream uploads and human responses must not delay stopping a running tool.
+        const independent = method === 'GET' || suffix === '/dsh/cancel' || suffix.startsWith('/dsh/answers/') || (method === 'PUT' && suffix === '/dsh/files');
+        return await (independent ? handle() : serial(root, handle));
       }
       if (method === 'GET' && path === '/v1/resources' && !config.businessUrl) return reply(page([]));
       if (businessPath(path)) {
@@ -345,7 +404,7 @@ export async function startServer(ctx, config) {
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.port ?? 8001, config.host ?? '127.0.0.1', resolve); });
   } catch (error) { interactions.close(); stopStream(); throw error; }
-  return { address: server.address(), async close() {
+  return { owns, address: server.address(), async close() {
     interactions.close(); stopStream();
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   } };

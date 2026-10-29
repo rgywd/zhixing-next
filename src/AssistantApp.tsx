@@ -253,7 +253,7 @@ function ConnectedSession({
     recentResources, selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive } = useSessionData(connection);
   const [showSearchSettings, setShowSearchSettings] = useState(false);
   const dsh = runtime === "dsh";
-  const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number } | null>(null);
+  const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number; version?: string } | null>(null);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
 
   const [chatSettingsFor, setChatSettingsFor] = useState<string | null>(null);
@@ -326,7 +326,7 @@ function ConnectedSession({
     if (next === "life") setLifePage("overview");
     if (next === "settings") { setSettingsView("overview"); setChatPreferencesReturn(false); }
   }
-  async function openConversation(id: string, messageSeq?: number) {
+  async function openConversation(id: string, messageSeq?: number, version?: string) {
     const requestId = ++navigation.current;
     let target = conversations.find((item) => item.id === id);
     if (!target) {
@@ -338,7 +338,7 @@ function ConnectedSession({
       } catch (e) { if (alive.current && requestId === navigation.current) setError(humanError(e)); return; }
     }
     home.opened({ kind: "conversation", id, title: target.title });
-    setFocusMessage(messageSeq != null ? { conversationId: id, seq: messageSeq } : null);
+    setFocusMessage(messageSeq != null ? { conversationId: id, seq: messageSeq, version } : null);
     setSelectedId(id);
     selectedRef.current = id;
     setShowAiDrawer(false);
@@ -542,6 +542,7 @@ function ConnectedSession({
             <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />
           ) : selected && dsh ? (
             <DshChatPanel key={selected.id} connection={connection} conversation={selected} assistantName={chatAssistantName}
+              focusMessageVersion={focusMessage?.conversationId === selected.id ? focusMessage.version : undefined}
               focusMessageSeq={focusMessage?.conversationId === selected.id ? focusMessage.seq : null} onFocusHandled={focusHandled}
               catalog={catalog} onRefresh={serviceChanged} webUrl={status?.web_url}
               onConversationChanged={updated => setConversations(old => mergeById(old, [updated]))}

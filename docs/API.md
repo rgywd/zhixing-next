@@ -13,7 +13,23 @@ DSH 对话体验第一轮增加以下接口（均需连接令牌）：
 | `GET /v1/conversations/{id}/dsh/files/{attachmentId}` | 从本会话的持久消息／工具结果解析原生 file 引用，流式读取原件；不接受客户端文件路径。跨会话引用 404。HTTP 流结束前等待宿主完整性校验；失败中断下载。 |
 | `GET /v1/conversations/{id}/dsh/files/{attachmentId}/text` | 文本／代码文件的 UTF-8 预览，返回 `resource_id/content/format/truncated`；最多展示前 256 KiB，仍校验完整原件。Markdown 的 format 为 markdown，其余为 text；不支持预览的二进制文件返回 415，仍可下载。 |
 
-文件接口消费 DSH 已产生的原生附件引用，不会自动将 `write`／`edit` 输出中的工作目录路径发布成附件。文本预览长度是显示边界，不限制宿主执行或原文件下载。
+文件接口消费 DSH 原生附件引用。工作区路径通过下述发布操作转为不可变附件；文本预览长度是显示边界，不限制宿主执行或原文件下载。
+
+DSH 对话体验第二轮增加历史版本与工作区交付（认证与逻辑对话 ID 不变）：
+
+搜索仅检索当前所选版本，结果额外返回 `message_version`；客户端发现结果版本已变化时提示重新搜索，不按复用的 seq 错误定位。
+
+| 接口 | 请求与回执 |
+| --- | --- |
+| `POST /v1/conversations/{id}/dsh/revisions` | `{id, kind: "edit"或"retry", version, seq, text?, attachments?}`。id 是稳定请求编号，version 是当前原生会话 ID，seq 是所选用户消息或助手回复的原生事件位置。edit 提供 text 与保留的原附件 ID 数组；不能引用外部附件。retry 使用对应用户消息的原始正文与附件。返回 `{active, versions}`；同请求重试不重复执行，同编号改内容、版本过期或执行中返回 409。 |
+| `PUT /v1/conversations/{id}/dsh/version` | `{expected, version}`，仅可切换本逻辑对话已接受的版本，检查当前版本与原生空闲／队列状态。外部版本 404。未来发送、取消、模型选择和附件读取作用于所选版本；标题属于逻辑对话。 |
+| `GET /v1/conversations/{id}/dsh?offset=N&version=...` | 增加 `history: {active, versions:[{id,label,source?,seq?}]}` 与 `artifacts:[{id,toolSeq,path,content}]`。版本不一致时从原生 seq 0 返回，客户端清空旧版本事件。artifacts 是持久发布回执，不占用或伪造 DSH seq。 |
+| `POST /v1/conversations/{id}/dsh/artifacts` | `{id, seq, version}`。从当前版本成功的 read／write／edit 回执确定路径，发布文件的**当前**字节；返回 `{id,toolSeq,path,content:[原生file块]}`，同编号返回同一结果。不能自传路径。读取前后检查版本；变化、权限拒绝、缺失或非普通文件不产生发布回执。 |
+| `POST /v1/conversations/{id}/messages` | 增加可选 version；必须匹配当前版本，否则 409，客户端保留草稿。不传时作用于当前版本。 |
+
+DSH 历史追加写入。本插件使用宿主 `buildForkSeed` 与 Agent 创建／恢复服务，从对应用户消息之前建立原生分支，清空历史中尚未消费的 inbox 后重新提交。保留预设、工作目录、模型选择与工作区关联；不是向原会话末尾追加修改要求。分支选择和手动发布回执保存在宿主 `storageDomain` 的 `zhixing_chat` 域，写盘后确认；准备记录与确定的子会话 ID 支持中断恢复。原版与后续回答保留，**版本切换不回滚工作区和工具副作用**。
+
+模型工具 `zhixing_publish_file(file_path, name?)` 按宿主文件系统与会话工作目录流式读取，通过原生附件服务冻结字节，在原生 tool/result 返回 file 块。手动发布回执也参与当前版本的附件归属检查；分叉仅继承切点之前工具的已发布附件。没有新增宿主工具白名单、预算或执行轮数限制。
 
 状态：2026-10-23，当前源码包含数据库 v15 的人格成长、主动偏好、目标跟进与心跳，保留既有工具契约与 Agent 协作。历史安装、部署及验收状态以各版发布说明为准；本页描述接口，不代表对应版本已经上线。实际运行能力与限制见[后端说明](../backend/README.md)。
 

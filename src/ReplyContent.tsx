@@ -11,7 +11,7 @@ import { useUi } from "./ui";
 import { ToolDetails } from "./ToolDetails";
 
 const toolLabels: Record<string, string> = {
-  read: "读取文件", write: "保存文件", edit: "修改文件", bash: "执行命令", subagent: "调用子助手", zhixing_service: "处理知行数据",
+  zhixing_publish_file: "交付文件", read: "读取文件", write: "保存文件", edit: "修改文件", bash: "执行命令", subagent: "调用子助手", zhixing_service: "处理知行数据",
   ask_user_question: "等待你的回答", plugin_manager: "管理插件", schedule_create: "安排任务",
   search_history: "查找历史对话", read_history: "读取历史对话", read_history_message: "读取历史消息", browse_personal_memories: "查阅记忆", find_resources: "查找资料", read_saved_resource: "读取保存的资料", search_web: "搜索网页",
   calculate: "计算", date_info: "查询日期", publish_report: "生成报告", apply_finance_transaction_batch: "整理收支",
@@ -55,7 +55,7 @@ function ReasoningStep({ part, active, onExpand }: { part: ReplyPart & { type: "
   </View>;
 }
 
-function ProcessGroup({ parts, active, onOpenRun }: { parts: ReplyPart[]; active: boolean; onOpenRun?: () => void }) {
+function ProcessGroup({ parts, active, onOpenRun, onPublish }: { parts: ReplyPart[]; active: boolean; onOpenRun?: () => void; onPublish?: (seq: number) => Promise<void> }) {
   const { s, colors } = useUi();
   const [choice, setChoice] = useState<Disclosure | null>(null);
   const [detailId, setDetail] = useState<string | null>(null);
@@ -88,7 +88,7 @@ function ProcessGroup({ parts, active, onOpenRun }: { parts: ReplyPart[]; active
     {detail ? <BottomSheet visible title={toolName(detail.name)} subtitle="这条回复的工具过程" tall={!!detail.detail} onClose={() => setDetail(null)}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 22, paddingBottom: 16, gap: 12 }}>
         <Text style={s.text}>{toolStatus(detail, active)}</Text>
-        {detail.detail ? <ToolDetails part={detail} /> : <Text style={s.description}>{detail.status === "completed" ? "这一步已收到工具完成回执，回复正文会结合结果继续说明。"
+        {detail.detail ? <ToolDetails part={detail} onPublish={onPublish} /> : <Text style={s.description}>{detail.status === "completed" ? "这一步已收到工具完成回执，回复正文会结合结果继续说明。"
           : detail.status === "failed" ? "这一步未完成，请结合回复正文或处理记录查看后续情况。"
           : active ? "助手正在处理这一步，完成后会更新状态。" : "这一步没有收到明确的完成回执。"}</Text>}
         {onOpenRun ? <Pressable accessibilityRole="button" accessibilityLabel="查看这条回复的处理记录" onPress={() => { setDetail(null); onOpenRun(); }}
@@ -99,8 +99,8 @@ function ProcessGroup({ parts, active, onOpenRun }: { parts: ReplyPart[]; active
 }
 
 export type ReplyContentProps = { parts: ReplyPart[]; active?: boolean; finalText?: string | null; finalPartId?: string | null;
-  status?: Run["status"]; phase?: string; cancelRequested?: boolean; connectionIssue?: boolean; truncated?: boolean; onOpenRun?: () => void };
-export function ReplyContent({ parts, active = false, finalText, finalPartId, status, phase, cancelRequested, connectionIssue, truncated, onOpenRun }: ReplyContentProps) {
+  status?: Run["status"]; phase?: string; cancelRequested?: boolean; connectionIssue?: boolean; truncated?: boolean; onOpenRun?: () => void; onPublish?: (seq: number) => Promise<void> };
+export function ReplyContent({ parts, active = false, finalText, finalPartId, status, phase, cancelRequested, connectionIssue, truncated, onOpenRun, onPublish }: ReplyContentProps) {
   const { s, colors } = useUi();
   const terminalLabel = status === "failed" ? "回复未完成" : status === "cancelled" ? "回复已停止" : status === "interrupted" ? "回复已中断" : "";
   const latest = parts.at(-1);
@@ -114,7 +114,7 @@ export function ReplyContent({ parts, active = false, finalText, finalPartId, st
       <Text style={s.muted}>{terminalLabel || (connectionIssue ? "连接恢复后继续显示进度" : label)}</Text>
     </View> : null}
     {sections.map((section) => section.type === "text" ? section.part.text ? <MessageBody key={section.id} streaming={active}>{section.part.text}</MessageBody> : null
-      : <ProcessGroup key={section.id} parts={section.parts} active={active} onOpenRun={onOpenRun} />)}
+      : <ProcessGroup key={section.id} parts={section.parts} active={active} onOpenRun={onOpenRun} onPublish={onPublish} />)}
     {truncated ? <Text style={s.muted}>过程展示有限，完整回答以正文为准。</Text> : null}
   </View>;
 }

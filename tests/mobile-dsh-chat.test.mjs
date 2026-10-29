@@ -44,7 +44,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     './ConnectionStatus': { useSyncStatus: () => report }, './dshProtocol': protocol, './chatPhotos': { discardDraftPhotos() {} },
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
   };
-  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview']) dependencies[`./${component}`] = { [component]: component };
+  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'MessageRevisionSheet']) dependencies[`./${component}`] = { [component]: component };
   dependencies['./PhotoAttachments'] = { DraftAttachments: 'DraftAttachments', MessagePhotos: 'MessagePhotos' };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../src/DshChatPanel.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -91,7 +91,7 @@ test('DSH rendering preserves opaque events, persists only new data, and waits f
   app.render(); await settle();
   const list = app.render().find(n => n.type === 'FlatList');
   assert.equal(list.props.data.some(row => row.data?.result === 42), false, 'raw plugin data belongs in details');
-  assert.equal(app.cache[0][0].data.result, 42); assert.equal(app.cache.length, 1);
+  assert.equal(app.cache[0].events[0].data.result, 42); assert.equal(app.cache.length, 1);
   app.snapshot.events = []; app.tick(); await settle(); assert.equal(app.cache.length, 1);
   app.composer().onStop(); await settle(); assert.equal(app.composer().busy, true);
   finish(); await settle(); assert.equal(app.composer().busy, false);
@@ -132,5 +132,72 @@ test('search focus waits for the exact visible row and disables automatic follow
   assert.equal(positions[0].index, 0); assert.equal(handled.length, 0);
   list.props.onViewableItemsChanged({ viewableItems: [{ index: 1, isViewable: true }] }); assert.equal(handled.length, 0);
   list.props.onViewableItemsChanged({ viewableItems: [{ index: 0, isViewable: true }] }); assert.deepEqual(handled, [0]);
+  app.unmount();
+});
+
+const revisionSheet = app => app.render().find(n => n.type === 'MessageRevisionSheet').props;
+async function openRevision(app, role = 'user') {
+  const list = app.render().find(n => n.type === 'FlatList');
+  list.props.renderItem({ item: list.props.data.find(r => r.role === role) }).props.onMenu();
+  const label = role === 'user' ? '编辑并重新回答' : '重新回答';
+  app.render().find(n => n.type === 'ActionLink' && n.props.children === label).props.onPress();
+  app.render().find(n => n.type === 'BottomSheet' && n.props.title === '消息操作').props.onDismiss();
+  await settle();
+}
+const revisionEvents = [
+  { seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'old demand' }, { type: 'file', attachment: { attachmentId: 'file-one', name: 'note.txt', bytes: 8 } }] } },
+  { seq: 2, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'old answer' }] } } },
+  { seq: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+];
+test('true message editing preserves the normal draft and retries an identical durable operation after remount', async () => {
+  const store = { draft: { text: 'unsent normal draft', pending: null } };
+  const first = harness({ store, post: async () => { throw new Error('lost acknowledgement'); } });
+  first.snapshot.events = revisionEvents; first.snapshot.next = 4;
+  first.render(); await settle(); await openRevision(first);
+  assert.equal(revisionSheet(first).value.text, 'old demand');
+  revisionSheet(first).onChange({ ...revisionSheet(first).value, text: 'new demand', attachments: [] }); await settle();
+  revisionSheet(first).onSubmit(); await settle();
+  const sent = first.calls.find(c => c.path.endsWith('/revisions'));
+  assert.equal(sent.body.seq, 1); assert.equal(sent.body.text, 'new demand'); assert.deepEqual(plain(sent.body.attachments), []);
+  assert.equal(store.draft.text, 'unsent normal draft'); assert.equal(store.draft.revision.submitted, true);
+  assert.equal(first.composer().canSend, false); assert.equal(revisionSheet(first).error, 'lost acknowledgement'); first.unmount();
+  const restored = harness({ store }); restored.render(); await settle();
+  revisionSheet(restored).onSubmit(); await settle();
+  const retry = restored.calls.find(c => c.path.endsWith('/revisions'));
+  assert.deepEqual(plain(retry.body), plain(sent.body)); assert.equal(store.draft.revision, undefined);
+  assert.equal(restored.composer().text, 'unsent normal draft'); restored.unmount();
+});
+test('regenerate selects the actual assistant event and dismissing or cancelling does not send', async () => {
+  const app = harness(); app.snapshot.events = revisionEvents; app.render(); await settle();
+  await openRevision(app, 'assistant'); assert.equal(revisionSheet(app).value.seq, 2);
+  assert.equal(revisionSheet(app).value.kind, 'retry');
+  revisionSheet(app).onClose(); assert.ok(app.store.draft.revision);
+  revisionSheet(app).onCancel(); await settle(); assert.equal(app.store.draft.revision, undefined);
+  assert.equal(app.calls.some(c => c.method === 'POST'), false); assert.equal(app.composer().text, 'fix this'); app.unmount();
+});
+test('version changes replace reused native sequence numbers and cache published sidecars without fake events', async () => {
+  const app = harness(); app.snapshot.events = revisionEvents; app.snapshot.next = 4;
+  app.snapshot.history = { active: app.props.conversation.id, versions: [{ id: app.props.conversation.id, label: '原始版本' }] };
+  app.render(); await settle();
+  app.snapshot.history = { active: 'child', versions: [...app.snapshot.history.versions, { id: 'child', label: '编辑版本 1' }] };
+  app.snapshot.events = [{ seq: 1, type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'replacement' }] } }]; app.snapshot.next = 2;
+  app.tick(); await settle();
+  const rows = app.render().find(n => n.type === 'FlatList').props.data;
+  assert.equal(rows.length, 1); assert.equal(protocol.rowText(rows[0]), 'replacement');
+  app.snapshot.events = [];
+  app.snapshot.artifacts = [{ id: 'publish', toolSeq: 5, content: [{ type: 'file', attachment: { attachmentId: 'published' } }] }];
+  app.tick(); await settle();
+  assert.equal(app.cache.at(-1).historyId, 'child'); assert.equal(app.cache.at(-1).events.length, 1);
+  assert.equal(app.cache.at(-1).artifacts[0].id, 'publish'); app.unmount();
+});
+
+test('stale search results cannot highlight a different message with a reused sequence number', async () => {
+  const app = harness(), handled = [];
+  app.props.focusMessageSeq = 1; app.props.focusMessageVersion = 'old-version'; app.props.onFocusHandled = seq => handled.push(seq);
+  app.snapshot.history = { active: 'new-version', versions: [] }; app.snapshot.events = revisionEvents;
+  app.render(); await settle(); app.render(); await settle();
+  assert.deepEqual(handled, [1]);
+  const list = app.render().find(n => n.type === 'FlatList');
+  assert.equal(list.props.renderItem({ item: list.props.data[0] }).props.highlighted, false);
   app.unmount();
 });

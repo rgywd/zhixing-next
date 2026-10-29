@@ -7,6 +7,8 @@ export type DshQuestion = { id: string; question: string; detail?: string; heade
 export type DshPending = { id: string; sessionId: string; kind: "approval" | "question";
   toolName?: string; reason?: string; questions?: DshQuestion[] };
 export type DshSnapshot = { events: DshEvent[]; next: number; hasMore: boolean; running: boolean; active: boolean;
+  history?: { active: string; versions: { id: string; label: string; source?: string; seq?: number }[] };
+  artifacts?: { id: string; toolSeq: number; content: unknown }[];
   queue: { id: string; placement?: "queued" | "steering" | "context"; content: unknown }[]; pending: DshPending[];
   live: { attemptId: string; turn: number; step: number; chunks: Record<string, unknown>[] } | null };
 
@@ -38,6 +40,8 @@ export type DshChatRow = { id: string; role: "user" | "assistant"; parts: ReplyP
   events: DshEvent[]; active: boolean; status?: "completed" | "cancelled" | "failed" | "interrupted" };
 export const rowText = (row: DshChatRow) => row.parts.flatMap(p => p.type === "text" && p.attempt_status !== "failed" ? [p.text] : []).join("\n\n");
 export const rowHasMessage = (row: DshChatRow, seq: number) => row.role === "user" ? row.events[0]?.seq === seq : row.parts.some(p => p.type !== "tool" && p.seq === seq);
+export const revisionSeq = (row: DshChatRow) => row.role === "user" ? row.events[0]?.seq
+  : row.parts.find(p => p.seq !== undefined)?.seq ?? row.events.findLast(e => e.type === "turn/end")?.seq;
 export function contentAttachments(content: unknown): DshAttachment[] {
   return (Array.isArray(content) ? content : []).flatMap(value => {
     const block = record(value), attachment = record(block.attachment);
@@ -101,7 +105,14 @@ export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshC
     } else if (event.type === "turn/end") {
       current.ended = true;
       const reason = record(data.reason).kind;
+      if (reason === "forked") { if (current.row) current.row.status = "interrupted"; continue; }
       assistant(eventTurn).status = reason === "completed" ? "completed" : reason === "aborted" ? "cancelled" : "failed";
+    }
+  }
+  for (const artifact of snapshot?.artifacts ?? []) {
+    const owner = rows.find(row => row.parts.some(p => p.type === "tool" && p.seq === artifact.toolSeq));
+    if (owner) for (const attachment of contentAttachments(artifact.content)) {
+      if (!owner.attachments.some(a => a.id === attachment.id)) owner.attachments.push(attachment);
     }
   }
   const live = snapshot?.live;
@@ -133,6 +144,6 @@ export function eventPresentation(event: DshEvent): { title: string; text: strin
   if (event.type === "approval/decided") return { title: "授权结果", text: String(data.outcome) };
   // Internal bookkeeping stays available in the full event view. New event kinds
   // are visible by default; the UI never defines a tool capability allowlist.
-  const quiet = /^(system\/message|request\/|step\/|turn\/start|agent\/inbox\/|inbox\/|model\/|tools\/|session\/)/.test(event.type);
+  const quiet = /^(system\/message|request\/|step\/|turn\/start|agent\/inbox\/|inbox\/|model\/|tools\/|session\/|plugin:zhixing\/)/.test(event.type);
   return { title: event.type, text: "", quiet };
 }

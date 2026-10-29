@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { startServer, createInteractions, businessRequest } from '../server.mjs';
 
+const table = () => { const values = new Map(); return { get: id => values.get(id), entries: () => values.entries(), put: async (id, value) => values.set(id, structuredClone(value)) }; };
 function fixture() {
   const listeners = new Map(), rows = [], records = new Map(), agents = new Map();
   const ctx = {
@@ -39,12 +40,12 @@ function fixture() {
       cancel() {},
     },
   };
-  return { ctx, listeners, agents, records };
+  return { ctx, listeners, agents, records, native: { metadata: { revisions: table(), artifacts: table() } } };
 }
 
 test('outlet authentication, full prompt admission, duplicate retry and durable event replay', async t => {
   const f = fixture();
-  const server = await startServer(f.ctx, { token: 'test-token', port: 0 });
+  const server = await startServer(f.ctx, { token: 'test-token', port: 0 }, f.native);
   t.after(() => server.close());
   const base = `http://127.0.0.1:${server.address.port}/v1`;
   const request = async (path, body) => {
@@ -73,7 +74,7 @@ test('outlet authentication, full prompt admission, duplicate retry and durable 
 test('file retrieval uses only session-owned immutable references, streams bytes and provides bounded text previews', async t => {
   const f = fixture(), bytes = Buffer.from('中文文件\n' + 'x'.repeat(300000));
   f.ctx.attachments = { async *readFileStream(ref) { assert.equal(ref.attachmentId, 'file-1'); yield bytes.subarray(0, 1000); yield bytes.subarray(1000); } };
-  const server = await startServer(f.ctx, { token: 'files', port: 0 }); t.after(() => server.close());
+  const server = await startServer(f.ctx, { token: 'files', port: 0 }, f.native); t.after(() => server.close());
   const base = `http://127.0.0.1:${server.address.port}/v1/conversations`, headers = { Authorization: 'Bearer files' };
   for (const sessionId of ['zhixing-main-aaaa', 'zhixing-main-bbbb']) await f.ctx.sessionController.create({ sessionId });
   f.records.get('zhixing-main-aaaa').push(...Array.from({ length: 260 }, (_, seq) => ({ seq, type: 'system/message', data: {} })),
@@ -92,7 +93,7 @@ test('file retrieval uses only session-owned immutable references, streams bytes
 });
 
 test('rename returns the accepted native title and search anchors only visible message content', async t => {
-  const f = fixture(), server = await startServer(f.ctx, { token: 'search', port: 0 }); t.after(() => server.close());
+  const f = fixture(), server = await startServer(f.ctx, { token: 'search', port: 0 }, f.native); t.after(() => server.close());
   const base = `http://127.0.0.1:${server.address.port}/v1`, headers = { Authorization: 'Bearer search' }, id = 'zhixing-main-aaaa';
   await f.ctx.sessionController.create({ sessionId: id });
   const rename = title => fetch(`${base}/conversations/${id}/title`, { method: 'PUT', headers, body: JSON.stringify({ title }) });
@@ -108,7 +109,7 @@ test('rename returns the accepted native title and search anchors only visible m
 });
 
 test('native image bytes require authorization and a durable reference in the requested session', async t => {
-  const f = fixture(), server = await startServer(f.ctx, { token: 'image-token', port: 0 });
+  const f = fixture(), server = await startServer(f.ctx, { token: 'image-token', port: 0 }, f.native);
   t.after(() => server.close());
   const base = `http://127.0.0.1:${server.address.port}/v1`;
   const id = 'zhixing-main-aaaa', other = 'zhixing-main-bbbb';
@@ -147,4 +148,42 @@ test('business bridge rejects arbitrary targets without forwarding credentials',
   await assert.rejects(businessRequest({ businessUrl: 'http://127.0.0.1:1' }, '//external.example/path'), /不是/);
   await assert.rejects(businessRequest({ businessUrl: 'http://127.0.0.1:1' }, '/v1/finance/../../admin'), /无效/);
   await assert.rejects(businessRequest({}, '/v1/finance'), /尚未连接/);
+});
+
+test('a slow file upload never holds up actual cancellation', async t => {
+  const f = fixture();
+  let release, began, cancelled = false;
+  const started = new Promise(resolve => { began = resolve; });
+  f.ctx.sessionController.resolveAgent = async id => ({ agent: f.agents.get(id) });
+  f.ctx.sessionController.cancel = () => { cancelled = true; };
+  f.ctx.fileUploads = { uploadStream: async () => { began(); await new Promise(resolve => { release = resolve; }); return { receiptId: 'uploaded' }; } };
+  const server = await startServer(f.ctx, { token: 'slow', port: 0 }, f.native); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address.port}/v1`, headers = { Authorization: 'Bearer slow' };
+  const chat = await (await fetch(`${base}/conversations`, { method: 'POST', headers, body: '{}' })).json();
+  const upload = fetch(`${base}/conversations/${chat.id}/dsh/files?name=large.bin`, { method: 'PUT', headers, body: 'bytes' });
+  await started;
+  try {
+    const response = await fetch(`${base}/conversations/${chat.id}/dsh/cancel`, { method: 'POST', headers, body: '{}', signal: AbortSignal.timeout(1000) });
+    assert.equal(response.status, 200); assert.equal(cancelled, true);
+  } finally { release(); await upload; }
+});
+
+test('a concurrent version change cannot mislabel an in-flight native snapshot', async t => {
+  const f = fixture();
+  const server = await startServer(f.ctx, { token: 'race', port: 0 }, f.native);
+  const base = `http://127.0.0.1:${server.address.port}/v1`, headers = { Authorization: 'Bearer race' };
+  const chat = await (await fetch(`${base}/conversations`, { method: 'POST', headers, body: '{}' })).json();
+  f.records.get(chat.id).push({ seq: 0, type: 'test', data: { original: true } });
+  await f.native.metadata.revisions.put(chat.id, { active: chat.id, entries: [{ child: 'child', accepted: true, kind: 'edit', seq: 1, source: chat.id }] });
+  // Reopen the server so it reads the durable ledger rather than a cached initial state.
+  await server.close();
+  const second = await startServer(f.ctx, { token: 'race', port: 0 }, f.native); t.after(() => second.close());
+  let release, entered; const reached = new Promise(resolve => { entered = resolve; });
+  const open = f.ctx.sessionPersistence.open;
+  f.ctx.sessionPersistence.open = async id => { const reader = await open(id); return { ...reader, read: async (...args) => { entered(); await new Promise(resolve => { release = resolve; }); return reader.read(...args); } }; };
+  const url = `http://127.0.0.1:${second.address.port}/v1/conversations/${chat.id}`;
+  const old = fetch(`${url}/dsh`, { headers }); await reached;
+  const changed = await fetch(`${url}/dsh/version`, { method: 'PUT', headers, body: JSON.stringify({ expected: chat.id, version: 'child' }) });
+  assert.equal(changed.status, 200); release();
+  const snapshot = await (await old).json(); assert.equal(snapshot.history.active, chat.id); assert.equal(snapshot.events[0].data.original, true);
 });

@@ -88,6 +88,7 @@ export type ConversationSearchResult = {
   updated_at: string;
   message_id: string | null;
   message_seq: number | null;
+  message_version?: string;
   snippet: string;
 };
 export type Run = {
