@@ -352,6 +352,7 @@ export function ChatPanel({
             style={{
               alignSelf: item.role === "user" && !item.origin ? "flex-end" : "stretch",
               maxWidth: item.role === "user" && !item.origin ? "88%" : "100%",
+              width: item.role === "user" && !item.origin && /```|~~~|\||(^|\n)( {4}|\t)/.test(item.content) ? "88%" : undefined,
               gap: 5,
               backgroundColor: item.seq === focusAnchor ? colors.pale : "transparent",
               borderRadius: 14,

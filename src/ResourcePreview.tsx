@@ -10,7 +10,8 @@ import { useThemedStyles } from "./ThemeProvider";
 import { layout, radius, space, type ThemeColors } from "./theme";
 import { ActionLink, SheetHeader, humanError, useUi } from "./ui";
 
-export function resourceDetail(resource: Resource) {
+type PreviewResource = Pick<Resource, "id" | "name" | "mime_type" | "size">;
+export function resourceDetail(resource: Pick<Resource, "name" | "mime_type" | "size">) {
   const size = resource.size < 1024 ? `${resource.size} B`
     : resource.size < 1024 * 1024 ? `${Math.round(resource.size / 1024)} KB`
       : `${(resource.size / (1024 * 1024)).toFixed(1)} MB`;
@@ -49,22 +50,22 @@ export function ResourceImage({ connection, resource, style, contain = false, la
   </View>;
 }
 
-export const canPreviewText = (resource: Resource) => resource.mime_type.startsWith("text/") || /\.(md|markdown|txt|csv|json|log)$/i.test(resource.name);
+export const canPreviewText = (resource: Pick<Resource, "name" | "mime_type">) => resource.mime_type.startsWith("text/") || /\.(md|markdown|txt|csv|json|log)$/i.test(resource.name);
 type TextPreview = { resource_id: string; content: string; format: "markdown" | "text"; truncated: boolean };
 
-export function TextResourcePreview({ connection, resource }: { connection: Connection; resource: Resource }) {
+export function TextResourcePreview({ connection, resource, textPath }: { connection: Connection; resource: PreviewResource; textPath?: string }) {
   const { s, colors } = useUi();
   const [attempt, setAttempt] = useState(0);
-  const scope = `${connection.url}\n${connection.token}\n${resource.id}`;
+  const scope = `${connection.url}\n${connection.token}\n${resource.id}\n${textPath ?? ""}`;
   const [state, setState] = useState<{ scope: string; result?: TextPreview; error?: string } | null>(null);
   useEffect(() => {
     let active = true;
     const controller = new AbortController();
-    void request<TextPreview>(connection, `/resources/${encodeURIComponent(resource.id)}/text`, { signal: controller.signal })
+    void request<TextPreview>(connection, textPath ?? `/resources/${encodeURIComponent(resource.id)}/text`, { signal: controller.signal })
       .then((result) => { if (active && !controller.signal.aborted) setState({ scope, result }); })
       .catch((e) => { if (active && !controller.signal.aborted) setState({ scope, error: humanError(e) }); });
     return () => { active = false; controller.abort(); };
-  }, [connection, resource.id, scope, attempt]);
+  }, [connection, resource.id, scope, attempt, textPath]);
   const visible = state?.scope === scope ? state : null;
   if (!visible) return <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }} accessibilityLabel="正在打开报告"><ActivityIndicator color={colors.blue} /></View>;
   if (visible.error) return <View style={[s.content, { flex: 1, justifyContent: "center" }]}>
@@ -79,8 +80,8 @@ export function TextResourcePreview({ connection, resource }: { connection: Conn
   </ScrollView>;
 }
 
-export function ResourcePreview({ connection, resource, onClose }: {
-  connection: Connection; resource: Resource | null; onClose: () => void;
+export function ResourcePreview({ connection, resource, onClose, textPath, onDownload }: {
+  connection: Connection; resource: PreviewResource | null; onClose: () => void; textPath?: string; onDownload?: () => Promise<void>;
 }) {
   const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
@@ -92,13 +93,13 @@ export function ResourcePreview({ connection, resource, onClose }: {
       {resource ? <>
         {resource.mime_type.startsWith("image/")
           ? <ResourceImage key={resource.id} connection={connection} resource={resource} contain style={styles.preview} />
-          : canPreviewText(resource) ? <TextResourcePreview key={resource.id} connection={connection} resource={resource} />
+          : canPreviewText(resource) ? <TextResourcePreview key={resource.id} connection={connection} resource={resource} textPath={textPath} />
           : <View style={styles.document}><Ionicons name="document-text-outline" size={48} color={colors.blue} /><Text style={s.title}>{resource.name}</Text><Text style={s.muted}>{resourceDetail(resource)}</Text><Text style={s.description}>下载后，可在手机中的应用打开。</Text></View>}
         <View style={styles.footer}>
           {error?.resourceId === resource.id ? <Text accessibilityRole="alert" style={s.error}>{error.message}</Text> : null}
           <ActionLink icon="share-outline" tone="blue" disabled={busy} onPress={() => {
             setBusy(true); setError(null);
-            void shareResource(connection, resource).catch((e) => setError({ resourceId: resource.id, message: humanError(e) })).finally(() => setBusy(false));
+            void (onDownload ? onDownload() : shareResource(connection, resource)).catch((e) => setError({ resourceId: resource.id, message: humanError(e) })).finally(() => setBusy(false));
           }}>{busy ? "正在准备文件…" : "下载分享"}</ActionLink>
         </View>
       </> : null}

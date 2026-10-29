@@ -115,7 +115,17 @@ try {
   assert.ok(upload.ok, await upload.clone().text());
   const receipt = await upload.json();
   await api(`${path}/messages`, { id: 'attachment', parts: [{ type: 'text', text: 'RESUME-CHECK with file' }, { type: 'file', receiptId: receipt.receiptId }] });
-  await until(snapshot, s => !s.running, 'attachment reply'); console.log('PASS native attachment upload and prompt');
+  state = await until(snapshot, s => !s.running, 'attachment reply');
+  const fileRef = state.events.find(e => e.type === 'user/message' && e.data.source?.rpcId === 'attachment').data.content.find(b => b.type === 'file').attachment;
+  const fileUrl = `http://127.0.0.1:${appPort}/v1${path}/dsh/files/${encodeURIComponent(fileRef.attachmentId)}`;
+  const fileDownload = await fetch(fileUrl, { headers }); assert.ok(fileDownload.ok); assert.equal(await fileDownload.text(), 'attachment acceptance');
+  const filePreview = await (await fetch(`${fileUrl}/text`, { headers })).json(); assert.equal(filePreview.content, 'attachment acceptance'); assert.equal(filePreview.truncated, false);
+  const renamed = await api(`${path}/title`, { title: '知行代码验收' }, 'PUT'); assert.equal(renamed.title, '知行代码验收');
+  const hits = await api('/conversations/search?q=READ-WRITE-CHECK');
+  const hit = hits.items.find(item => item.conversation_id === chat.id);
+  assert.ok(hit && hit.message_seq != null);
+  assert.equal(state.events.find(e => e.seq === hit.message_seq)?.data.source?.rpcId, 'read-write-check');
+  console.log('PASS native file download/preview, rename and exact message search');
   const image = await fetch(`http://127.0.0.1:${appPort}/v1${path}/dsh/files?name=pixel.png&mediaType=image%2Fpng`, {
     method: 'PUT', headers: { Authorization: headers.Authorization, 'Content-Type': 'application/octet-stream' },
     body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAADElEQVQImWNgZGIGAAAOAAeCcsnOAAAAAElFTkSuQmCC', 'base64'),

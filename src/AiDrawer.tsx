@@ -126,7 +126,7 @@ export function AiDrawer({
                   {searchBusy ? <ActivityIndicator color={colors.accent} style={styles.loading} /> : null}
                   {searchError ? <Text accessibilityRole="alert" style={s.error}>{searchError}</Text> : null}
                   {!query.trim() ? <Text style={styles.empty}>输入几个字，查找过去的对话和消息。</Text> : !searchBusy && !searchError && !results.length ? <Text style={styles.empty}>没有找到匹配的对话</Text> : null}
-                  {results.map((item) => <Pressable key={item.conversation_id} accessibilityRole="button" accessibilityLabel={`打开搜索结果：${item.title}`} onPress={() => { reset(); onClose(); onOpen(item.conversation_id, item.message_seq ?? undefined); }} style={({ pressed }) => [styles.resultRow, pressed && s.pressed]}>
+                  {results.map((item) => <Pressable key={item.conversation_id} accessibilityRole="button" accessibilityLabel={`打开搜索结果：${item.title}`} onPress={() => { onClose(); onOpen(item.conversation_id, item.message_seq ?? undefined); }} style={({ pressed }) => [styles.resultRow, pressed && s.pressed]}>
                     <View style={styles.resultTitleLine}><Ionicons name="chatbubble-outline" size={17} color={colors.accent} /><Text numberOfLines={1} style={[styles.resultTitle, s.grow]}>{item.title}</Text></View>
                     {item.snippet ? <SearchSnippet text={item.snippet} query={query} /> : <Text style={styles.snippet}>标题匹配</Text>}
                     <Text style={styles.resultTime}>{timeLabel(item.updated_at)}</Text>
