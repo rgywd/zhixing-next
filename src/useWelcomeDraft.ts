@@ -2,6 +2,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useRef, useState } from "react";
 import { discardDraftPhotos } from "./chatPhotos";
 import type { DraftPhoto, ReasoningEffort } from "./api";
+import type { DshPermission } from "./dshPermissions";
 
 type Kind = "chat" | "task";
 export type WelcomeDraft = {
@@ -11,6 +12,7 @@ export type WelcomeDraft = {
   models: Record<Kind, string | null>;
   efforts: Record<Kind, ReasoningEffort | null>;
   searchId: string | null;
+  permission?: DshPermission;
 };
 const empty = (): WelcomeDraft => ({ text: "", kind: "chat", models: { chat: null, task: null }, efforts: { chat: null, task: null }, searchId: null });
 const choices = new Set(["auto", "none", "minimal", "low", "medium", "high", "xhigh", "max"]);
@@ -18,12 +20,14 @@ export function parseWelcomeDraft(value: string | null): WelcomeDraft {
   if (!value) return empty();
   const parsed = JSON.parse(value);
   if (!parsed || typeof parsed.text !== "string") throw new Error("草稿读取失败。");
+  if (parsed.permission !== undefined && !["read-only", "workspace-write", "danger-full-access"].includes(parsed.permission))
+    throw new Error("草稿权限读取失败。");
   const id = (value: unknown) => typeof value === "string" && value ? value : null;
   const effort = (value: unknown) => typeof value === "string" && choices.has(value) ? value as ReasoningEffort : null;
   if (parsed.photos !== undefined && (!Array.isArray(parsed.photos) || parsed.photos.some((photo: DraftPhoto) =>
     !photo || typeof photo.id !== "string" || typeof photo.uri !== "string" || typeof photo.name !== "string")))
     throw new Error("照片草稿读取失败。");
-  return { text: parsed.text, ...(parsed.photos ? { photos: parsed.photos as DraftPhoto[] } : {}), kind: parsed.kind === "task" ? "task" : "chat",
+  return { text: parsed.text, ...(parsed.permission ? { permission: parsed.permission as DshPermission } : {}), ...(parsed.photos ? { photos: parsed.photos as DraftPhoto[] } : {}), kind: parsed.kind === "task" ? "task" : "chat",
     models: { chat: id(parsed.models?.chat), task: id(parsed.models?.task) },
     efforts: { chat: effort(parsed.efforts?.chat), task: effort(parsed.efforts?.task) }, searchId: id(parsed.searchId) };
 }
@@ -98,6 +102,11 @@ export function useWelcomeDraft(url: string) {
     setValue(current.current); await persist(current.current); discardDraftPhotos(removed);
   }
   return { value, ready, error, consumeText, addPhotos, removePhoto,
+    setPermission: async (permission: DshPermission) => {
+      if (!readable.current) throw new Error("草稿尚未读取，请先重试读取。");
+      current.current = { ...current.current, permission };
+      setValue(current.current); await persist(current.current);
+    },
     retry: () => { if (readable.current) persist(current.current); else setRevision((old) => old + 1); },
     setText: (text: string | ((old: string) => string)) => update((old) => ({ ...old, text: typeof text === "function" ? text(old.text) : text })),
     setKind: (kind: Kind) => update((old) => ({ ...old, kind })),

@@ -2,6 +2,7 @@ import { availablePreference } from "./providerEditing";
 import { useSessionData } from "./useSessionData";
 import { ThemeProvider } from "./ThemeProvider";
 import { AgentChatHeader } from "./AgentChatHeader";
+import { ConversationMenu } from "./ConversationMenu";
 import { ChatPreferencesProvider } from "./chatPreferences";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
 import { useUi, BackLink, Button, humanError, PageHeading, PageScrollView } from "./ui";
@@ -39,6 +40,7 @@ import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
 import { useHomePreferences } from "./useHomePreferences";
 import { useWelcomeDraft } from "./useWelcomeDraft";
+import type { DshPermission } from "./dshPermissions";
 import { usePhotoPicker } from "./usePhotoPicker";
 import { targetKey } from "./homeEntries";
 import { TodayHomePanel as HomePanel } from "./TodayHomePanel";
@@ -237,10 +239,14 @@ function ConnectedSession({
   const [settingsView, setSettingsView] = useState<"overview" | SettingsDestination>("overview");
   const navigation = useRef(0);
   const home = useHomePreferences(connection.url);
-  const { assistant, status, lastSyncFailed, conversations, setConversations, agents, catalog,
+  const { assistant, status, lastSyncFailed, conversations, setConversations, removeConversation, agents, catalog,
      selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive } = useSessionData(connection);
   const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number; version?: string } | null>(null);
   const [showAiDrawer, setShowAiDrawer] = useState(false);
+  const [chatMenuOpen, setChatMenuOpen] = useState(false);
+  const [chatMenuTop, setChatMenuTop] = useState(64);
+  const [chatAction, setChatAction] = useState<{ conversationId: string; id: number; type: "share" | "search" } | null>(null);
+  const chatActionId = useRef(0);
 
   const [chatSettingsFor, setChatSettingsFor] = useState<string | null>(null);
   const [chatFilesFor, setChatFilesFor] = useState<string | null>(null);
@@ -269,6 +275,7 @@ function ConnectedSession({
     setPreviousChatMenuScope(chatMenuScope);
     setChatSettingsFor(null);
     setChatFilesFor(null);
+    setChatMenuOpen(false);
   }
   useHealthReminders(connection, serviceVersion, () => openLifePage("health"));
   useEffect(() => {
@@ -350,6 +357,7 @@ function ConnectedSession({
         title: explore ? "认识运行环境" : agentId ? `${agents.find((item) => item.id === agentId)?.name ?? "助手"}对话` : initial ? initial.text.trim().split(/\r?\n/)[0].slice(0, 80) || "新的对话" : quick ? "新的对话" : "新的对话",
         project_id: null,
         agent_id: agentId,
+        ...(initial && !agentId && welcome.value.permission ? { permission: welcome.value.permission } : {}),
       };
       const creationKey = JSON.stringify(body);
       // Reuse a received creation receipt if a later model/draft step failed.
@@ -422,6 +430,8 @@ function ConnectedSession({
   }
   const welcomeControls = {
     connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort,
+    permissions: status?.permissions ? { ...status.permissions, current: welcome.value.permission ?? status.permissions.current } : null,
+    onPermission: (value: DshPermission) => welcome.setPermission(value),
     draftReady: welcome.ready, draftError: welcome.error, onRetryDraft: welcome.retry,
     photos: welcome.value.photos, pickingPhotos: welcomePhotoPicker.picking,
     onPhotos: () => { void welcomePhotoPicker.pick(); },
@@ -489,23 +499,22 @@ function ConnectedSession({
       ) : tab === "chat" ? (
         <>
           <AgentChatHeader
+            modelName={(showWelcome ? welcomeModel : catalog?.items.find(model => model.id === (selected?.model_id ?? catalog.roles.chat)))?.name ?? "选择模型"}
             title={showWelcome ? assistant?.name ?? "知行" : chatAssistantName}
             subtitle={showWelcome ? "随时聊聊，把事情做成" : selected?.title ?? "新的对话"}
             status={showWelcome ? welcomeStatus : undefined}
             busy={busy}
+            menuOpen={chatMenuOpen} onOptions={() => { Keyboard.dismiss(); setChatMenuOpen(value => !value); }}
+            onLayout={event => setChatMenuTop(event.nativeEvent.layout.y + event.nativeEvent.layout.height - 2)}
             onMenu={() => setShowAiDrawer(true)}
             onNew={() => { if (!showWelcome && selected?.agent_id) void newConversation(false, selected.agent_id); else setShowWelcome(true); }}
-            onClose={closeChat}
-            onSettings={!showWelcome && selected ? () => { setChatFilesFor(null); setChatSettingsFor(selected.id); } : undefined}
-            onFiles={!showWelcome && selected ? () => { setChatSettingsFor(null); setChatFilesFor(selected.id); } : undefined}
-            pinned={Boolean(selected && home.preferences.pins.some((item) => targetKey(item) === `conversation:${selected.id}`))}
-            pinReady={home.ready}
-            onPin={!showWelcome && selected ? () => home.toggle({ kind: "conversation", id: selected.id, title: selected.title }) : undefined}
           />
           {showWelcome ? (
             <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />
           ) : selected ? (
             <DshChatPanel key={selected.id} connection={connection} conversation={selected} assistantName={chatAssistantName}
+              menuAction={chatAction?.conversationId === selected.id ? chatAction : undefined}
+              onMessageOptions={() => setChatSettingsFor(selected.id)}
               focusMessageVersion={focusMessage?.conversationId === selected.id ? focusMessage.version : undefined}
               focusMessageSeq={focusMessage?.conversationId === selected.id ? focusMessage.seq : null} onFocusHandled={focusHandled}
               catalog={catalog} onRefresh={serviceChanged} webUrl={status?.web_url}
@@ -553,8 +562,26 @@ function ConnectedSession({
         onOpen={openConversation}
         onMore={() => { void loadMore(); }}
         onNew={() => { setShowAiDrawer(false); openMainChat(); }}
+        onExit={() => { setShowAiDrawer(false); closeChat(); }}
+        exitLabel={chatReturn.tab === "life" ? chatReturn.lifePage === "finance" ? "返回财务" : chatReturn.lifePage === "health" ? "返回健康" : "返回生活" : "返回首页"}
       />
-
+      {tab === "chat" && chatMenuOpen ? <ConversationMenu title={showWelcome ? "新的对话" : selected?.title ?? "新的对话"} top={chatMenuTop} existing={!showWelcome && !!selected}
+        onClose={() => setChatMenuOpen(false)}
+        onRename={async title => {
+          if (!selected) return;
+          const updated = await request<Conversation>(connection, `/conversations/${encodeURIComponent(selected.id)}/title`, { method: "PUT", body: { title } });
+          setConversations(old => mergeById(old, [updated])); serviceChanged();
+        }}
+        onShare={() => { if (selected) setChatAction({ conversationId: selected.id, id: ++chatActionId.current, type: "share" }); }}
+        onSearch={() => { if (selected) setChatAction({ conversationId: selected.id, id: ++chatActionId.current, type: "search" }); }}
+        onDelete={async () => {
+          if (!selected) return;
+          await request(connection, `/conversations/${encodeURIComponent(selected.id)}`, { method: "DELETE" });
+          removeConversation(selected.id);
+          if (home.preferences.pins.some(item => targetKey(item) === `conversation:${selected.id}`)) home.toggle({ kind: "conversation", id: selected.id, title: selected.title });
+          setShowWelcome(true); serviceChanged();
+          void saveDraft(draftKey(connection.url, selected.id), { text: "", pending: null }).catch(() => undefined);
+        }} /> : null}
     </View>
   );
 }

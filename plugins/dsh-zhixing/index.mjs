@@ -17,11 +17,20 @@ export async function apply(ctx, config) {
   const server = await startServer(ctx, config, {
     metadata, business,
     async forkRevision(id, source, events, cut) {
-      if (ctx.agents.get(id)) return ctx.agents.get(id);
+      const inheritPermissions = agent => {
+        // A cut or interrupted fork must not revive a wider historical preset.
+        const permissions = ctx.get('permissionPresets');
+        if (permissions) {
+          const current = permissions.current(source.session);
+          if (permissions.names.includes(current)) permissions.set(agent.session, current);
+        }
+        return agent;
+      };
+      if (ctx.agents.get(id)) return inheritPermissions(ctx.agents.get(id));
       if (await ctx.sessionPersistence.stat(id)) {
         const restored = await ctx.sessionController.resolveAgent(id);
         if (restored.error) throw restored.error;
-        return restored.agent;
+        return inheritPermissions(restored.agent);
       }
       const presets = ctx.get('agentPresets');
       const preset = presets?.composedPreset(source.ctx) ?? source.session.header.agentPreset;
@@ -41,7 +50,7 @@ export async function apply(ctx, config) {
         if (workspace.sessionIds.includes(source.id)) { await workspace.attachSession(id); break; }
       }
       if (selection) await ctx.sessionController.selectModel({ sessionId: id, ...selection });
-      return agent;
+      return inheritPermissions(agent);
     },
   });
   ctx.effect(() => () => server.close());

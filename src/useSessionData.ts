@@ -16,6 +16,13 @@ export function useSessionData(connection: Connection) {
   const [cacheReady, setCacheReady] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedRef = useRef(selectedId);
+  const removedIds = useRef(new Set<string>());
+  const removeConversation = useCallback((id: string) => {
+    removedIds.current.add(id);
+    setConversations(old => old.filter(item => item.id !== id));
+    if (selectedRef.current === id) selectedRef.current = null;
+    setSelectedId(old => old === id ? null : old);
+  }, []);
   const [conversationCursor, setConversationCursor] = useState<string | null>(
     null,
   );
@@ -47,7 +54,7 @@ export function useSessionData(connection: Connection) {
         const results = await Promise.allSettled([
           request<ServiceStatus>(connection, "/status", { signal: controller.signal }),
           request<Assistant>(connection, "/assistant", { signal: controller.signal }),
-          request<Page<Conversation>>(connection, "/conversations?latest=true&limit=100", { signal: controller.signal }),
+          request<Page<Conversation> & { deleted_ids?: string[] }>(connection, "/conversations?latest=true&limit=100", { signal: controller.signal }),
           request<Page<Agent>>(connection, "/agents", { signal: controller.signal }),
           request<ModelCatalog>(connection, "/models", { signal: controller.signal }),
           selectedRef.current ? request<Conversation>(connection, `/conversations/${selectedRef.current}`, { signal: controller.signal }) : Promise.resolve(null),
@@ -60,12 +67,13 @@ export function useSessionData(connection: Connection) {
         if (health.status === "fulfilled") { setStatus(health.value); setRuntime(health.value.runtime); }
         setLastSyncFailed(!!failure);
         if (person.status === "fulfilled") setAssistant(person.value);
+        if (chats.status === "fulfilled") for (const id of chats.value.deleted_ids ?? []) removedIds.current.add(id);
         setConversations((old) =>
           mergeById(old, [
             ...(chats.status === "fulfilled" ? chats.value.items : []),
             ...(recentChats.status === "fulfilled" ? recentChats.value.items : []),
             ...(current.status === "fulfilled" && current.value ? [current.value] : []),
-          ]),
+          ]).filter(item => !removedIds.current.has(item.id)),
         );
         if (agentPage.status === "fulfilled") setAgents(agentPage.value.items);
         if (modelPage.status === "fulfilled") setCatalog(modelPage.value);
@@ -74,7 +82,7 @@ export function useSessionData(connection: Connection) {
           initial = false;
         }
         if (chats.status === "fulfilled") setSelectedId(
-          (old) => old ?? [...chats.value.items].reverse().find((item) => !item.agent_id)?.id ?? null,
+          (old) => old && !removedIds.current.has(old) ? old : [...chats.value.items].reverse().find((item) => !item.agent_id && !removedIds.current.has(item.id))?.id ?? null,
         );
         reportSync(failure?.status === "rejected" ? failure.reason : undefined);
       } catch (e) {
@@ -119,5 +127,5 @@ export function useSessionData(connection: Connection) {
   }, [connection, reportSync]);
 
   return { assistant, setAssistant, status, runtime, lastSyncFailed, conversations, setConversations, agents, catalog, setCatalog,
-    selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive };
+    selectedId, setSelectedId, selectedRef, removeConversation, conversationCursor, setConversationCursor, loading, refresh, alive };
 }

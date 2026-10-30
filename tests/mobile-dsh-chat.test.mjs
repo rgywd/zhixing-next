@@ -23,14 +23,14 @@ function hooks() {
   }, render(fn) { cursor = 0; effects = []; const result = fn(); effects.forEach(effect => effect()); return result; }, unmount() { slots.forEach(slot => slot?.cleanup?.()); } };
 }
 function harness({ store = { draft: { text: 'fix this', pending: null } }, post = async () => {}, clear = async () => {} } = {}) {
-  const lifecycle = hooks(), calls = [], uploads = [], removed = [], cache = [], exports = {};
+  const lifecycle = hooks(), calls = [], uploads = [], removed = [], cache = [], shares = [], exports = {};
   let uuid = 0, tick;
   const snapshot = { events: [], next: 0, hasMore: false, running: false, active: true, queue: [], pending: [], live: null };
   const report = () => {};
   const dependencies = {
     '@react-native-vector-icons/ionicons': { Ionicons: 'Ionicons' }, './resources': { shareNativeDownload: async () => {} },
     react: lifecycle.react, 'react/jsx-runtime': jsxRuntime,
-    'react-native': { ...Object.fromEntries(['FlatList', 'Pressable', 'ScrollView', 'Text', 'TextInput', 'View'].map(n => [n, n])), Linking: {}, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },
+    'react-native': { ...Object.fromEntries(['FlatList', 'Pressable', 'ScrollView', 'Text', 'TextInput', 'View'].map(n => [n, n])), Linking: {}, Keyboard: { dismiss() {} }, Share: { share: async value => shares.push(value) }, BackHandler: { addEventListener: () => ({ remove() {} }) }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },
     'expo-clipboard': { setStringAsync: async () => {} }, './Notice': { useNotice: () => ({ show() {} }) }, './theme': theme,
     'expo-crypto': { randomUUID: () => `request-${++uuid}` }, 'expo-document-picker': {}, 'expo-image-picker': {},
     'expo-file-system': { Paths: { document: 'file:///private/' }, Directory: class { constructor(...parts) { this.uri = parts.map(p => p.replace(/\/$/, '')).join('/'); this.exists = true; } delete() { removed.push(this.uri); } }, File: class { async bytes() { return new Uint8Array([1, 2]); } } },
@@ -38,7 +38,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     './api': { request: async (_connection, path, options) => {
       calls.push({ path, ...options });
       if (path.includes('/dsh?')) return plain(snapshot);
-      await post(path, options); return {};
+      return await post(path, options) ?? {};
     } },
     './storage': { draftKey: () => 'draft', readDraft: async () => plain(store.draft), saveDraft: async (_key, value) => { store.draft = plain(value); },
       clearDraft: async (_key, id) => { await clear(id); if (store.draft.pending?.id === id) store.draft = { text: '', pending: null }; } },
@@ -47,7 +47,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     './conversationFiles': conversationFiles,
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
   };
-  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard', 'ConversationFilesSheet']) dependencies[`./${component}`] = { [component]: component };
+  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard', 'ConversationFilesSheet', 'PermissionPicker']) dependencies[`./${component}`] = { [component]: component };
   dependencies['./PhotoAttachments'] = { DraftAttachments: 'DraftAttachments', MessagePhotos: 'MessagePhotos' };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../src/DshChatPanel.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -56,7 +56,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
   } });
   const props = { connection: { url: 'https://example.test', token: 'test' }, conversation: { id: 'zhixing-main-aaaa', model_id: null }, assistantName: '知行', catalog: null, onRefresh() {}, onConversationChanged() {} };
   const render = () => walk(lifecycle.render(() => exports.DshChatPanel(props)));
-  return { render, props, store, calls, uploads, removed, cache, snapshot, tick: () => tick(), composer: () => render().find(n => n.type === 'ConversationComposer').props, unmount: lifecycle.unmount };
+  return { render, props, store, calls, uploads, removed, cache, shares, snapshot, tick: () => tick(), composer: () => render().find(n => n.type === 'ConversationComposer').props, unmount: lifecycle.unmount };
 }
 
 test('DSH send retains the accepted request ID until draft clearing is durable', async () => {
@@ -70,6 +70,40 @@ test('DSH send retains the accepted request ID until draft clearing is durable',
   const posts = app.calls.filter(c => c.path.endsWith('/messages'));
   assert.equal(posts.length, 2); assert.equal(posts[0].body.id, posts[1].body.id);
   assert.equal(app.store.draft.pending, null); assert.equal(app.composer().text, '');
+  app.unmount();
+});
+
+test('permissions change only after native acknowledgement, survive refresh, and leave a failed change retryable', async () => {
+  let accept, fail = false;
+  const app = harness({ post: async path => {
+    if (path.endsWith('/permissions')) {
+      if (fail) throw new Error('permission refused');
+      return await new Promise(resolve => { accept = resolve; });
+    }
+  } });
+  const permissions = { current: 'read-only', options: ['read-only', 'workspace-write', 'danger-full-access'] };
+  app.snapshot.permissions = permissions;
+  app.snapshot.history = { active: 'current-version', versions: [] };
+  app.render(); await settle();
+  assert.equal(app.composer().permission, 'read-only');
+  app.composer().onPermission();
+  const picker = () => app.render().find(n => n.type === 'PermissionPicker');
+  assert.equal(picker().props.visible, true);
+  const changing = picker().props.onSelect('workspace-write'); await settle();
+  assert.equal(app.composer().permission, 'read-only');
+  assert.equal(app.composer().permissionLocked, true);
+  const call = app.calls.find(c => c.path.endsWith('/permissions'));
+  assert.equal(call.method, 'PUT'); assert.deepEqual(plain(call.body), { permission: 'workspace-write', version: 'current-version' });
+  app.snapshot.permissions = { ...permissions, current: 'workspace-write' };
+  accept(plain(app.snapshot.permissions)); await changing; await settle();
+  assert.equal(app.composer().permission, 'workspace-write');
+  fail = true;
+  await assert.rejects(picker().props.onSelect('danger-full-access'), /permission refused/);
+  await settle(); assert.equal(app.composer().permission, 'workspace-write');
+  assert.equal(picker().props.visible, true); assert.equal(app.composer().permissionLocked, false);
+  assert.equal(app.composer().text, 'fix this');
+  app.snapshot.permissions = null; app.tick(); await settle();
+  assert.equal(app.composer().permission, undefined); assert.equal(app.composer().permissionLocked, true);
   app.unmount();
 });
 
@@ -281,4 +315,26 @@ test('the conversation file sheet hands the preview between native layers instea
   sheet().props.onClose();
   assert.equal(sheet().props.visible, false);
   app.unmount();
+});
+
+ test('sharing exports visible message text only; chat search preserves the draft and closes locally', async () => {
+  const app = harness();
+  app.snapshot.events = [
+    { seq: 1, type: 'user/message', data: { id: 'question', source: { kind: 'user' }, content: [{ type: 'text', text: '插件说明' }] } },
+    { seq: 2, type: 'assistant/message', data: { message: { id: 'answer', content: [{ type: 'text', text: '这是插件答复' }, { type: 'reasoning', text: 'private reasoning' }] } } },
+  ];
+  app.props.conversation.title = '研究插件'; app.render(); await settle();
+  app.props.menuAction = { id: 1, type: 'share' }; app.render(); await settle();
+  assert.equal(app.shares.length, 1); assert.match(app.shares[0].message, /插件说明/); assert.match(app.shares[0].message, /这是插件答复/);
+  assert.doesNotMatch(app.shares[0].message, /private reasoning|example.test|test-token/);
+  app.render(); await settle(); assert.equal(app.shares.length, 1);
+  app.props.menuAction = { id: 2, type: 'search' };
+  const search = () => app.render().find(n => n.props.accessibilityLabel === '在聊天中查找');
+  search().props.onChangeText('插件');
+  assert.equal(app.render().some(n => n.type === 'ConversationComposer'), false, 'search uses the full reading area');
+  assert.ok(app.render().some(n => n.type === 'Text' && n.props.children === '1/2 条'));
+  app.render().find(n => n.props.label === '下一个匹配').props.onPress();
+  assert.ok(app.render().some(n => n.type === 'Text' && n.props.children === '2/2 条'));
+  app.render().find(n => n.props.label === '关闭聊天查找').props.onPress();
+  assert.equal(search(), undefined); assert.equal(app.composer().text, 'fix this'); app.unmount();
 });

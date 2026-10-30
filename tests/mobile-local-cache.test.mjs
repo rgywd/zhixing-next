@@ -119,3 +119,20 @@ test("unmount during cache restoration never starts requests or accepts a late s
   app.render(); app.unmount(); resolve({ conversations: [conversation], agents: [], recentResources: [] }); await settle();
   assert.equal(app.calls.length, 0); assert.equal(app.intervals.size, 0); assert.equal(app.listeners.size, 0);
 });
+
+test("confirmed local and remote deletions cannot be revived by a stale index or current-chat response", async () => {
+  let remoteDeleted = false;
+  const writes = [];
+  const cache = { readCache: async () => null, writeCache: async (_connection, _name, value) => writes.push(value) };
+  const app = session(cache, async path => {
+    const result = response(path);
+    if (path.startsWith('/conversations?')) return { ...result, deleted_ids: remoteDeleted ? ['c1'] : [] };
+    return result;
+  });
+  let state = await app.ready(); assert.equal(state.conversations.length, 1);
+  state.removeConversation('c1'); app.render().refresh(); await settle();
+  assert.equal(app.render().conversations.length, 0); assert.equal(app.render().selectedId, null); app.unmount();
+  remoteDeleted = true;
+  const other = session(cache, async path => path.startsWith('/conversations?') ? { ...response(path), deleted_ids: ['c1'] } : response(path));
+  state = await other.ready(); assert.equal(state.conversations.length, 0); assert.equal(state.selectedId, null); other.unmount();
+});

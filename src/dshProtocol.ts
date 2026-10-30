@@ -1,4 +1,5 @@
 import type { ReplyPart } from "./liveRun";
+import type { DshPermissions } from "./dshPermissions";
 
 /** DSH owns these records. Keep opaque fields so new tools remain inspectable. */
 export type DshEvent = { seq: number; time: number; type: string; data: Record<string, unknown> };
@@ -7,6 +8,7 @@ export type DshQuestion = { id: string; question: string; detail?: string; heade
 export type DshPending = { id: string; sessionId: string; kind: "approval" | "question";
   toolName?: string; reason?: string; questions?: DshQuestion[] };
 export type DshSnapshot = { events: DshEvent[]; next: number; hasMore: boolean; running: boolean; active: boolean;
+  permissions?: DshPermissions | null;
   history?: { active: string; versions: { id: string; label: string; source?: string; seq?: number; userIndex?: number; group?: string; kind?: string }[] };
   queue: { id: string; placement?: "queued" | "steering" | "context"; content: unknown }[]; pending: DshPending[];
   live: { attemptId: string; turn: number; step: number; chunks: Record<string, unknown>[] } | null };

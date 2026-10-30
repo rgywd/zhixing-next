@@ -1,5 +1,7 @@
 # 文档入口
 
+- [对话页头、菜单与 DSH 权限管理](CHAT-PERMISSIONS-2026-10-30.md)：标题与模型、紧邻图标、box 菜单、三种原生权限与验收。
+
 - [0.2.11 DSH 原生业务与文件传输](RELEASE-0.2.11.md)：财务健康迁移、记忆与资料交给宿主、versionCode 13、同签升级与生产切换边界。
 - [DSH 业务迁移](DSH-BUSINESS-MIGRATION.md)：财务健康的原生存储、仅保留附件传输、旧资料归档与 Python 服务退役。
 

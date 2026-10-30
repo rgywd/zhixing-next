@@ -6,6 +6,7 @@ import ts from "typescript";
 import * as jsxRuntime from "react/jsx-runtime";
 import { darkColors, lightColors } from "../src/theme.ts";
 import * as theme from "../src/theme.ts";
+import * as permissions from "../src/dshPermissions.ts";
 import { thinkingLabel } from "../src/reasoning.ts";
 
 const walk = (node) => !node || typeof node !== "object" ? [] : Array.isArray(node) ? node.flatMap(walk) : [node, ...walk(node.props?.children)];
@@ -27,7 +28,7 @@ function harness({ colors = darkColors, request = async () => ({ items: [] }), .
   const dependencies = {
     "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "./ChatTextEditor": { ChatTextEditor: "ChatTextEditor" }, "./BottomSheet": { BottomSheet: "BottomSheet" },
     "react-native": { ...Object.fromEntries(["ActivityIndicator", "Pressable", "ScrollView", "Text", "TextInput", "View"].map((name) => [name, name])), StyleSheet: { create: (styles) => styles } },
-    "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./api": { request }, "./BrandIcon": { BrandIcon: "BrandIcon" }, "./reasoning": { thinkingLabel }, "./theme": theme,
+    "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./api": { request }, "./BrandIcon": { BrandIcon: "BrandIcon" }, "./reasoning": { thinkingLabel }, "./theme": theme, "./dshPermissions": permissions,
     "./ThemeProvider": { useTheme: () => ({ colors }), useThemedStyles: (factory) => factory(colors) },
   };
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/ConversationComposer.tsx", import.meta.url), "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
@@ -36,6 +37,30 @@ function harness({ colors = darkColors, request = async () => ({ items: [] }), .
   return { props, actions, render(next = {}) { Object.assign(props, next); return walk(lifecycle.render(() => exports.ConversationComposer(props))); }, unmount: lifecycle.unmount };
 }
 const control = (nodes, label) => nodes.find((node) => node.type === "Pressable" && node.props.accessibilityLabel?.startsWith(label));
+
+test("model, reasoning and permissions stay adjacent as icon-only controls in both themes", () => {
+  for (const colors of [lightColors, darkColors]) {
+    const app = harness({ colors, onPermission() {} });
+    for (const choice of permissions.permissionChoices) {
+      const nodes = app.render({ permission: choice.value });
+      const row = nodes.find(n => n.type === 'ScrollView');
+      const buttons = walk(row).filter(n => n.type === 'Pressable');
+      assert.deepEqual(buttons.slice(0, 3).map(n => n.props.accessibilityLabel.split('，')[0]), ['选择聊天模型', '思考深度', '权限管理']);
+      assert.equal(content(buttons[0]), '', 'model name belongs in the header');
+      assert.equal(walk(buttons[0]).filter(n => n.type === 'BrandIcon').length, 1);
+      assert.equal(walk(buttons[0]).some(n => n.type === 'Ionicons'), false, 'no dropdown arrow beside the brand');
+      const icon = walk(buttons[2]).find(n => n.type === 'Ionicons');
+      assert.equal(icon.props.name, choice.icon);
+      assert.equal(icon.props.color, choice.value === 'danger-full-access' ? colors.red : colors.ink);
+      for (const button of buttons.slice(0, 3)) {
+        assert.ok(button.props.style[0].width >= 40);
+        assert.ok(button.props.style[0].minHeight >= 44);
+      }
+    }
+    assert.equal(control(app.render({ permissionLocked: true }), '权限管理').props.disabled, true);
+    app.unmount();
+  }
+});
 
 test("expanded editing keeps the same draft and attachments, restores selection and never submits", async () => {
   const app = harness({ text: '长需求\n第二段', children: 'photo draft' });

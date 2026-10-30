@@ -4,6 +4,34 @@ import { Buffer } from 'node:buffer';
 import { startServer, createInteractions } from '../server.mjs';
 
 const table = () => { const values = new Map(); return { get: id => values.get(id), entries: () => values.entries(), put: async (id, value) => values.set(id, structuredClone(value)) }; };
+
+test('conversation deletion waits for native stopping, persists only successful removal, and cannot expose removed histories', async t => {
+  const f = fixture(), archived = []; let failed = true, finish, started;
+  f.native.metadata.deleted = table();
+  const stopping = new Promise(resolve => { started = resolve; });
+  f.ctx.get = name => name === 'workspaceRegistry' ? { async archiveSession(id, options) {
+    if (failed) throw new Error('archive failed');
+    assert.equal(options.stopActivity, true); archived.push(id);
+  } } : undefined;
+  const server = await startServer(f.ctx, { token: 'delete-test', port: 0 }, f.native); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address.port}/v1`, headers = { Authorization: 'Bearer delete-test' };
+  const chat = await (await fetch(`${base}/conversations`, { method: 'POST', headers, body: '{}' })).json();
+  f.agents.get(chat.id).whenIdle = async () => { started(); await new Promise(resolve => { finish = resolve; }); };
+  const path = `${base}/conversations/${chat.id}`;
+  assert.equal((await fetch(path, { method: 'DELETE', headers })).status, 400);
+  assert.equal((await fetch(path, { headers })).status, 200); assert.equal(f.native.metadata.deleted.get(chat.id), undefined);
+  failed = false;
+  const deleting = fetch(path, { method: 'DELETE', headers });
+  await stopping; assert.equal(f.native.metadata.deleted.get(chat.id), undefined, 'a stop request is not a stop receipt');
+  finish(); assert.deepEqual(await (await deleting).json(), { deleted: true });
+  assert.ok(f.native.metadata.deleted.get(chat.id));
+  assert.equal((await fetch(path, { headers })).status, 404);
+  assert.equal((await fetch(`${path}/dsh`, { headers })).status, 404);
+  assert.equal((await fetch(`${path}/messages`, { method: 'POST', headers, body: '{}' })).status, 404);
+  assert.deepEqual((await (await fetch(`${base}/conversations`, { headers })).json()).items, []);
+  assert.deepEqual(await (await fetch(path, { method: 'DELETE', headers })).json(), { deleted: true });
+  assert.deepEqual(archived, [chat.id]);
+});
 function fixture() {
   const listeners = new Map(), rows = [], records = new Map(), agents = new Map();
   const ctx = {
@@ -42,6 +70,44 @@ function fixture() {
   };
   return { ctx, listeners, agents, records, native: { metadata: { revisions: table(), artifacts: table() } } };
 }
+
+test('permission endpoint validates host support and version and uses the native command before returning its receipt', async t => {
+  const f = fixture(), selected = new Map(), commands = [];
+  const modes = ['read-only', 'workspace-write', 'danger-full-access'];
+  const service = { catalog: () => ({ options: modes.map(value => ({ value })), defaultPreset: 'workspace-write' }),
+    current: session => selected.get(session) ?? 'workspace-write' };
+  let enabled = true, rejectCommand = false;
+  f.ctx.get = name => !enabled ? undefined : name === 'permissionPresets' ? service : name === 'commands' ? {
+    async execute(agent, line, attachments, signal) {
+      commands.push({ agent, line, attachments, signal });
+      if (rejectCommand) return { result: { kind: 'error', text: 'native permission rejected' } };
+      selected.set(agent.session, line.slice('/permission '.length));
+      return { result: { kind: 'success' } };
+    },
+  } : undefined;
+  f.ctx.sessionController.resolveAgent = async id => ({ agent: f.agents.get(id) });
+  f.ctx.sessionController.projections = async ({ sessionId }) => ({ values: { permissions: { currentValue: service.current(f.agents.get(sessionId).session) } } });
+  const server = await startServer(f.ctx, { token: 'permissions', port: 0 }, f.native); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address.port}/v1`, headers = { Authorization: 'Bearer permissions' };
+  const chat = await (await fetch(`${base}/conversations`, { method: 'POST', headers, body: JSON.stringify({ permission: 'read-only' }) })).json();
+  const path = `${base}/conversations/${chat.id}/dsh`;
+  const put = body => fetch(`${path}/permissions`, { method: 'PUT', headers, body: JSON.stringify(body) });
+  assert.equal(commands[0].line, '/permission read-only');
+  assert.equal((await (await fetch(path, { headers })).json()).permissions.current, 'read-only');
+  assert.equal((await put({ version: 'stale', permission: 'danger-full-access' })).status, 409);
+  assert.equal((await put({ version: chat.id, permission: 'danger-full-access\n/bash bad' })).status, 400);
+  assert.equal(commands.length, 1);
+  rejectCommand = true;
+  assert.equal((await put({ version: chat.id, permission: 'workspace-write' })).status, 409);
+  assert.equal(service.current(f.agents.get(chat.id).session), 'read-only');
+  rejectCommand = false;
+  assert.equal((await (await put({ version: chat.id, permission: 'workspace-write' })).json()).current, 'workspace-write');
+  const count = commands.length;
+  await put({ version: chat.id, permission: 'workspace-write' });
+  assert.equal(commands.length, count, 'retries do not repeat an already effective native command');
+  enabled = false;
+  assert.equal((await put({ version: chat.id, permission: 'read-only' })).status, 503);
+});
 
 test('outlet authentication, full prompt admission, duplicate retry and durable event replay', async t => {
   const f = fixture();
