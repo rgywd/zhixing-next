@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { randomUUID } from 'node:crypto';
+import { Buffer } from 'node:buffer';
 import { createEnvironment } from '../environment.mjs';
 
 const SECRET = 'TEST_ONLY_TOKEN_-a6fd2b594d1942';
