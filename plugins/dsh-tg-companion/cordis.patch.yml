@@ -1,0 +1,5 @@
+- insert:
+    - id: zhixing-tg-companion
+      name: '@zhixing/dsh-tg-companion'
+      config:
+        targetUserId: !!js Number(process.env.ZHIXING_TG_OWNER_ID)
