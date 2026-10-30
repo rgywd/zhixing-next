@@ -41,6 +41,7 @@ dsh web --no-open
 - `/dsh/images/:attachmentId` 使用本对话持久消息中的图片引用，调用原生附件读取服务返回图片字节。需要连接认证，不能通过自传路径或别的会话引用读取图片。
 - `/dsh/files/:attachmentId` 流式返回本对话的原生文件附件，`/text` 返回有限长度的文本预览；App 可预览和下载分享。文件归属与完整性由持久引用、DSH 附件服务共同核验，下载不套用旧业务 20 MiB 上限。
 - `PUT /conversations/:id/title` 接回原生改名。`/conversations/search` 直接查本出口的持久会话正文，返回具体事件位置；不要求宿主启用可选搜索索引。精确语义见 [接口文档](../../docs/API.md)。
+- 权限管理提供宿主的 `read-only`、`workspace-write`、`danger-full-access` 三种模式，调用原生 `/permission` 命令并核对持久回执；不修改全局默认值，不自建审批策略。快照返回所选版本的真实权限，新建会话可在首条消息前设置，旧消息编辑继承当前预设。接口见 [API](../../docs/API.md)。
 - 模型目录、模型选择、默认 preset、取消和历史恢复直接使用 DSH 原生服务。任意工具的参数、结果和不认识的事件保留原始 JSON 可展开查看；专用交互式卡片可后续逐个补充。
 - `/dsh/revisions` 实现真实历史编辑／重新回答，`/dsh/version` 选择继续使用的版本。逻辑对话 ID 不变，新版本使用原生历史前缀与宿主预设，旧记录不覆盖；编辑可修改文字、保留或移除原附件，编辑草稿独立保存，重试沿用同一请求。详情见 [API](../../docs/API.md)。
 - 文件交付直接消费标准预设已有的 `present` 工具及 `deliverables/presented` 事件，不再注册 `zhixing_publish_file`。`/dsh/deliveries/:seq/:index[/text]?version=...` 只解析本逻辑对话的原生交付声明，再通过 `workspaceFiles.read/readBytes/stat` 读取；不接受客户端路径，不扩大宿主权限。沿用 DSH 的当前文件语义，文件改动后打开的是当前字节，删除或权限拒绝则真实报错。旧 `/dsh/artifacts` 快照接口与自建发布副本已移除。

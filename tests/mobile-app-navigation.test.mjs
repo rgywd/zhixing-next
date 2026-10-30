@@ -7,6 +7,7 @@ import ts from "typescript";
 import * as jsxRuntime from "react/jsx-runtime";
 import * as api from "../src/api.ts";
 import * as theme from "../src/theme.ts";
+import * as permissions from "../src/dshPermissions.ts";
 import { availablePreference } from "../src/providerEditing.ts";
 import { homeEntries, targetKey } from "../src/homeEntries.ts";
 
@@ -23,7 +24,7 @@ function hooks() {
   }, render(fn) { cursor = 0; effects = []; const result = fn(); effects.forEach((effect) => effect()); return result; }, unmount() { slots.forEach((slot) => slot?.cleanup?.()); } };
 }
 function load(filename, dependencies, suffix = "") {
-  dependencies = { "./localCache": cacheHarness(), "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, "./PhotoAttachments": { DraftAttachments: "DraftAttachments" }, "./ChatTextEditor": { ChatTextEditor: "ChatTextEditor" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, ...dependencies };
+  dependencies = { "./dshPermissions": permissions, "./localCache": cacheHarness(), "./usePhotoPicker": { usePhotoPicker: () => ({ pick() {}, picking: false }) }, "./PhotoAttachments": { DraftAttachments: "DraftAttachments" }, "./ChatTextEditor": { ChatTextEditor: "ChatTextEditor" }, "./BottomSheet": { BottomSheet: "BottomSheet" }, ...dependencies };
   const exports = {};
   runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/${filename}`, import.meta.url), "utf8") + suffix, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
     exports, AbortController, Error, Date, encodeURIComponent, setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
@@ -93,6 +94,22 @@ test("native conversations keep their renderer when the status request fails", a
   assert.ok(find(app, "DshChatPanel"));
   assert.equal(app.render().some(n => n.type === "ChatPanel"), false);
   app.unmount();
+});
+
+test("welcome permission is applied when creating the conversation, before the first message", async () => {
+  const app = appHarness({ modelPage: { items: [{ id: 'model', name: 'DeepSeek', ready: true, reasoning_levels: [] }], roles: { chat: 'model' } },
+    serviceStatus: { model_ready: true, worker_online: true, permissions: { current: 'workspace-write', options: ['read-only', 'workspace-write', 'danger-full-access'] } } });
+  app.render(); await settle();
+  app.renderTabs().find(node => node.props.accessibilityLabel === '知行').props.onPress();
+  app.welcome.value.permission = 'read-only';
+  const home = find(app, 'AiHome');
+  assert.equal(home.props.permissions.current, 'read-only');
+  assert.equal(find(app, 'AgentChatHeader').props.modelName, 'DeepSeek');
+  home.props.onSend(); await settle();
+  const creation = app.calls.findIndex(call => call.path === '/conversations' && call.method === 'POST');
+  const message = app.calls.findIndex(call => call.path.endsWith('/messages') && call.method === 'POST');
+  assert.equal(app.calls[creation].body.permission, 'read-only');
+  assert.ok(message > creation); app.unmount();
 });
 
 test("local password vault stays available without a server and owns its private return path", async () => {
@@ -361,6 +378,11 @@ test("the shared header exposes readable identity and moves secondary actions in
     const render = () => walk(life.render(() => AgentChatHeader(props)));
     let nodes = render();
     assert.equal(nodes.find(n => n.props?.accessibilityRole === 'header').props.children, '这个月的收支');
+    props.modelName = 'DeepSeek-V4.1-Flash';
+    nodes = render();
+    assert.equal(nodes.find(n => n.props?.accessibilityRole === 'header').props.children, 'DeepSeek-V4.1-Flash');
+    assert.ok(nodes.some(n => n.type === 'Text' && n.props.children === '这个月的收支'));
+    assert.ok(nodes.some(n => n.props?.accessibilityLabel?.includes('当前模型DeepSeek-V4.1-Flash，财务助手')));
     nodes.find(n => n.props?.accessibilityLabel === '对话菜单').props.onPress();
     nodes = render(); assert.equal(nodes.find(n => n.type === 'BottomSheet').props.visible, true);
     nodes.find(n => n.type === 'ActionLink' && n.props.children === '本对话文件').props.onPress();
@@ -381,7 +403,7 @@ test("the shared header exposes readable identity and moves secondary actions in
 test("every welcome suggestion keeps chat mode and the composer exposes no task switch", () => {
   const lifecycle = hooks(), kinds = [], prompts = [];
   const native = { ...Object.fromEntries(["View", "Text", "TextInput", "Pressable", "ScrollView", "ActivityIndicator"].map((name) => [name, name])), StyleSheet: { create: (value) => value } };
-  const dependencies = { "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "react-native": native, "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./theme": theme, "./ui": { useUi: () => ({ s: {}, colors: theme.lightColors }), ActionLink: "ActionLink" }, "./ThemeProvider": { useThemedStyles: (factory) => factory(theme.lightColors) }, "./api": {}, "./ConversationComposer": { ConversationComposer: "ConversationComposer" }, "./ReasoningPicker": { ReasoningPicker: "ReasoningPicker" }, "./ModelPicker": { ModelPicker: "ModelPicker" }, "./SearchPicker": { SearchPicker: "SearchPicker" } };
+  const dependencies = { "react/jsx-runtime": jsxRuntime, react: lifecycle.react, "react-native": native, "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./theme": theme, "./ui": { useUi: () => ({ s: {}, colors: theme.lightColors }), ActionLink: "ActionLink" }, "./ThemeProvider": { useThemedStyles: (factory) => factory(theme.lightColors) }, "./api": {}, "./ConversationComposer": { ConversationComposer: "ConversationComposer" }, "./ReasoningPicker": { ReasoningPicker: "ReasoningPicker" }, "./PermissionPicker": { PermissionPicker: "PermissionPicker" }, "./ModelPicker": { ModelPicker: "ModelPicker" }, "./SearchPicker": { SearchPicker: "SearchPicker" } };
   const { AiHome } = load("AiHome.tsx", dependencies);
   const props = { name: "知行", draft: "", kind: "chat", busy: false, connection: {}, catalog: null, modelId: null, effort: null, onDraft: (text) => prompts.push(text), onKind: (kind) => kinds.push(kind), onSend() {}, onFiles() {}, onModelId() {}, onEffort() {}, onSearchProviderId() {} };
   const nodes = walk(lifecycle.render(() => AiHome(props)));

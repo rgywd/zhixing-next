@@ -39,6 +39,7 @@ import { AiHome } from "./AiHome";
 import { AiDrawer } from "./AiDrawer";
 import { useHomePreferences } from "./useHomePreferences";
 import { useWelcomeDraft } from "./useWelcomeDraft";
+import type { DshPermission } from "./dshPermissions";
 import { usePhotoPicker } from "./usePhotoPicker";
 import { targetKey } from "./homeEntries";
 import { TodayHomePanel as HomePanel } from "./TodayHomePanel";
@@ -350,6 +351,7 @@ function ConnectedSession({
         title: explore ? "认识运行环境" : agentId ? `${agents.find((item) => item.id === agentId)?.name ?? "助手"}对话` : initial ? initial.text.trim().split(/\r?\n/)[0].slice(0, 80) || "新的对话" : quick ? "新的对话" : "新的对话",
         project_id: null,
         agent_id: agentId,
+        ...(initial && !agentId && welcome.value.permission ? { permission: welcome.value.permission } : {}),
       };
       const creationKey = JSON.stringify(body);
       // Reuse a received creation receipt if a later model/draft step failed.
@@ -422,6 +424,8 @@ function ConnectedSession({
   }
   const welcomeControls = {
     connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort,
+    permissions: status?.permissions ? { ...status.permissions, current: welcome.value.permission ?? status.permissions.current } : null,
+    onPermission: (value: DshPermission) => welcome.setPermission(value),
     draftReady: welcome.ready, draftError: welcome.error, onRetryDraft: welcome.retry,
     photos: welcome.value.photos, pickingPhotos: welcomePhotoPicker.picking,
     onPhotos: () => { void welcomePhotoPicker.pick(); },
@@ -489,6 +493,7 @@ function ConnectedSession({
       ) : tab === "chat" ? (
         <>
           <AgentChatHeader
+            modelName={(showWelcome ? welcomeModel : catalog?.items.find(model => model.id === (selected?.model_id ?? catalog.roles.chat)))?.name ?? "选择模型"}
             title={showWelcome ? assistant?.name ?? "知行" : chatAssistantName}
             subtitle={showWelcome ? "随时聊聊，把事情做成" : selected?.title ?? "新的对话"}
             status={showWelcome ? welcomeStatus : undefined}

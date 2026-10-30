@@ -17,7 +17,14 @@ export function apply(ctx, config) {
         userTexts: messages.filter(m => m.role === 'user').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)) }, null, 2));
       let block;
       const call = (name, args) => ({ type: 'tool-call', id: randomUUID(), name, arguments: JSON.stringify(args) });
-      if (prompt.includes('READ-WRITE-CHECK') && results.length < 3) {
+      if (prompt.includes('PERMISSION-WRITE') && results.length < 2) {
+        block = results.length === 0 ? call('read', { file_path: `${config.workspace}/permission.txt` })
+          : call('write', { file_path: `${config.workspace}/permission.txt`, content: 'permission write executed\n' });
+      } else if (prompt.includes('PERMISSION-ESCALATE') && !results.length) {
+        block = call('bash', { command: 'printf approved > escalation.txt', workdir: config.workspace,
+          description: 'Write the permission regression marker', sandbox_permissions: 'danger-full-access',
+          justification: 'Approve this isolated permission regression command.' });
+      } else if (prompt.includes('READ-WRITE-CHECK') && results.length < 3) {
         block = [
           () => call('read', { file_path: `${config.workspace}/sample.js` }),
           () => call('write', { file_path: `${config.workspace}/sample.js`, content: 'export const answer = 42;\n' }),

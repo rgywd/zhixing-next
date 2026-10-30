@@ -117,6 +117,33 @@ export async function startServer(ctx, config, native = {}) {
     if (frame.type === 'end') live.delete(agent.id);
   });
   const signal = () => new AbortController().signal;
+  const permissionModes = ['read-only', 'workspace-write', 'danger-full-access'];
+  const permissions = current => {
+    const service = ctx.get?.('permissionPresets');
+    if (!service || !ctx.get?.('commands')) return null;
+    const catalog = service.catalog();
+    return { current: current ?? catalog.defaultPreset,
+      options: permissionModes.filter(value => catalog.options.some(option => option.value === value)) };
+  };
+  const validatePermission = value => {
+    const available = permissions();
+    if (!available) throw failure('当前服务未提供权限设置。', 503);
+    if (!available.options.includes(value)) throw failure('无效或不可用的权限模式。');
+  };
+  const selectPermission = async (id, value) => {
+    validatePermission(value);
+    const agent = await resolve(id);
+    const service = ctx.get('permissionPresets');
+    // Use the same command as DSH's own picker, including its policy-change notice.
+    if (service.current(agent.session) !== value) {
+      const result = await ctx.get('commands').execute(agent, `/permission ${value}`, [], signal());
+      if (result?.result.kind !== 'success') throw failure(result?.result.text ?? '权限切换未完成。', 409);
+    }
+    await flush(id);
+    const current = service.current(agent.session);
+    if (current !== value) throw failure('权限尚未生效，请刷新后重试。', 409);
+    return permissions(current);
+  };
   const list = async () => {
     const all = (await ctx.sessionController.list({}, signal())).items;
     return Promise.all(all.filter(row => own(row.sessionId)).map(async root => {
@@ -193,7 +220,7 @@ export async function startServer(ctx, config, native = {}) {
       if (method === 'GET' && path === '/v1/status') {
         const catalog = await ctx.sessionController.modelCatalog();
         return reply({ runtime: 'dsh', model_ready: catalog.routableProviders.includes(catalog.default.provider) && catalog.groups.some(g => g.id === catalog.default.provider && g.models.some(m => m.id === catalog.default.model)), worker_online: true,
-          execution_available: true, business_connected: !!native.business, web_url: config.webUrl ?? null });
+          execution_available: true, business_connected: !!native.business, web_url: config.webUrl ?? null, permissions: permissions() });
       }
       if (method === 'GET' && path === '/v1/assistant') return reply({ name: '知行', persona: '' });
       if (method === 'GET' && path === '/v1/models') {
@@ -234,8 +261,10 @@ export async function startServer(ctx, config, native = {}) {
       }
       if (method === 'POST' && path === '/v1/conversations') {
         const body = await json(req);
+        if (body.permission != null) validatePermission(body.permission);
         const service = ['finance', 'health'].includes(body.agent_id) ? body.agent_id : 'main';
         const { sessionId } = await ctx.sessionController.create({ sessionId: `zhixing-${service}-${randomUUID()}` });
+        if (body.permission != null) await selectPermission(sessionId, body.permission);
         // An upload may create the thread before its first message. Keep the
         // placeholder out of native rename so DSH can generate the real title.
         if (body.title?.trim() && body.title.trim() !== '新的对话') await ctx.sessionController.rename({ sessionId, title: body.title.trim() });
@@ -269,6 +298,11 @@ export async function startServer(ctx, config, native = {}) {
           await selectModel(id, body);
           await flush(id); return reply(await get(root));
         }
+        if (method === 'PUT' && suffix === '/dsh/permissions') {
+          const body = await json(req);
+          if (body.version !== id) throw failure('对话版本已改变，请刷新后再修改权限。', 409);
+          return reply(await selectPermission(id, body.permission));
+        }
         if (method === 'GET' && suffix === '/dsh') {
           const requested = Number(url.searchParams.get('offset') ?? 0);
           const offset = (url.searchParams.get('version') ?? id) === id ? requested : 0;
@@ -286,6 +320,7 @@ export async function startServer(ctx, config, native = {}) {
           }
           const state = await ctx.sessionController.state({ sessionId: id }, signal());
           return reply({ history, events, next: offset + events.length, hasMore: events.length === 256,
+            permissions: projection?.values.permissions ? permissions(projection.values.permissions.currentValue) : null,
             running: agent?.status === 'running', active: !!agent, pending,
             queue: (state.queue ?? []).filter(item => item.placement !== 'context'), live: live.get(id) ?? null });
         }

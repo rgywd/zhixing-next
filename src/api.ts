@@ -1,3 +1,4 @@
+import type { DshPermissions } from "./dshPermissions";
 export type Connection = { url: string; token: string };
 export type Page<T> = {
   items: T[];
@@ -20,6 +21,7 @@ export type Agent = {
   visible: boolean;
 };
 export type ServiceStatus = {
+  permissions?: DshPermissions | null;
   runtime?: "dsh";
   business_connected?: boolean;
   web_url?: string | null;

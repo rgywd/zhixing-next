@@ -2,6 +2,10 @@
 
 2026-10-29：当前 App 仅连接 [DSH 插件接口](../plugins/dsh-zhixing/README.md)，`/v1/status.runtime` 为 `dsh`。财务、健康、联合餐费和 `GET /v1/business/schema?domain=finance|health|life` 由同进程原生业务插件提供，使用 DSH `storageDomain` 持久保存；不转发 Python 服务。记忆、资料、搜索供应商、旧人格与任务路由不再由此出口提供。以下先列当前 DSH 协议，后面的 Python 部分仅为历史契约参考。
 
+2026-10-30 权限接口：`GET /v1/status` 增加 `permissions: {current, options}`（新会话默认值），`GET /v1/conversations/{id}/dsh` 返回所选原生版本的同名权限对象。值为 `read-only`、`workspace-write`、`danger-full-access`；仅公布宿主当前提供的选项。宿主未挂载权限服务／命令时为 null；其他自定义当前值保留原样，不映射为已知模式。
+
+`PUT /v1/conversations/{id}/dsh/permissions` 接收 `{permission, version}`。version 必须匹配当前原生版本，过期返回 409；不支持的值为 400，无权限服务为 503。执行宿主原生 `/permission` 命令，检查成功回执和生效值并 flush 后，返回 `{current, options}`；同值重试不重复执行命令。不接受任意命令字符串，不修改宿主全局默认值。`POST /v1/conversations` 可传可选 permission，先校验能力，再于首次消息前应用。历史编辑／重答新建的分支继承源会话当前可用权限预设，避免较早的历史前缀恢复更宽的旧权限；已有版本各自保存权限。
+
 DSH 聊天快照的 `queue` 来自原生 Session state，保留 `queued`／`steering` 位置；`POST /v1/conversations/{id}/dsh/queue/{itemId}` 接收原生 `remove`、`steer`、`edit` action，并在持久化后返回。`GET /v1/conversations/{id}/dsh/images/{attachmentId}` 需要连接令牌，仅解析本对话历史中的原生图片引用，返回真实图片字节和媒体类型；不存在于该会话的引用返回 404，不接受任意文件路径。客户端提交附件前持久保存上传 receipt，发送重试复用 receipt 与消息请求 ID。
 
 DSH 对话体验第一轮增加以下接口（均需连接令牌）：

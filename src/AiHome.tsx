@@ -9,6 +9,8 @@ import { ReasoningPicker } from "./ReasoningPicker";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { type Connection, type DraftPhoto, type ModelCatalog, type ReasoningEffort } from "./api";
 import { ModelPicker } from "./ModelPicker";
+import { PermissionPicker } from "./PermissionPicker";
+import type { DshPermission, DshPermissions } from "./dshPermissions";
 
 type Kind = "chat" | "task";
 
@@ -40,6 +42,8 @@ export function AiHome({
   onRemovePhoto,
   pickingPhotos = false,
   onSend,
+  permissions,
+  onPermission,
 }: {
   name: string;
   draft: string;
@@ -62,11 +66,14 @@ export function AiHome({
   onRemovePhoto?: (id: string) => void;
   pickingPhotos?: boolean;
   onSend: () => void;
+  permissions?: DshPermissions | null;
+  onPermission?: (value: DshPermission) => Promise<void>;
 }) {
   const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
   const [showModels, setShowModels] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
+  const [showPermissions, setShowPermissions] = useState(false);
   const locked = busy || !draftReady;
   const selectedModelId = modelId ?? catalog?.roles.chat ?? null;
   const model = catalog?.items.find((item) => item.id === selectedModelId);
@@ -92,7 +99,7 @@ export function AiHome({
           </Pressable>)}
         </View>
       </ScrollView>
-      <ConversationComposer unlimitedText text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!locked} onText={(text) => { if (!locked) onDraft(text); }} onSend={() => { if (!locked && !pickingPhotos && (draft.trim() || photos.length)) onSend(); }} onFiles={() => { if (!locked) onFiles(); }} onPhotos={onPhotos} attachmentLocked={locked || pickingPhotos} canSend={!locked && !pickingPhotos && !!(draft.trim() || photos.length)} busy={busy} kind="chat" onKind={() => { if (!locked) onKind("chat"); }} kindLocked={locked} connection={connection} model={model} depth={depth} optionsLocked={locked || !catalog} onModel={() => { if (!locked && catalog) setShowModels(true); }} onReasoning={() => { if (!locked && catalog) setShowReasoning(true); }}>
+      <ConversationComposer permission={permissions?.current} onPermission={onPermission ? () => setShowPermissions(true) : undefined} permissionLocked={locked || !permissions} unlimitedText text={draft} placeholder={`和${name}聊聊，或交代一件事…`} editable={!locked} onText={(text) => { if (!locked) onDraft(text); }} onSend={() => { if (!locked && !pickingPhotos && (draft.trim() || photos.length)) onSend(); }} onFiles={() => { if (!locked) onFiles(); }} onPhotos={onPhotos} attachmentLocked={locked || pickingPhotos} canSend={!locked && !pickingPhotos && !!(draft.trim() || photos.length)} busy={busy} kind="chat" onKind={() => { if (!locked) onKind("chat"); }} kindLocked={locked} connection={connection} model={model} depth={depth} optionsLocked={locked || !catalog} onModel={() => { if (!locked && catalog) setShowModels(true); }} onReasoning={() => { if (!locked && catalog) setShowReasoning(true); }}>
         <DraftAttachments connection={connection} photos={photos} removePhoto={locked ? undefined : onRemovePhoto} />
       </ConversationComposer>
       {draftError ? <View style={styles.draftError}>
@@ -101,6 +108,10 @@ export function AiHome({
       </View> : null}
       <ModelPicker visible={showModels} title="选择聊天模型" connectionUrl={connection.url} models={catalog?.items ?? []} selectedId={selectedModelId} onSelect={async (id) => { if (!locked) { onModelId(id); onEffort(null); } }} onUseDefault={modelId ? async () => { if (!locked) { onModelId(null); onEffort(null); } } : undefined} defaultLabel="跟随默认聊天模型" onClose={() => setShowModels(false)} />
       <ReasoningPicker visible={showReasoning} model={model} selected={effort} onSelect={async (value) => { if (!locked) onEffort(value); }} onClose={() => setShowReasoning(false)} />
+      <PermissionPicker visible={showPermissions} permissions={permissions} onSelect={async value => {
+        if (locked || !onPermission) throw new Error("请等当前操作完成后再修改权限。");
+        await onPermission(value);
+      }} onClose={() => setShowPermissions(false)} />
     </View>
   );
 }

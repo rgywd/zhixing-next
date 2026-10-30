@@ -1,3 +1,5 @@
+import { PermissionPicker } from "./PermissionPicker";
+import type { DshPermission, DshPermissions } from "./dshPermissions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AppState, FlatList, Linking, Pressable, ScrollView, Text, TextInput, View, type ViewToken } from "react-native";
 import * as Clipboard from "expo-clipboard";
@@ -184,6 +186,8 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const [queueOpen, setQueueOpen] = useState(false);
   const [models, setModels] = useState(false);
   const [reasoning, setReasoning] = useState(false);
+  const [permissionOpen, setPermissionOpen] = useState(false);
+  const permissionRevision = useRef(0);
   const [intent, setIntent] = useState<"queue" | "steer">("queue");
   const list = useRef<FlatList<DshChatRow>>(null);
   const contentHeight = useRef(0);
@@ -233,6 +237,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     async function poll() {
       if (!active || polling || AppState.currentState === "background") return;
       polling = true;
+      const permissionsAtStart = permissionRevision.current;
       try {
         let changed = false;
         let next: DshSnapshot;
@@ -247,7 +252,8 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
           accumulated = mergeDshEvents(accumulated, next.events); cursor = next.next;
         } while (next.hasMore);
         if (changed) setEvents(accumulated);
-        setSnapshot(next); report();
+        setSnapshot(previous => permissionsAtStart === permissionRevision.current || previous?.history?.active !== next.history?.active
+          ? next : { ...next, permissions: previous?.permissions }); report();
         if (wasRunning && !next.running) onRefreshRef.current();
         wasRunning = next.running;
         const nextMetadata = JSON.stringify(next.history);
@@ -360,6 +366,21 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   async function selectModel(modelId: string | null, effort: ReasoningEffort | null) {
     const updated = await request<Conversation>(connection, `${base}/model`, { method: "PUT", body: { model_id: modelId, reasoning_effort: effort } });
     onConversationChanged(updated); refresh();
+  }
+  async function selectPermission(permission: DshPermission) {
+    if (working.current) throw new Error("请等当前操作完成后再修改权限。");
+    working.current = true; setBusy(true); permissionRevision.current++;
+    const version = snapshot?.history?.active ?? conversation.id;
+    try {
+      const updated = await request<DshPermissions>(connection, `${base}/dsh/permissions`, {
+        method: "PUT", body: { permission, version },
+      });
+      if (alive.current) setSnapshot(previous => previous && (previous.history?.active ?? conversation.id) === version
+        ? { ...previous, permissions: updated } : previous);
+    } finally {
+      permissionRevision.current++; working.current = false;
+      if (alive.current) { setBusy(false); refresh(); }
+    }
   }
   async function copyMessage(row: DshChatRow) {
     try { await Clipboard.setStringAsync(rowText(row)); notice.show({ message: "已复制消息", tone: "success" }); }
@@ -523,6 +544,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       pending={!!draft.pending || !!draft.revision?.submitted}
       kind="chat" onKind={() => {}} model={currentModel} depth={conversation.reasoning_effort ?? "auto"}
       onModel={() => setModels(true)} onReasoning={() => setReasoning(true)} optionsLocked={busy || !catalog || !!draft.revision}
+      permission={snapshot?.permissions?.current} onPermission={() => setPermissionOpen(true)} permissionLocked={busy || !snapshot?.permissions || !!draft.revision}
       stopping={!draft.revision && snapshot?.running && !canSend} onStop={() => { void action("/dsh/cancel"); }}
       floating={queue.length ? <Pressable accessibilityRole="button" accessibilityLabel={`查看待发送消息，共 ${queue.length} 条`} onPress={() => setQueueOpen(true)}
         style={{ minHeight: layout.touchTarget, borderRadius: radius.item, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surfaceRaised, paddingHorizontal: space.md, justifyContent: "center" }}>
@@ -551,6 +573,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       onSelect={id => selectModel(id, null)} onClose={() => setModels(false)} />
     <ReasoningPicker visible={reasoning} model={currentModel} selected={conversation.reasoning_effort}
       onSelect={value => selectModel(conversation.model_id, value)} onClose={() => setReasoning(false)} />
+    <PermissionPicker visible={permissionOpen} permissions={snapshot?.permissions} onSelect={selectPermission} onClose={() => setPermissionOpen(false)} />
     <BottomSheet visible={!!settingsOpen} title={renaming ? "修改对话名称" : "对话设置"} onClose={() => { setRenaming(false); onSettingsClose?.(); }}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
         {renaming ? <>

@@ -72,6 +72,7 @@ test("welcome text and each send choice survive remount and stay isolated by ser
   value.setText("Draft before first conversation"); value.setKind("task");
   value.setModel("chat", "chat-model"); value.setModel("task", "task-model");
   value.setEffort("chat", "low"); value.setEffort("task", "high"); value.setSearch("search");
+  await value.setPermission("read-only");
   await settle(); const expected = plain(app.render().value); app.unmount();
   const restored = welcomeHarness({ stored: app.stored }); restored.render(); await settle();
   assert.deepEqual(plain(restored.render().value), expected); restored.unmount();

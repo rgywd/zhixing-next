@@ -17,7 +17,7 @@ function harness(overrides = {}) {
     "./ui": { useUi: () => ({ s: {}, colors: theme.darkColors }), ActionLink: "ActionLink" },
     "./ThemeProvider": { useThemedStyles: (factory) => factory(theme.darkColors) },
     "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
-    ...Object.fromEntries(["ConversationComposer", "ReasoningPicker", "ModelPicker", "SearchPicker"].map((key) => [`./${key}`, { [key]: key }])),
+    ...Object.fromEntries(["ConversationComposer", "ReasoningPicker", "ModelPicker", "SearchPicker", "PermissionPicker"].map((key) => [`./${key}`, { [key]: key }])),
   };
   runInNewContext(ts.transpileModule(readFileSync(new URL("../src/AiHome.tsx", import.meta.url), "utf8"), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, { exports, require(key) { assert.ok(key in dependencies, `Unexpected dependency: ${key}`); return dependencies[key]; } });
   const props = {

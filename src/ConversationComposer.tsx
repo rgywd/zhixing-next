@@ -9,6 +9,7 @@ import { thinkingLabel } from "./reasoning";
 import { radius, space, typography } from "./theme";
 import { BottomSheet } from "./BottomSheet";
 import { ChatTextEditor, type TextSelection } from "./ChatTextEditor";
+import { permissionPresentation } from "./dshPermissions";
 
 type Props = {
   unlimitedText?: boolean;
@@ -18,6 +19,7 @@ type Props = {
   kind: "chat" | "task"; kindLocked?: boolean; onKind: (kind: "chat" | "task") => void;
   connection?: Connection; model?: ModelInfo; depth?: ReasoningEffort; searchId?: string | null;
   optionsLocked?: boolean; onModel?: () => void; onReasoning?: () => void; onSearch?: () => void;
+  permission?: string; onPermission?: () => void; permissionLocked?: boolean;
   stopping?: boolean; stopDisabled?: boolean; onStop?: () => void;
   children?: ReactNode; hint?: ReactNode; floating?: ReactNode;
   editing?: { id: string; label: string; onCancel: () => void; locked?: boolean };
@@ -44,6 +46,7 @@ export function ConversationComposer(props: Props) {
   }, [props.connection, searchId]);
   const canReason = !!model?.reasoning_levels.length;
   const reasoningText = canReason ? thinkingLabel(model, depth) : "不可调整";
+  const permission = permissionPresentation(props.permission);
   useEffect(() => {
     if (props.editing?.id) { const timer = setTimeout(() => input.current?.focus(), 120); return () => clearTimeout(timer); }
   }, [props.editing?.id]);
@@ -68,14 +71,17 @@ export function ConversationComposer(props: Props) {
         </Pressable>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.optionsViewport} contentContainerStyle={styles.options}>
           {onModel ? <Pressable accessibilityRole="button" accessibilityLabel={`选择${kind === "task" ? "任务" : "聊天"}模型，当前${model?.name ?? "未配置"}`}
-            disabled={optionsLocked} onPress={onModel} style={[styles.chip, optionsLocked && styles.disabled]}>
-            <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={17} />
-            <Text numberOfLines={1} style={[styles.chipText, { maxWidth: 120 }]}>{model?.name ?? "选择模型"}</Text>
-            <Ionicons name="chevron-down" size={12} color={colors.muted} />
+            accessibilityState={{ disabled: optionsLocked }} disabled={optionsLocked} onPress={onModel} style={[styles.smallAction, optionsLocked && styles.disabled]}>
+            <BrandIcon name={model ? `${model.model} ${model.provider}` : ""} size={21} />
           </Pressable> : null}
           {onReasoning && canReason ? <Pressable accessibilityRole="button" accessibilityLabel={`思考深度，当前${reasoningText}`} disabled={optionsLocked}
             onPress={onReasoning} style={[styles.smallAction, optionsLocked && styles.disabled]}>
             <Ionicons name="bulb-outline" size={20} color={depth === "none" ? colors.muted : colors.gold} />
+          </Pressable> : null}
+          {props.onPermission ? <Pressable accessibilityRole="button" accessibilityLabel={`权限管理，当前${permission.label}`}
+            accessibilityState={{ disabled: props.permissionLocked }} disabled={props.permissionLocked}
+            onPress={props.onPermission} style={[styles.smallAction, props.permissionLocked && styles.disabled]}>
+            <Ionicons name={permission.icon} size={21} color={props.permission === "danger-full-access" ? colors.red : colors.ink} />
           </Pressable> : null}
           {onSearch ? <Pressable accessibilityRole="button" accessibilityLabel={`联网搜索${searchId ? `已开启${provider ? `，${provider.name}` : ""}` : "已关闭"}`}
             accessibilityState={{ selected: !!searchId }} disabled={optionsLocked} onPress={onSearch} style={styles.smallAction}>
@@ -121,7 +127,6 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
   floating: { paddingBottom: space.sm },
   optionsViewport: { flex: 1, minWidth: 0 },
   options: { flexDirection: "row", alignItems: "center", gap: 2 },
-  chip: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: 5, paddingHorizontal: 5 },
   chipText: { ...typography.detail, fontWeight: "500", color: colors.ink },
   composer: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.line, borderRadius: 26, padding: 6,
     shadowColor: colors.shadow, shadowOpacity: 0.05, shadowRadius: 12, shadowOffset: { width: 0, height: 3 } },

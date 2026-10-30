@@ -38,7 +38,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     './api': { request: async (_connection, path, options) => {
       calls.push({ path, ...options });
       if (path.includes('/dsh?')) return plain(snapshot);
-      await post(path, options); return {};
+      return await post(path, options) ?? {};
     } },
     './storage': { draftKey: () => 'draft', readDraft: async () => plain(store.draft), saveDraft: async (_key, value) => { store.draft = plain(value); },
       clearDraft: async (_key, id) => { await clear(id); if (store.draft.pending?.id === id) store.draft = { text: '', pending: null }; } },
@@ -47,7 +47,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     './conversationFiles': conversationFiles,
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
   };
-  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard', 'ConversationFilesSheet']) dependencies[`./${component}`] = { [component]: component };
+  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard', 'ConversationFilesSheet', 'PermissionPicker']) dependencies[`./${component}`] = { [component]: component };
   dependencies['./PhotoAttachments'] = { DraftAttachments: 'DraftAttachments', MessagePhotos: 'MessagePhotos' };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../src/DshChatPanel.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -70,6 +70,40 @@ test('DSH send retains the accepted request ID until draft clearing is durable',
   const posts = app.calls.filter(c => c.path.endsWith('/messages'));
   assert.equal(posts.length, 2); assert.equal(posts[0].body.id, posts[1].body.id);
   assert.equal(app.store.draft.pending, null); assert.equal(app.composer().text, '');
+  app.unmount();
+});
+
+test('permissions change only after native acknowledgement, survive refresh, and leave a failed change retryable', async () => {
+  let accept, fail = false;
+  const app = harness({ post: async path => {
+    if (path.endsWith('/permissions')) {
+      if (fail) throw new Error('permission refused');
+      return await new Promise(resolve => { accept = resolve; });
+    }
+  } });
+  const permissions = { current: 'read-only', options: ['read-only', 'workspace-write', 'danger-full-access'] };
+  app.snapshot.permissions = permissions;
+  app.snapshot.history = { active: 'current-version', versions: [] };
+  app.render(); await settle();
+  assert.equal(app.composer().permission, 'read-only');
+  app.composer().onPermission();
+  const picker = () => app.render().find(n => n.type === 'PermissionPicker');
+  assert.equal(picker().props.visible, true);
+  const changing = picker().props.onSelect('workspace-write'); await settle();
+  assert.equal(app.composer().permission, 'read-only');
+  assert.equal(app.composer().permissionLocked, true);
+  const call = app.calls.find(c => c.path.endsWith('/permissions'));
+  assert.equal(call.method, 'PUT'); assert.deepEqual(plain(call.body), { permission: 'workspace-write', version: 'current-version' });
+  app.snapshot.permissions = { ...permissions, current: 'workspace-write' };
+  accept(plain(app.snapshot.permissions)); await changing; await settle();
+  assert.equal(app.composer().permission, 'workspace-write');
+  fail = true;
+  await assert.rejects(picker().props.onSelect('danger-full-access'), /permission refused/);
+  await settle(); assert.equal(app.composer().permission, 'workspace-write');
+  assert.equal(picker().props.visible, true); assert.equal(app.composer().permissionLocked, false);
+  assert.equal(app.composer().text, 'fix this');
+  app.snapshot.permissions = null; app.tick(); await settle();
+  assert.equal(app.composer().permission, undefined); assert.equal(app.composer().permissionLocked, true);
   app.unmount();
 });
 

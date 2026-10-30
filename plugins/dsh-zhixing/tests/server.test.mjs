@@ -43,6 +43,44 @@ function fixture() {
   return { ctx, listeners, agents, records, native: { metadata: { revisions: table(), artifacts: table() } } };
 }
 
+test('permission endpoint validates host support and version and uses the native command before returning its receipt', async t => {
+  const f = fixture(), selected = new Map(), commands = [];
+  const modes = ['read-only', 'workspace-write', 'danger-full-access'];
+  const service = { catalog: () => ({ options: modes.map(value => ({ value })), defaultPreset: 'workspace-write' }),
+    current: session => selected.get(session) ?? 'workspace-write' };
+  let enabled = true, rejectCommand = false;
+  f.ctx.get = name => !enabled ? undefined : name === 'permissionPresets' ? service : name === 'commands' ? {
+    async execute(agent, line, attachments, signal) {
+      commands.push({ agent, line, attachments, signal });
+      if (rejectCommand) return { result: { kind: 'error', text: 'native permission rejected' } };
+      selected.set(agent.session, line.slice('/permission '.length));
+      return { result: { kind: 'success' } };
+    },
+  } : undefined;
+  f.ctx.sessionController.resolveAgent = async id => ({ agent: f.agents.get(id) });
+  f.ctx.sessionController.projections = async ({ sessionId }) => ({ values: { permissions: { currentValue: service.current(f.agents.get(sessionId).session) } } });
+  const server = await startServer(f.ctx, { token: 'permissions', port: 0 }, f.native); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address.port}/v1`, headers = { Authorization: 'Bearer permissions' };
+  const chat = await (await fetch(`${base}/conversations`, { method: 'POST', headers, body: JSON.stringify({ permission: 'read-only' }) })).json();
+  const path = `${base}/conversations/${chat.id}/dsh`;
+  const put = body => fetch(`${path}/permissions`, { method: 'PUT', headers, body: JSON.stringify(body) });
+  assert.equal(commands[0].line, '/permission read-only');
+  assert.equal((await (await fetch(path, { headers })).json()).permissions.current, 'read-only');
+  assert.equal((await put({ version: 'stale', permission: 'danger-full-access' })).status, 409);
+  assert.equal((await put({ version: chat.id, permission: 'danger-full-access\n/bash bad' })).status, 400);
+  assert.equal(commands.length, 1);
+  rejectCommand = true;
+  assert.equal((await put({ version: chat.id, permission: 'workspace-write' })).status, 409);
+  assert.equal(service.current(f.agents.get(chat.id).session), 'read-only');
+  rejectCommand = false;
+  assert.equal((await (await put({ version: chat.id, permission: 'workspace-write' })).json()).current, 'workspace-write');
+  const count = commands.length;
+  await put({ version: chat.id, permission: 'workspace-write' });
+  assert.equal(commands.length, count, 'retries do not repeat an already effective native command');
+  enabled = false;
+  assert.equal((await put({ version: chat.id, permission: 'read-only' })).status, 503);
+});
+
 test('outlet authentication, full prompt admission, duplicate retry and durable event replay', async t => {
   const f = fixture();
   const server = await startServer(f.ctx, { token: 'test-token', port: 0 }, f.native);

@@ -8,7 +8,8 @@ import { radius, space, typography, type ThemeColors } from "./theme";
 import { ActionLink, useUi } from "./ui";
 
 /** All agents share this chrome; identity and navigation remain caller-owned. */
-export function AgentChatHeader({ title, subtitle, status, pinned = false, pinReady = true, busy = false, onMenu, onNew, onClose, onPin, onSettings, onFiles }: {
+export function AgentChatHeader({ title, subtitle, modelName, status, pinned = false, pinReady = true, busy = false, onMenu, onNew, onClose, onPin, onSettings, onFiles }: {
+  modelName?: string;
   title: string; subtitle: string; status?: string; pinned?: boolean; pinReady?: boolean; busy?: boolean;
   onMenu: () => void; onNew: () => void; onClose: () => void; onPin?: () => void; onSettings?: () => void; onFiles?: () => void;
 }) {
@@ -20,12 +21,12 @@ export function AgentChatHeader({ title, subtitle, status, pinned = false, pinRe
     <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={onMenu} style={styles.menu}>
       <Ionicons name="menu-outline" size={22} color={colors.ink} />
     </Pressable>
-    <Pressable accessibilityRole="button" accessibilityLabel={`${title}，${subtitle}，打开对话侧边栏`} onPress={onMenu} style={styles.copy}>
+    <Pressable accessibilityRole="button" accessibilityLabel={`${modelName ? `当前模型${modelName}，` : ""}${title}，${subtitle}，打开对话侧边栏`} onPress={onMenu} style={styles.copy}>
       <View style={styles.titleRow}>
-        <Text accessibilityRole="header" numberOfLines={1} style={styles.name}>{status ? title : subtitle || title}</Text>
+        <Text accessibilityRole="header" numberOfLines={1} style={styles.name}>{modelName ?? (status ? title : subtitle || title)}</Text>
         {status ? <View style={[styles.status, status !== "待命中" && styles.statusMuted]}><View accessible={false} style={[styles.dot, status !== "待命中" && { backgroundColor: colors.muted }]} /><Text numberOfLines={1} style={[styles.statusText, status !== "待命中" && { color: colors.muted }]}>{status}</Text></View> : null}
       </View>
-      <Text numberOfLines={1} style={styles.subtitle}>{status ? subtitle : title}</Text>
+      <Text numberOfLines={1} style={styles.subtitle}>{modelName ? status ? title : subtitle : status ? subtitle : title}</Text>
     </Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="新建对话" accessibilityState={{ disabled: busy }} disabled={busy} onPress={onNew} style={[styles.action, busy && styles.disabled]}><Ionicons name="create-outline" size={23} color={colors.ink} /></Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="对话菜单" onPress={() => setMenu(true)} style={styles.action}><Ionicons name="ellipsis-horizontal" size={22} color={colors.ink} /></Pressable>
