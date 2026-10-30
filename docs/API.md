@@ -1,5 +1,7 @@
 # HTTP 与运行接口
 
+上下文与统计：聊天快照增加原生 `statistics`（当前事件页中每轮结束的累计值）、`context` 和 `compaction`。`POST /v1/conversations/{id}/dsh/compact {version}` 调用当前 Agent 的原生 `/compact`，等待命令和持久化回执；版本失效／重复或失败为 409，宿主缺少命令为 503。执行期间允许原生消息接收与取消。字段和计算口径见 [DSH 上下文与会话统计](DSH-CONTEXT-STATS.md)。
+
 2026-10-30 私密变量：原生工具 `zhixing_request_variables` 发起 `kind: environment` 的填写卡。`POST /v1/conversations/{id}/dsh/environment/{requestId}` 独立接收已认证的多字段提交或取消，校验当前版本与会话归属，只返回变量名和保存状态；不写入普通答案或聊天消息。字段、回执和凭据边界见[私密变量](PRIVATE-VARIABLES.md)。
 
 2026-10-30 对话移除：`DELETE /v1/conversations/{id}` 通过 DSH 原生 workspace registry 归档此对话的全部原生版本，等待运行退出后持久保存知行移除标记，返回 `{deleted:true}`。重复删除幂等；失败不返回删除回执。已移除对话的读取、发送、文件、版本操作均为 404，列表和搜索不再返回。原生记录作为 DSH 归档保留，不物理擦除工作区文件。`GET /v1/conversations` 与 `/recent` 附带 `deleted_ids`，客户端在合并缓存时应用这些移除信息。存储域 `zhixing_chat` 升到 v3，兼容 v1/v2。

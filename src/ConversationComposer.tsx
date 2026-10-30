@@ -21,6 +21,7 @@ type Props = {
   connection?: Connection; model?: ModelInfo; depth?: ReasoningEffort; searchId?: string | null;
   optionsLocked?: boolean; onModel?: () => void; onReasoning?: () => void; onSearch?: () => void;
   permission?: string; onPermission?: () => void; permissionLocked?: boolean;
+  contextControl?: ReactNode;
   stopping?: boolean; stopDisabled?: boolean; onStop?: () => void;
   children?: ReactNode; hint?: ReactNode; floating?: ReactNode;
   editing?: { id: string; label: string; onCancel: () => void; locked?: boolean };
@@ -88,6 +89,7 @@ export function ConversationComposer(props: Props) {
             accessibilityState={{ selected: !!searchId }} disabled={optionsLocked} onPress={onSearch} style={styles.smallAction}>
             <Ionicons name="globe-outline" size={20} color={searchId ? colors.blue : colors.muted} />
           </Pressable> : null}
+          {props.contextControl}
         </ScrollView>
         {text.length > 80 || text.includes("\n") ? <Pressable accessibilityRole="button" accessibilityLabel="展开编辑消息" disabled={!editable}
           onPress={() => setExpanded({ start: Math.min(selection.current.start, text.length), end: Math.min(selection.current.end, text.length) })} style={styles.smallAction}>

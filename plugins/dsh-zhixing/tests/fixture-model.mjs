@@ -2,14 +2,35 @@
 import { LlmAdapter } from '@deepseek-ai/dsh-llm';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { appendFileSync } from 'node:fs';
 
-export const inject = ['llm'];
+export const inject = ['llm', 'sessionProjections'];
 export function apply(ctx, config) {
+  ctx.on('session/event', (session, event) => {
+    if (event.type === 'turn/end') appendFileSync(config.evidence + '.stats.jsonl', JSON.stringify({ id: session.id, seq: event.seq,
+      values: ctx.sessionProjections.snapshot(session).values }) + '\n');
+  });
   class Fixture extends LlmAdapter {
     async listModels(provider) { return ['fixture', 'fixture-other'].map(id => ({ provider, id, name: `Local acceptance ${id}` })); }
-    async resolveModel(provider, model) { return { provider, id: model, name: model, contextWindow: 128000, inputModalities: ['text', 'image'] }; }
+    async resolveModel(provider, model) { return { provider, id: model, name: model, context: { contextWindow: 128000 }, inputModalities: ['text', 'image'] }; }
     async *stream(options) {
       const messages = options.messages;
+      const summarizing = messages.at(-1)?.content?.some(p => p.type === 'text' && p.text.includes('You are now acting as a compaction engine'));
+      if (summarizing) {
+        await new Promise((resolve, reject) => {
+          const stop = () => { clearTimeout(timer); reject(new Error('Fixture summary cancelled')); };
+          const timer = setTimeout(() => { options.signal?.removeEventListener('abort', stop); resolve(); }, 1000);
+          options.signal?.addEventListener('abort', stop, { once: true });
+          if (options.signal?.aborted) stop();
+        });
+        if (JSON.stringify(messages).includes('COMPACT-SUMMARY-FAIL')) throw new Error('Fixture summary failure');
+        const block = { type: 'text', text: 'Completed earlier acceptance work. Continue with the next user request.' };
+        yield { type: 'block-start', index: 0, blockType: 'text' };
+        yield { type: 'text-delta', index: 0, text: block.text };
+        yield { type: 'block-end', index: 0, block };
+        yield { type: 'finish', reason: 'stop' };
+        return;
+      }
       const lastUser = messages.findLastIndex(m => m.role === 'user' && (m.source?.kind === 'user' || m.content?.some(p => p.type === 'text' && /READ-WRITE-CHECK|CANCEL-SHELL|ASK-QUESTION|RESUME-CHECK|BUSINESS-SCHEMA/.test(p.text))));
       const prompt = messages[lastUser]?.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
       const results = messages.slice(lastUser + 1).filter(m => m.role === 'tool');
@@ -51,9 +72,12 @@ export function apply(ctx, config) {
       } else if (prompt.includes('BUSINESS-SCHEMA') && !results.length) {
         block = call('zhixing_service', { method: 'GET', path: '/v1/business/schema' });
       } else block = { type: 'text', text: `FIXTURE_DONE: ${prompt}; priorMessages=${messages.length}; results=${JSON.stringify(results)}` };
+      await new Promise(resolve => setTimeout(resolve, 15));
       yield { type: 'block-start', index: 0, blockType: block.type };
       if (block.type === 'text') yield { type: 'text-delta', index: 0, text: block.text };
       yield { type: 'block-end', index: 0, block };
+      await new Promise(resolve => setTimeout(resolve, 20));
+      yield { type: 'usage', usage: { inputTokens: 800, cacheReadTokens: 200, cacheWriteTokens: 20, outputTokens: 40 } };
       yield { type: 'finish', reason: block.type === 'tool-call' ? 'tool_calls' : 'stop' };
     }
   }

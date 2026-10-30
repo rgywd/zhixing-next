@@ -33,10 +33,12 @@ import { ConversationFilesSheet } from "./ConversationFilesSheet";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { shareNativeDownload } from "./resources";
 import { PrivateVariablesCard, type PrivateVariableSubmission } from "./PrivateVariablesCard";
+import { ChatMetricBox, ContextRing, TurnMetrics, type MetricPopup } from "./ChatMetrics";
+import { mergeTurnMetrics, type DshTurnMetrics } from "./dshMetrics";
 
 type LocalFile = { id: string; uri: string; name: string; mediaType?: string };
 type DshDraft = Draft & { revision?: MessageRevision; sendVersion?: string; files?: LocalFile[]; receipts?: Record<string, string> };
-type DshCache = { historyId: string; events: DshEvent[] } & Pick<DshSnapshot, "history">;
+type DshCache = { historyId: string; events: DshEvent[]; statistics?: DshTurnMetrics[] } & Pick<DshSnapshot, "history" | "context">;
 const imageType = (uri: string, name: string) => {
   const suffix = (uri.match(/\.([a-z]+)(?:[?#]|$)/i)?.[1] ?? name.split(".").at(-1) ?? "jpeg").toLowerCase();
   return `image/${suffix === "jpg" ? "jpeg" : suffix}`;
@@ -60,11 +62,12 @@ function EventRow({ event, name }: { event: DshEvent; name: string }) {
   </View>;
 }
 
-function MessageRow({ row, name, connection, base, phase, onCopy, onMenu, onRecords, onFile, highlighted, onRevise, revisionDisabled, versions, onVersion, onShare, onReadProcess }: {
+function MessageRow({ row, name, connection, base, phase, onCopy, onMenu, onRecords, onFile, highlighted, onRevise, revisionDisabled, versions, onVersion, onShare, onReadProcess, onMetric }: {
   row: DshChatRow; name: string; connection: Connection; base: string; phase?: string;
   onCopy: () => void; onReadProcess: () => void; onMenu: () => void; onRecords: () => void;
   onFile: (file: DshAttachment) => void; highlighted?: boolean; onShare: (file: DshAttachment) => void;
   onRevise: () => void; revisionDisabled: boolean; versions: ReturnType<typeof messageVersions>; onVersion: (id: string) => void;
+  onMetric: (popup: MetricPopup) => void;
 }) {
   const { s, colors } = useUi();
   const user = row.role === "user";
@@ -90,6 +93,7 @@ function MessageRow({ row, name, connection, base, phase, onCopy, onMenu, onReco
         : <ReplyContent parts={row.parts} active={row.active} status={row.status} phase={phase} onOpenRun={onRecords} onReadProcess={onReadProcess} onOpenLink={openLink} />}
       {row.attachments.filter(a => a.type === "file").map((a, index) => <ChatFileCard key={`${a.id}:${index}`} file={a} onOpen={() => onFile(a)} onShare={() => onShare(a)} />)}
     </View>
+    {!user && row.metrics && !row.active ? <TurnMetrics value={row.metrics} onOpen={onMetric} /> : null}
     {!row.active ? <View style={[s.row, { gap: 0, flexWrap: "wrap" }]}>
       {rowText(row) ? <IconAction icon="copy-outline" label="复制消息" onPress={onCopy} /> : null}
       <IconAction icon={user ? "create-outline" : "refresh-outline"} label={user ? "编辑消息" : "重新回答"} disabled={revisionDisabled} onPress={onRevise} />
@@ -168,6 +172,10 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const [draftAttempt, setDraftAttempt] = useState(0);
   const [events, setEvents] = useState<DshEvent[]>([]);
   const [snapshot, setSnapshot] = useState<DshSnapshot | null>(null);
+  const [metricPopup, setMetricPopup] = useState<MetricPopup | null>(null);
+  const [compactPending, setCompactPending] = useState(false);
+  const [compactError, setCompactError] = useState("");
+  const compactRequest = useRef(false);
   const rows = useMemo(() => chatRows(events, snapshot), [events, snapshot]);
   // The rows already belong to the active version; the extra guard drops a
   // presentation stamped for a version the user switched away from.
@@ -258,7 +266,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   }, [key, draftAttempt]);
   useEffect(() => {
     let active = true, polling = false, cursor = 0, wasRunning = false;
-    let accumulated: DshEvent[] = [];
+    let accumulated: DshEvent[] = [], statistics: DshTurnMetrics[] = [];
     let historyId = conversation.id;
     let metadata = "";
     const controller = new AbortController();
@@ -274,12 +282,15 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
           next = await request<DshSnapshot>(connection, `${base}/dsh?offset=${cursor}&version=${encodeURIComponent(historyId)}`, { signal: controller.signal });
           if (!active) return;
           if (next.history && next.history.active !== historyId) {
-            accumulated = []; historyId = next.history.active; changed = true;
+            accumulated = []; statistics = []; historyId = next.history.active; changed = true;
+            setMetricPopup(null); setCompactError("");
             setHighlighted(null); setPreviewFile(null); setRecords(null); nearBottom.current = !draftRef.current.revision; setAwayFromLatest(false);
           }
           changed ||= next.events.length > 0;
           accumulated = mergeDshEvents(accumulated, next.events); cursor = next.next;
+          statistics = mergeTurnMetrics(statistics, next.statistics);
         } while (next.hasMore);
+        next = { ...next, statistics };
         if (changed) setEvents(accumulated);
         setSnapshot(previous => permissionsAtStart === permissionRevision.current || previous?.history?.active !== next.history?.active
           ? next : { ...next, permissions: previous?.permissions }); report();
@@ -288,7 +299,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         const nextMetadata = JSON.stringify(next.history);
         if (changed || metadata !== nextMetadata) {
           metadata = nextMetadata;
-          void writeCache(connection, cacheKey, { historyId, events: accumulated, history: next.history }).catch(() => {});
+          void writeCache(connection, cacheKey, { historyId, events: accumulated, statistics, history: next.history, context: next.context }).catch(() => {});
         }
       } catch (e) { if (active) report(e); }
       finally { polling = false; }
@@ -301,10 +312,12 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         historyId = Array.isArray(cached) ? conversation.id : cached.historyId;
         if (!Array.isArray(cached)) {
           metadata = JSON.stringify(cached.history);
-          setSnapshot({ history: cached.history, events: [], next: 0, hasMore: false,
+          statistics = cached.statistics ?? [];
+          setSnapshot({ history: cached.history, statistics, context: cached.context, events: [], next: 0, hasMore: false,
             running: false, active: false, queue: [], pending: [], live: null });
         }
-        cursor = accumulated.length ? accumulated[accumulated.length - 1].seq + 1 : 0; setEvents(accumulated);
+        // Backfill native end-of-turn snapshots once for caches written by older App versions.
+        cursor = !Array.isArray(cached) && cached.statistics && accumulated.length ? accumulated[accumulated.length - 1].seq + 1 : 0; setEvents(accumulated);
       }
       void poll();
     });
@@ -448,7 +461,20 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     } catch (e) { setError(humanError(e)); }
   }
   const historyId = snapshot?.history?.active ?? conversation.id;
-  const historyLocked = !snapshot || snapshot.running || !!snapshot.queue.length || busy || !!draft.pending || !ready;
+  const compacting = compactPending || !!snapshot?.compaction?.running;
+  const historyLocked = !snapshot || snapshot.running || compacting || !!snapshot.queue.length || busy || !!draft.pending || !ready;
+  const canCompact = !!snapshot?.compaction?.available && !snapshot.running && !snapshot.queue.length && !compacting && !busy && !draft.revision && !draft.pending;
+  async function compactContext() {
+    if (!canCompact || compactRequest.current) return;
+    compactRequest.current = true; setCompactPending(true); setCompactError("");
+    try {
+      const result = await request<{ completed: boolean; compacted: boolean }>(connection, `${base}/dsh/compact`, {
+        method: "POST", body: { version: historyId }, timeoutMs: 120000,
+      });
+      if (alive.current) notice.show({ message: result.compacted ? "上下文已压缩。" : "当前还没有可压缩的历史。" });
+    } catch (error) { if (alive.current) setCompactError(humanError(error)); }
+    finally { compactRequest.current = false; if (alive.current) { setCompactPending(false); refresh(); } }
+  }
   async function beginRevision(row: DshChatRow) {
     const seq = revisionSeq(row); if (seq === undefined || historyLocked || draftRef.current.revision) return;
     try {
@@ -565,6 +591,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       }} scrollEventThrottle={80}
       onContentSizeChange={(_width, height) => { contentHeight.current = height; followLatest(); }} onLayout={followLatest}
       renderItem={({ item, index }) => <MessageRow row={item} name={assistantName} connection={connection} base={base}
+        onMetric={value => { nearBottom.current = false; setMetricPopup(value); }}
         phase={item.active && snapshot?.pending.length ? snapshot.pending[0].kind === "approval" ? "approval" : "input" : undefined}
         highlighted={item.id === highlighted} onFile={setPreviewFile} onReadProcess={() => { nearBottom.current = false; setAwayFromLatest(true); }}
         onShare={shareFromMessage}
@@ -599,7 +626,8 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       kind="chat" onKind={() => {}} model={currentModel} depth={conversation.reasoning_effort ?? "auto"}
       onModel={() => setModels(true)} onReasoning={() => setReasoning(true)} optionsLocked={busy || !catalog || !!draft.revision}
       permission={snapshot?.permissions?.current} onPermission={() => setPermissionOpen(true)} permissionLocked={busy || !snapshot?.permissions || !!draft.revision}
-      stopping={!draft.revision && snapshot?.running && !canSend} onStop={() => { void action("/dsh/cancel"); }}
+      contextControl={<ContextRing context={snapshot?.context} compacting={compacting} onOpen={setMetricPopup} />}
+      stopping={!draft.revision && (snapshot?.running || compacting) && !canSend} onStop={() => { void action("/dsh/cancel"); }}
       floating={queue.length ? <Pressable accessibilityRole="button" accessibilityLabel={`查看待发送消息，共 ${queue.length} 条`} onPress={() => setQueueOpen(true)}
         style={{ minHeight: layout.touchTarget, borderRadius: radius.item, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.surfaceRaised, paddingHorizontal: space.md, justifyContent: "center" }}>
         <Text numberOfLines={1} style={s.description}>等待发送 · {queue.length} 条　{contentText(queue[0].content)}</Text>
@@ -684,5 +712,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         </View>) : <Text style={s.muted}>没有等待发送的消息</Text>}
       </ScrollView>
     </BottomSheet>
+    {metricPopup ? <ChatMetricBox popup={metricPopup} context={snapshot?.context} compacting={compacting} canCompact={canCompact}
+      compactError={compactError} onCompact={() => { void compactContext(); }} onClose={() => setMetricPopup(null)} /> : null}
   </View>;
 }

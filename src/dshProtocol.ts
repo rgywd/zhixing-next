@@ -1,5 +1,6 @@
 import type { ReplyPart } from "./liveRun";
 import type { DshPermissions } from "./dshPermissions";
+import type { DshContext, DshTurnMetrics } from "./dshMetrics";
 
 /** DSH owns these records. Keep opaque fields so new tools remain inspectable. */
 export type DshEvent = { seq: number; time: number; type: string; data: Record<string, unknown> };
@@ -11,6 +12,8 @@ export type DshPending = { id: string; sessionId: string; kind: "approval" | "qu
   title?: string; scope?: string; fields?: DshVariableField[]; configuredNames?: string[] };
 export type DshSnapshot = { events: DshEvent[]; next: number; hasMore: boolean; running: boolean; active: boolean;
   permissions?: DshPermissions | null;
+  statistics?: DshTurnMetrics[]; context?: DshContext;
+  compaction?: { available: boolean; running: boolean };
   history?: { active: string; versions: { id: string; label: string; source?: string; seq?: number; userIndex?: number; group?: string; kind?: string }[] };
   queue: { id: string; placement?: "queued" | "steering" | "context"; content: unknown }[]; pending: DshPending[];
   live: { attemptId: string; turn: number; step: number; chunks: Record<string, unknown>[] } | null };
@@ -40,7 +43,7 @@ export function liveText(snapshot: DshSnapshot | null): string {
 
 export type DshAttachment = { id: string; name: string; type: "image" | "file"; bytes: number; description?: string; sourcePath?: string; delivery?: { seq: number; index: number; version?: string } };
 export type DshChatRow = { id: string; role: "user" | "assistant"; parts: ReplyPart[]; attachments: DshAttachment[];
-  events: DshEvent[]; active: boolean; status?: "completed" | "cancelled" | "failed" | "interrupted" };
+  events: DshEvent[]; active: boolean; metrics?: DshTurnMetrics; status?: "completed" | "cancelled" | "failed" | "interrupted" };
 export const rowText = (row: DshChatRow) => row.parts.flatMap(p => p.type === "text" && p.attempt_status !== "failed" ? [p.text] : []).join("\n\n");
 export const rowHasMessage = (row: DshChatRow, seq: number) => row.role === "user" ? row.events[0]?.seq === seq : row.parts.some(p => p.type !== "tool" && p.seq === seq);
 export const revisionSeq = (row: DshChatRow) => row.role === "user" ? row.events[0]?.seq
@@ -57,6 +60,7 @@ export function contentAttachments(content: unknown): DshAttachment[] {
 export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshChatRow[] {
   const rows: DshChatRow[] = [];
   const calls = new Map<string, ReplyPart & { type: "tool" }>();
+  const statistics = new Map(snapshot?.statistics?.map(value => [value.seq, value]));
   const turns = new Map<number, { events: DshEvent[]; row?: DshChatRow; segment: string; ended: boolean; steps: Set<number> }>();
   let turn = 0;
   const context = (number: number) => {
@@ -122,6 +126,7 @@ export function chatRows(events: DshEvent[], snapshot: DshSnapshot | null): DshC
       const reason = record(data.reason).kind;
       if (reason === "forked") { if (current.row) current.row.status = "interrupted"; continue; }
       assistant(eventTurn).status = reason === "completed" ? "completed" : reason === "aborted" ? "cancelled" : "failed";
+      assistant(eventTurn).metrics = statistics.get(event.seq);
     }
   }
   const live = snapshot?.live;

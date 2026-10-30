@@ -83,6 +83,79 @@ try {
   for (const tool of ['bash', 'write', 'read', 'subagent', 'plugin_manager', 'schedule_create']) assert.ok(model.tools.includes(tool), tool);
   await writeFile(join(root, 'code-loop.json'), JSON.stringify(state, null, 2));
   console.log('PASS native read → write → shell check, host tools retained');
+  const originalMetrics = structuredClone(state.statistics);
+  assert.equal(originalMetrics.length, 1);
+  const nativeStats = JSON.parse((await readFile(join(root, 'model.json.stats.jsonl'), 'utf8')).trim().split('\n').at(-1));
+  assert.deepEqual(originalMetrics[0].stats, nativeStats.values.sessionStats);
+  assert.deepEqual(originalMetrics[0].usage, nativeStats.values.tokenUsage);
+  assert.deepEqual(state.context, { pressure: nativeStats.values.contextPressure, breakdown: nativeStats.values.contextBreakdown });
+  assert.equal(state.context.pressure.contextWindow, 128000);
+  assert.ok(state.context.pressure.projectedTokens > 0);
+  assert.equal(originalMetrics[0].stats.steps, 4);
+  assert.ok(originalMetrics[0].stats.toolMs > 0); assert.ok(originalMetrics[0].stats.ttftMs > 0);
+  assert.equal(originalMetrics[0].usage.outputTokens, 160);
+  const partial = await api(`${path}/dsh?offset=${originalMetrics[0].seq}`);
+  assert.deepEqual(partial.statistics, originalMetrics, 'a tail-only page retains whole-log native totals');
+  console.log('PASS exact native end-of-turn statistics, usage, context, and tail paging');
+
+  const compactChat = await api('/conversations', { title: 'Compaction acceptance' });
+  const cp = `/conversations/${compactChat.id}`;
+  const compactSnapshot = () => api(`${cp}/dsh`);
+  assert.deepEqual(await api(`${cp}/dsh/compact`, { version: compactChat.id }), { completed: true, compacted: false });
+  for (let i = 0; i < 3; i++) {
+    await api(`${cp}/messages`, { id: `history-${i}`, content: `CONTEXT-HISTORY-${i} ` + 'earlier acceptance context '.repeat(500) });
+    await until(compactSnapshot, value => !value.running && value.statistics?.length === i + 1, 'compaction history');
+  }
+  const beforeCompact = await compactSnapshot();
+  await rejected(`${cp}/dsh/compact`, { version: chat.id }, 409);
+  const compact = api(`${cp}/dsh/compact`, { version: compactChat.id });
+  await until(compactSnapshot, value => value.compaction.running && value.events.some(e => e.type === 'compaction/start'), 'manual compaction started');
+  await rejected(`${cp}/dsh/compact`, { version: compactChat.id }, 409);
+  await rejected(`${cp}/dsh/revisions`, { id: 'compact-revision', kind: 'retry', version: compactChat.id, seq: beforeCompact.events.find(e => e.type === 'assistant/message').seq }, 409);
+  await api(`${cp}/messages`, { id: 'during-compact-a', content: 'AFTER-COMPACT-A', intent: 'steer' });
+  await api(`${cp}/messages`, { id: 'during-compact-b', content: 'AFTER-COMPACT-B', intent: 'queue' });
+  const duringCompact = await compactSnapshot();
+  assert.equal(duringCompact.compaction.running, true, 'input admission does not wait for summary completion');
+  assert.ok(duringCompact.queue.length > 0);
+  assert.deepEqual(duringCompact.statistics, beforeCompact.statistics, 'in-progress work cannot change old snapshots');
+  assert.equal((await compact).compacted, true);
+  const afterCompact = await until(compactSnapshot, value => !value.running && !value.queue.length && value.events.some(e => e.type === 'user/message' && e.data.source?.rpcId === 'during-compact-b'), 'queued prompts after compaction');
+  assert.ok(afterCompact.events.some(e => e.type === 'compaction/summary'));
+  const compactEnd = afterCompact.events.find(e => e.type === 'compaction/end');
+  assert.equal(compactEnd.data.error, undefined);
+  for (const request of ['during-compact-a', 'during-compact-b']) {
+    const messages = afterCompact.events.filter(e => e.type === 'user/message' && e.data.source?.rpcId === request);
+    assert.equal(messages.length, 1); assert.ok(messages[0].seq > compactEnd.seq);
+  }
+  assert.deepEqual(afterCompact.statistics.slice(0, 3), beforeCompact.statistics);
+  await writeFile(join(root, 'compaction.json'), JSON.stringify({ before: beforeCompact, during: duringCompact, after: afterCompact }, null, 2));
+  console.log('PASS native compaction, real summary commit, input admission/steering/queue, version guards, frozen snapshots');
+  const cancelCompact = fetch(`http://127.0.0.1:${appPort}/v1${cp}/dsh/compact`, { method: 'POST', headers, body: JSON.stringify({ version: compactChat.id }) });
+  await until(compactSnapshot, value => value.compaction.running, 'cancel compaction start');
+  await api(`${cp}/dsh/cancel`, {});
+  assert.equal((await cancelCompact).status, 409);
+  const cancelledCompact = await compactSnapshot();
+  assert.equal(cancelledCompact.compaction.running, false);
+  assert.ok(cancelledCompact.events.filter(e => e.type === 'compaction/end').at(-1).data.error);
+  console.log('PASS native manual compaction cancellation waits for its terminal receipt');
+  const failureChat = await api('/conversations', { title: 'Compaction failure acceptance' });
+  const fp = `/conversations/${failureChat.id}`;
+  for (let i = 0; i < 2; i++) {
+    await api(`${fp}/messages`, { id: `failure-${i}`, content: 'COMPACT-SUMMARY-FAIL ' + 'preserve this history '.repeat(200) });
+    await until(() => api(`${fp}/dsh`), value => !value.running && value.statistics.length === i + 1, 'failure history');
+  }
+  const beforeFailure = await api(`${fp}/dsh`);
+  await rejected(`${fp}/dsh/compact`, { version: failureChat.id }, 409);
+  const failedCompaction = await api(`${fp}/dsh`);
+  assert.equal(failedCompaction.compaction.running, false);
+  assert.ok(failedCompaction.events.filter(e => e.type === 'compaction/end').at(-1).data.error);
+  assert.equal(failedCompaction.events.some(e => e.type === 'compaction/summary'), false);
+  assert.deepEqual(failedCompaction.statistics, beforeFailure.statistics);
+  assert.deepEqual(failedCompaction.context, beforeFailure.context);
+  await api(`${fp}/messages`, { id: 'after-failure', content: 'Continue after summary failure' });
+  await until(() => api(`${fp}/dsh`), value => !value.running && value.statistics.length === 3, 'continue after summary failure');
+  console.log('PASS summary failure preserves history, statistics, context, and subsequent conversation');
+
   await api(`${path}/messages`, { id: 'ask', content: 'ASK-QUESTION' });
   state = await until(snapshot, s => s.pending.length > 0, 'question');
   await api(`${path}/dsh/answers/${state.pending[0].id}`, { answers: [{ id: 'choice', selected: ['Proceed'] }] });
@@ -107,6 +180,8 @@ try {
   const count = state.events.filter(e => e.type === 'user/message' && e.data.source?.rpcId === 'read-write-check').length;
   await stop(); await start();
   state = await snapshot(); assert.equal(state.active, false);
+  assert.deepEqual(state.statistics[0], originalMetrics[0], 'native snapshots survive host restart');
+  assert.deepEqual((await compactSnapshot()).statistics.slice(0, 3), beforeCompact.statistics);
   assert.equal((await api(path)).model_id, selectedModel, 'native model selection survives host restart');
   await api(`${path}/messages`, { id: 'read-write-check', content: 'READ-WRITE-CHECK' });
   state = await snapshot();

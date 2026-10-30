@@ -1,5 +1,7 @@
 # 知行 DSH 插件
 
+上下文和会话统计直接使用 DSH 原生投影，结束快照随聊天事件分页返回；手动压缩执行原生 `/compact`，期间的新输入继续交给宿主。见 [数据与交互说明](../../docs/DSH-CONTEXT-STATS.md)。
+
 0.3.0 新增 `zhixing_request_variables`：在 App 请求一次填写多个私密变量，值经独立认证接口保存到 DSH 原生凭据，通过原生 shellEnv 注入后续命令，工具回执仅含名称与状态。当前工作区作用域、取消、替换与保密边界见[私密变量](../../docs/PRIVATE-VARIABLES.md)。
 
 React Native App 是 DSH 的一个出口。插件提供移动 HTTP 接口及财务、健康业务工具；会话、执行、搜索、记忆和文件使用宿主及其插件。财务健康通过原生 `storageDomain` 持久保存，不需要 Python API/worker，不启动另一个 Agent 循环，不覆盖预设、工具集合、权限、轮数、预算或模型供应商。
