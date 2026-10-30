@@ -1,5 +1,7 @@
 # HTTP 与运行接口
 
+2026-10-30 私密变量：原生工具 `zhixing_request_variables` 发起 `kind: environment` 的填写卡。`POST /v1/conversations/{id}/dsh/environment/{requestId}` 独立接收已认证的多字段提交或取消，校验当前版本与会话归属，只返回变量名和保存状态；不写入普通答案或聊天消息。字段、回执和凭据边界见[私密变量](PRIVATE-VARIABLES.md)。
+
 2026-10-30 对话移除：`DELETE /v1/conversations/{id}` 通过 DSH 原生 workspace registry 归档此对话的全部原生版本，等待运行退出后持久保存知行移除标记，返回 `{deleted:true}`。重复删除幂等；失败不返回删除回执。已移除对话的读取、发送、文件、版本操作均为 404，列表和搜索不再返回。原生记录作为 DSH 归档保留，不物理擦除工作区文件。`GET /v1/conversations` 与 `/recent` 附带 `deleted_ids`，客户端在合并缓存时应用这些移除信息。存储域 `zhixing_chat` 升到 v3，兼容 v1/v2。
 
 2026-10-29：当前 App 仅连接 [DSH 插件接口](../plugins/dsh-zhixing/README.md)，`/v1/status.runtime` 为 `dsh`。财务、健康、联合餐费和 `GET /v1/business/schema?domain=finance|health|life` 由同进程原生业务插件提供，使用 DSH `storageDomain` 持久保存；不转发 Python 服务。记忆、资料、搜索供应商、旧人格与任务路由不再由此出口提供。以下先列当前 DSH 协议，后面的 Python 部分仅为历史契约参考。

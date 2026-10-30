@@ -32,6 +32,7 @@ import { conversationFiles } from "./conversationFiles";
 import { ConversationFilesSheet } from "./ConversationFilesSheet";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
 import { shareNativeDownload } from "./resources";
+import { PrivateVariablesCard, type PrivateVariableSubmission } from "./PrivateVariablesCard";
 
 type LocalFile = { id: string; uri: string; name: string; mediaType?: string };
 type DshDraft = Draft & { revision?: MessageRevision; sendVersion?: string; files?: LocalFile[]; receipts?: Record<string, string> };
@@ -395,6 +396,18 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     const updated = await request<Conversation>(connection, `${base}/model`, { method: "PUT", body: { model_id: modelId, reasoning_effort: effort } });
     onConversationChanged(updated); refresh();
   }
+  async function submitVariables(pending: DshPending, body: PrivateVariableSubmission) {
+    if (working.current) throw new Error("请稍候再提交。");
+    working.current = true; setBusy(true);
+    try {
+      await request(connection, `${base}/dsh/environment/${pending.id}`, {
+        method: "POST", body: { ...body, version: pending.sessionId }, timeoutMs: 30000,
+      });
+    } finally {
+      working.current = false;
+      if (alive.current) { setBusy(false); refresh(); }
+    }
+  }
   async function selectPermission(permission: DshPermission) {
     if (working.current) throw new Error("请等当前操作完成后再修改权限。");
     working.current = true; setBusy(true); permissionRevision.current++;
@@ -559,7 +572,9 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         versions={messageVersions(snapshot?.history, rows.slice(0, index + 1).filter(row => row.role === "user").length - 1)} onVersion={id => { void switchVersion(id); }}
         onCopy={() => { void copyMessage(item); }} onMenu={() => setMessageMenu(item)} onRecords={() => setRecords(item)} />}
       ListFooterComponent={<>
-        {snapshot?.pending.map(p => <InputCard key={p.id} pending={p} busy={busy} answer={value => { void action(`/dsh/answers/${p.id}`, value); }} />)}
+        {snapshot?.pending.map(p => p.kind === "environment"
+          ? <PrivateVariablesCard key={p.id} pending={p} disabled={busy} submit={body => submitVariables(p, body)} />
+          : <InputCard key={p.id} pending={p} busy={busy} answer={value => { void action(`/dsh/answers/${p.id}`, value); }} />)}
       </>} />
     {awayFromLatest && !draft.revision && !searchOpen ? <Pressable accessibilityRole="button" accessibilityLabel="回到最新消息"
       onPress={() => { nearBottom.current = true; setAwayFromLatest(false); scrollToLatest(true); }}
