@@ -44,7 +44,7 @@
     "test:mobile": "node --experimental-strip-types --test tests/mobile-*.test.mjs",
     "bundle:android": "expo export --platform android --output-dir dist/android",
     "bundle:ios": "expo export --platform ios --output-dir dist/ios",
-    "test:dsh": "node --test plugins/dsh-zhixing/tests/*.test.mjs",
+    "test:dsh": "node --test plugins/dsh-*/tests/*.test.mjs",
     "test:dsh:integration": "node plugins/dsh-zhixing/tests/integration.mjs"
   },
   "private": true

@@ -1,0 +1,5 @@
+- insert:
+    - id: zhixing-messenger-persona
+      name: '@zhixing/dsh-messenger-persona'
+      config:
+        personaFile: !!js process.env.ZHIXING_TG_PERSONA_FILE
