@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import { createRevisions } from './revisions.mjs';
 import { declaredFile, deliveryBytes } from './deliveries.mjs';
 import { businessPath } from './business/service.mjs';
+import { createMetrics, contextSnapshot } from './metrics.mjs';
 
 const page = items => ({ items, next_cursor: null, previous_cursor: null });
 const own = id => /^zhixing-(main|finance|health)-[a-f0-9-]+$/.test(id);
@@ -101,6 +102,15 @@ export async function startServer(ctx, config, native = {}) {
   const children = new Set([...native.metadata.revisions.entries()].flatMap(([, state]) => state.entries.map(entry => entry.child)));
   const owns = id => own(id) || children.has(id);
   const interactions = createInteractions(ctx, owns);
+  const metrics = createMetrics(ctx);
+  const compactions = new Map();
+  const nativeCompactions = new Set();
+  const stopCompactions = ctx.on('session/event', (session, event) => {
+    if (!owns(session.id)) return;
+    if (event.type === 'compaction/start') nativeCompactions.add(session.id);
+    if (event.type === 'compaction/end') nativeCompactions.delete(session.id);
+  });
+  const compacting = id => compactions.has(id) || nativeCompactions.has(id);
   const mutations = new Map();
   const serial = (id, action) => {
     const next = (mutations.get(id) ?? Promise.resolve()).catch(() => {}).then(action);
@@ -185,7 +195,7 @@ export async function startServer(ctx, config, native = {}) {
       }
     } finally { await reader.close(); }
   }
-  const revisions = createRevisions(ctx, { records, resolve, flush, ...native, register: id => children.add(id) });
+  const revisions = createRevisions(ctx, { records, resolve, flush, ...native, compacting, register: id => children.add(id) });
   const attachmentFor = async (id, attachmentId, type) => {
     for await (const event of records(id)) {
       const content = event.data?.message?.content ?? event.data?.content;
@@ -322,14 +332,34 @@ export async function startServer(ctx, config, native = {}) {
           if (body.version !== id) throw failure('对话版本已改变，请刷新后再修改权限。', 409);
           return reply(await selectPermission(id, body.permission));
         }
+        if (method === 'POST' && suffix === '/dsh/compact') {
+          const body = await json(req);
+          // Hold admission only: new prompts and cancel must reach DSH while /compact runs.
+          const { operation } = await serial(root, async () => {
+            if (body.version !== id || id !== await revisions.active(root)) throw failure('对话版本已改变，请刷新后再压缩。', 409);
+            if (compacting(id)) throw failure('正在压缩上下文，请稍候。', 409);
+            const agent = await resolve(id), commands = ctx.get?.('commands');
+            if (!commands?.list(agent).some(command => command.name === 'compact')) throw failure('当前 DSH 未提供上下文压缩。', 503);
+            const operation = (async () => {
+              const result = await commands.execute(agent, '/compact', [], signal());
+              await flush(id);
+              if (result?.result.kind !== 'success') throw failure(result?.result.text ?? '压缩未完成，请重试。', 409);
+              return { completed: true, compacted: result.result.sourceEventSeq != null };
+            })();
+            compactions.set(id, operation);
+            void operation.finally(() => { compactions.delete(id); }).catch(() => {});
+            return { operation };
+          });
+          return reply(await operation);
+        }
         if (method === 'GET' && suffix === '/dsh') {
           const requested = Number(url.searchParams.get('offset') ?? 0);
           const offset = (url.searchParams.get('version') ?? id) === id ? requested : 0;
           if (!Number.isSafeInteger(requested) || requested < 0) throw failure('无效的事件位置。');
           await flush(id);
           const reader = await ctx.sessionPersistence.open(id, 'read');
-          let events;
-          try { ({ events } = await reader.read(offset, 256)); } finally { await reader.close(); }
+          let events, statistics;
+          try { ({ events } = await reader.read(offset, 256)); statistics = await metrics.turns(id, reader, events); } finally { await reader.close(); }
           const agent = ctx.agents.get(id);
           const pending = [...interactions.list(id), ...(native.environment?.list(id) ?? [])];
           const projection = ctx.sessionController.projections ? await ctx.sessionController.projections({ sessionId: id }, signal()) : null;
@@ -338,7 +368,9 @@ export async function startServer(ctx, config, native = {}) {
               kind: 'question', questions: question.questions, callId: question.callId });
           }
           const state = await ctx.sessionController.state({ sessionId: id }, signal());
-          return reply({ history, events, next: offset + events.length, hasMore: events.length === 256,
+          return reply({ history, events, statistics, context: contextSnapshot(projection),
+            compaction: { available: agent ? !!ctx.get?.('commands')?.list?.(agent).some(command => command.name === 'compact') : !!ctx.get?.('commands'), running: compacting(id) },
+            next: offset + events.length, hasMore: events.length === 256,
             permissions: projection?.values.permissions ? permissions(projection.values.permissions.currentValue) : null,
             running: agent?.status === 'running', active: !!agent, pending,
             queue: (state.queue ?? []).filter(item => item.placement !== 'context'), live: live.get(id) ?? null });
@@ -441,7 +473,7 @@ export async function startServer(ctx, config, native = {}) {
         throw failure('接口不存在。', 404);
         };
         // Stream uploads and human responses must not delay stopping a running tool.
-        const independent = method === 'GET' || suffix === '/dsh/cancel' || suffix.startsWith('/dsh/answers/') || suffix.startsWith('/dsh/environment/') || (method === 'PUT' && suffix === '/dsh/files');
+        const independent = method === 'GET' || suffix === '/dsh/compact' || suffix === '/dsh/cancel' || suffix.startsWith('/dsh/answers/') || suffix.startsWith('/dsh/environment/') || (method === 'PUT' && suffix === '/dsh/files');
         return await (independent ? handle() : serial(root, handle));
       }
       if (businessPath(path)) {
@@ -456,9 +488,9 @@ export async function startServer(ctx, config, native = {}) {
   });
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(config.port ?? 8001, config.host ?? '127.0.0.1', resolve); });
-  } catch (error) { interactions.close(); stopStream(); throw error; }
+  } catch (error) { interactions.close(); stopStream(); stopCompactions(); throw error; }
   return { owns, address: server.address(), async close() {
-    interactions.close(); stopStream();
+    interactions.close(); stopStream(); stopCompactions();
     await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
   } };
 }

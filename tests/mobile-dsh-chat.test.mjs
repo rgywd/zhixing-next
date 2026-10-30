@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import * as jsxRuntime from 'react/jsx-runtime';
 import * as protocol from '../src/dshProtocol.ts';
+import * as metrics from '../src/dshMetrics.ts';
 import * as conversationFiles from '../src/conversationFiles.ts';
 import * as theme from '../src/theme.ts';
 
@@ -22,7 +23,7 @@ function hooks() {
     useMemo(fn, deps) { const i = cursor++; if (changed(slots[i]?.deps, deps)) slots[i] = { deps, value: fn() }; return slots[i].value; },
   }, render(fn) { cursor = 0; effects = []; const result = fn(); effects.forEach(effect => effect()); return result; }, unmount() { slots.forEach(slot => slot?.cleanup?.()); } };
 }
-function harness({ store = { draft: { text: 'fix this', pending: null } }, post = async () => {}, clear = async () => {} } = {}) {
+function harness({ store = { draft: { text: 'fix this', pending: null } }, post = async () => {}, clear = async () => {}, cacheValue = null } = {}) {
   const lifecycle = hooks(), calls = [], uploads = [], removed = [], cache = [], shares = [], exports = {};
   let uuid = 0, tick;
   const snapshot = { events: [], next: 0, hasMore: false, running: false, active: true, queue: [], pending: [], live: null };
@@ -42,9 +43,10 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     } },
     './storage': { draftKey: () => 'draft', readDraft: async () => plain(store.draft), saveDraft: async (_key, value) => { store.draft = plain(value); },
       clearDraft: async (_key, id) => { await clear(id); if (store.draft.pending?.id === id) store.draft = { text: '', pending: null }; } },
-    './localCache': { readCache: async () => null, writeCache: async (_connection, _key, value) => cache.push(plain(value)) },
+    './localCache': { readCache: async () => plain(cacheValue), writeCache: async (_connection, _key, value) => cache.push(plain(value)) },
     './ConnectionStatus': { useSyncStatus: () => report }, './dshProtocol': protocol, './chatPhotos': { discardDraftPhotos() {} },
-    './conversationFiles': conversationFiles,
+    './conversationFiles': conversationFiles, './dshMetrics': metrics,
+    './ChatMetrics': { ChatMetricBox: 'ChatMetricBox', ContextRing: 'ContextRing', TurnMetrics: 'TurnMetrics' },
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
   };
   for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard', 'ConversationFilesSheet', 'PermissionPicker', 'PrivateVariablesCard']) dependencies[`./${component}`] = { [component]: component };
@@ -351,4 +353,52 @@ test('the conversation file sheet hands the preview between native layers instea
   assert.ok(app.render().some(n => n.type === 'Text' && n.props.children === '2/2 条'));
   app.render().find(n => n.props.label === '关闭聊天查找').props.onPress();
   assert.equal(search(), undefined); assert.equal(app.composer().text, 'fix this'); app.unmount();
+});
+
+
+test('manual compaction binds the active version while ordinary input, sending, and native cancellation remain available', async () => {
+  let finish;
+  const app = harness({ post: async path => path.endsWith('/compact') ? new Promise(resolve => { finish = resolve; }) : {} });
+  app.snapshot.history = { active: 'native-version', versions: [] };
+  app.snapshot.compaction = { available: true, running: false };
+  app.render(); await settle();
+  app.composer().contextControl.props.onOpen({ kind: 'context', anchor: { x: 120, y: 600, width: 40, height: 44 } });
+  const box = () => app.render().find(node => node.type === 'ChatMetricBox');
+  assert.equal(box().props.canCompact, true);
+  box().props.onCompact(); await settle();
+  assert.equal(box().props.compacting, true);
+  assert.equal(app.composer().editable, true); assert.equal(app.composer().busy, false);
+  const call = app.calls.find(call => call.path.endsWith('/compact'));
+  assert.deepEqual(plain(call.body), { version: 'native-version' });
+  app.composer().onSend(); await settle();
+  assert.ok(app.calls.some(call => call.path.endsWith('/messages')));
+  assert.equal(app.composer().stopping, true);
+  finish({ completed: true, compacted: true }); await settle();
+  assert.equal(box().props.compacting, false); app.unmount();
+});
+
+
+test('completed statistics survive cache restore and incremental polls, but never leak across native versions', async () => {
+  const event = { seq: 5, type: 'turn/end', time: 1, data: { turn: 1, reason: { kind: 'completed' } } };
+  const first = { seq: 5, turn: 1, stats: { turns: 1, steps: 4 }, usage: null };
+  const app = harness({ cacheValue: { historyId: 'version-a', history: { active: 'version-a', versions: [] }, events: [event], statistics: [first] } });
+  app.snapshot.history = { active: 'version-a', versions: [] }; app.snapshot.next = 6;
+  app.render(); await settle();
+  const data = () => app.render().find(node => node.type === 'FlatList').props.data;
+  assert.deepEqual(plain(data()[0].metrics), first);
+  assert.ok(app.calls.some(call => call.path.includes('offset=6&version=version-a')));
+  app.snapshot.events = [{ ...event, seq: 10, data: { ...event.data, turn: 2 } }];
+  app.snapshot.statistics = [{ ...first, seq: 10, turn: 2, stats: { turns: 2, steps: 7 } }]; app.snapshot.next = 11;
+  app.tick(); await settle();
+  assert.equal(data().length, 2); assert.deepEqual(plain(data()[0].metrics), first);
+  assert.equal(app.cache.at(-1).statistics.length, 2);
+  app.snapshot.history = { active: 'version-b', versions: [] };
+  app.snapshot.events = [event]; app.snapshot.statistics = [{ ...first, stats: { turns: 1, steps: 2 } }]; app.snapshot.next = 6;
+  app.tick(); await settle();
+  assert.equal(data().length, 1); assert.equal(data()[0].metrics.stats.steps, 2);
+  assert.equal(app.cache.at(-1).historyId, 'version-b'); app.unmount();
+  const legacy = harness({ cacheValue: { historyId: 'version-a', events: [event] } });
+  legacy.render(); await settle();
+  assert.ok(legacy.calls.some(call => call.path.includes('offset=0&version=version-a')), 'older caches backfill snapshots');
+  legacy.unmount();
 });

@@ -11,6 +11,7 @@
     "deliveries.mjs",
     "storage.mjs",
     "environment.mjs",
+    "metrics.mjs",
     "business",
     "cordis.patch.yml",
     "README.md"

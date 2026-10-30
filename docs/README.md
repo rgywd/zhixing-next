@@ -1,5 +1,7 @@
 # 文档入口
 
+- [DSH 上下文与会话统计](DSH-CONTEXT-STATS.md)：上下文圆环、原生压缩、每轮结束的累计统计快照与 box 详情。
+
 - [0.2.12 对话菜单、权限与私密变量](RELEASE-0.2.12.md)：versionCode 14，同签升级、box 菜单、DSH 权限及私密填写卡。
 - [私密变量填写](PRIVATE-VARIABLES.md)：多字段填写、原生凭据与环境注入、回执和保密边界。
 

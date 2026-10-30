@@ -4,7 +4,7 @@ const failure = (message, status = 409) => Object.assign(new Error(message), { s
 const isUser = e => e.type === 'user/message' && e.data.source?.kind === 'user';
 
 /** A logical App conversation owns immutable native branches; the source log is never rewritten. */
-export function createRevisions(ctx, { records, resolve, flush, metadata, forkRevision, register }) {
+export function createRevisions(ctx, { records, resolve, flush, metadata, forkRevision, register, compacting = () => false }) {
   const ledgers = new Map();
   const load = async root => {
     if (!ledgers.has(root)) ledgers.set(root, (async () => {
@@ -26,7 +26,7 @@ export function createRevisions(ctx, { records, resolve, flush, metadata, forkRe
   };
   const idle = async id => {
     const state = await ctx.sessionController.state({ sessionId: id }, new AbortController().signal);
-    if (ctx.agents.get(id)?.status === 'running' || state.queue?.some(item => item.placement !== 'context')) throw failure('请先等当前回复和等待消息处理完，再操作历史版本。');
+    if (compacting(id) || ctx.agents.get(id)?.status === 'running' || state.queue?.some(item => item.placement !== 'context')) throw failure('请先等当前回复、上下文压缩和等待消息处理完，再操作历史版本。');
   };
   const activate = async (root, child) => {
     const state = await load(root);
