@@ -47,7 +47,7 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     './conversationFiles': conversationFiles,
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
   };
-  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard', 'ConversationFilesSheet', 'PermissionPicker']) dependencies[`./${component}`] = { [component]: component };
+  for (const component of ['MessageBody', 'ConversationComposer', 'BottomSheet', 'ModelPicker', 'ReasoningPicker', 'ReplyContent', 'ChatTextEditor', 'DshFilePreview', 'ChatFileCard', 'ConversationFilesSheet', 'PermissionPicker', 'PrivateVariablesCard']) dependencies[`./${component}`] = { [component]: component };
   dependencies['./PhotoAttachments'] = { DraftAttachments: 'DraftAttachments', MessagePhotos: 'MessagePhotos' };
   runInNewContext(ts.transpileModule(readFileSync(new URL('../src/DshChatPanel.tsx', import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
@@ -58,6 +58,20 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
   const render = () => walk(lifecycle.render(() => exports.DshChatPanel(props)));
   return { render, props, store, calls, uploads, removed, cache, shares, snapshot, tick: () => tick(), composer: () => render().find(n => n.type === 'ConversationComposer').props, unmount: lifecycle.unmount };
 }
+
+test('private variable writes use their dedicated version-bound endpoint and never become chat messages, cached events or drafts', async () => {
+  const app = harness();
+  app.snapshot.pending = [{ id: 'private-request', sessionId: 'current-version', kind: 'environment', fields: [] }];
+  app.render(); await settle();
+  const originalDraft = plain(app.store.draft);
+  const card = walk(app.render().find(node => node.type === 'FlatList').props.ListFooterComponent).find(node => node.type === 'PrivateVariablesCard');
+  await card.props.submit({ submissionId: 'submission', fields: [{ id: '0', name: 'DSH_SECRET_TOKEN', value: 'TEST_ONLY_PRIVATE_TOKEN' }] });
+  const write = app.calls.find(call => call.path.endsWith('/dsh/environment/private-request'));
+  assert.equal(write.body.version, 'current-version'); assert.equal(write.body.fields[0].value, 'TEST_ONLY_PRIVATE_TOKEN');
+  assert.equal(app.calls.some(call => call.path.endsWith('/messages') || call.path.includes('/answers/')), false);
+  assert.deepEqual(plain(app.store.draft), originalDraft);
+  assert.ok(!JSON.stringify(app.cache).includes('TEST_ONLY_PRIVATE_TOKEN')); app.unmount();
+});
 
 test('DSH send retains the accepted request ID until draft clearing is durable', async () => {
   let attempts = 0;

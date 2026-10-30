@@ -1,6 +1,6 @@
 {
   "name": "@zhixing/dsh-app",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "exports": "./index.mjs",
@@ -10,6 +10,7 @@
     "revisions.mjs",
     "deliveries.mjs",
     "storage.mjs",
+    "environment.mjs",
     "business",
     "cordis.patch.yml",
     "README.md"

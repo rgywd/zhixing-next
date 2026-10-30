@@ -2,11 +2,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'node:net';
 import { Buffer } from 'node:buffer';
 
@@ -325,6 +325,47 @@ try {
   await rejected(`${pp}/dsh/version`, { expected: permissionEdit.active, version: restricted.id }, 404, 'PUT');
   assert.deepEqual(await readFile(permissionFile), preservedPermissionFile, 'removing the conversation preserves workspace files');
   console.log('PASS chat removal: native cancellation, durable deletion, all histories inaccessible, retry and restart, workspace files preserved');
+  const privateChat = await api('/conversations', { title: 'Private environment acceptance', permission: 'workspace-write' });
+  const pv = `/conversations/${privateChat.id}`, privateState = () => api(`${pv}/dsh`);
+  const privateValue = `TEST_ONLY_${randomUUID()}`, secondValue = `TEST_ONLY_${randomUUID()}`;
+  const privateHash = createHash('sha256').update(privateValue).digest('hex');
+  await api(`${pv}/messages`, { id: 'private-values', content: 'PRIVATE-VALUES' });
+  const filling = await until(privateState, s => s.pending.some(p => p.kind === 'environment'), 'private variable card');
+  const card = filling.pending.find(p => p.kind === 'environment');
+  const privateBody = { version: privateChat.id, submissionId: randomUUID(), fields: card.fields.map((field, index) => ({ id: field.id,
+    name: index ? field.name : 'DSH_SECRET_RENAMED_TOKEN', value: index ? secondValue : privateValue })) };
+  await rejected(`${path}/dsh/environment/${card.id}`, { ...privateBody, version: chat.id }, 409);
+  await rejected(`${pv}/dsh/environment/${card.id}`, { ...privateBody, version: 'stale' }, 409);
+  await rejected(`${pv}/dsh/environment/${card.id}`, { ...privateBody, fields: privateBody.fields.map(item => ({ ...item, name: 'PATH' })) }, 400);
+  const privateReceipt = await api(`${pv}/dsh/environment/${card.id}`, privateBody);
+  assert.deepEqual(privateReceipt.names, ['DSH_SECRET_RENAMED_TOKEN', 'DSH_SECRET_API_KEY']);
+  assert.deepEqual(await api(`${pv}/dsh/environment/${card.id}`, privateBody), privateReceipt, 'lost receipt can retry without another write');
+  const privateDone = await until(privateState, s => !s.running && !s.pending.length, 'private execution and output guard');
+  assert.match(JSON.stringify(privateDone), new RegExp(privateHash), 'native bash consumed the exact submitted bytes');
+  assert.match(JSON.stringify(privateDone), /工具返回内容包含私密变量值/);
+  for (const value of [privateValue, secondValue]) {
+    assert.ok(!JSON.stringify(privateDone).includes(value));
+    assert.ok(!(await readFile(join(root, 'model.json'), 'utf8')).includes(value), 'cloud model envelope has no private value');
+  }
+  const credentialsFile = join(root, 'home', '.credentials.yaml');
+  assert.equal((await stat(credentialsFile)).mode & 0o777, 0o600);
+  const privateBytes = await readFile(credentialsFile);
+  await api(`${pv}/messages`, { id: 'private-cancel', content: 'PRIVATE-VALUES' });
+  const cancelling = await until(privateState, s => s.pending.some(p => p.kind === 'environment'), 'private cancellation');
+  const cancelId = cancelling.pending.find(p => p.kind === 'environment').id;
+  await api(`${pv}/dsh/cancel`, {});
+  await rejected(`${pv}/dsh/environment/${cancelId}`, { ...privateBody, submissionId: randomUUID() }, 409);
+  assert.deepEqual(await readFile(credentialsFile), privateBytes, 'cancel never writes private values');
+  await stop(); await start();
+  await api(`${pv}/messages`, { id: 'private-restart', content: 'PRIVATE-RESTART' });
+  const privateRestored = await until(privateState, s => !s.running && s.events.some(e => e.type === 'user/message' && e.data.source?.rpcId === 'private-restart'), 'persisted private execution');
+  assert.match(JSON.stringify(privateRestored.events.filter(e => e.seq >= privateDone.next)), new RegExp(privateHash));
+  for (const filename of await readdir(join(root, 'home'), { recursive: true })) {
+    if (!filename.endsWith('.jsonl')) continue;
+    const text = await readFile(join(root, 'home', filename), 'utf8');
+    assert.ok(!text.includes(privateValue) && !text.includes(secondValue), `private value leaked into native log: ${filename}`);
+  }
+  console.log('PASS private variables: editable multi-field card, authenticated version/session binding, exact native env bytes, retry, output guard, cancellation, private credential storage, restart and no values in model/session logs');
   await writeFile(join(root, 'final-events.json'), JSON.stringify(await snapshot(), null, 2));
   console.log(`Evidence: ${root}`);
 } finally { await stop(); }

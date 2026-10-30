@@ -17,7 +17,17 @@ export function apply(ctx, config) {
         userTexts: messages.filter(m => m.role === 'user').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)) }, null, 2));
       let block;
       const call = (name, args) => ({ type: 'tool-call', id: randomUUID(), name, arguments: JSON.stringify(args) });
-      if (prompt.includes('PERMISSION-WRITE') && results.length < 2) {
+      if (prompt.includes('PRIVATE-VALUES') && results.length < 3) {
+        if (!results.length) block = call('zhixing_request_variables', { title: '连接测试服务', fields: [
+          { name: 'DSH_SECRET_BOT_TOKEN', label: 'Bot Token' }, { name: 'DSH_SECRET_API_KEY', label: 'API Key' },
+        ] });
+        else if (results.length === 1) block = call('bash', { description: 'Verify environment values without printing them', command:
+          `node -e 'const c=require("node:crypto"); for(const n of ["DSH_SECRET_RENAMED_TOKEN","DSH_SECRET_API_KEY"]) {if(!process.env[n])process.exit(9); console.log(n+"="+c.createHash("sha256").update(process.env[n]).digest("hex"))}'` });
+        else block = call('bash', { description: 'Exercise the private output guard', command: 'printf "%s" "$DSH_SECRET_RENAMED_TOKEN"' });
+      } else if (prompt.includes('PRIVATE-RESTART') && !results.length) {
+        block = call('bash', { description: 'Verify persisted private environment', command:
+          `node -e 'const c=require("node:crypto");console.log(c.createHash("sha256").update(process.env.DSH_SECRET_RENAMED_TOKEN||"").digest("hex"))'` });
+      } else if (prompt.includes('PERMISSION-WRITE') && results.length < 2) {
         block = results.length === 0 ? call('read', { file_path: `${config.workspace}/permission.txt` })
           : call('write', { file_path: `${config.workspace}/permission.txt`, content: 'permission write executed\n' });
       } else if (prompt.includes('PERMISSION-ESCALATE') && !results.length) {

@@ -18,12 +18,12 @@ const messageText = event => {
   return Array.isArray(content) ? content.filter(b => b.type === 'text').map(b => b.text).join('\n') : '';
 };
 
-async function json(req) {
+async function json(req, limit = 16 * 1024 * 1024) {
   let source = '';
   // This is a control-message transport bound; file bodies stream to DSH separately.
   for await (const chunk of req) {
     source += chunk;
-    if (Buffer.byteLength(source) > 16 * 1024 * 1024) throw failure('请求过大，请使用文件上传。', 413);
+    if (Buffer.byteLength(source) > limit) throw failure('请求过大，请使用文件上传。', 413);
   }
   try { return source ? JSON.parse(source) : {}; } catch { throw failure('无效的 JSON。'); }
 }
@@ -331,7 +331,7 @@ export async function startServer(ctx, config, native = {}) {
           let events;
           try { ({ events } = await reader.read(offset, 256)); } finally { await reader.close(); }
           const agent = ctx.agents.get(id);
-          const pending = interactions.list(id);
+          const pending = [...interactions.list(id), ...(native.environment?.list(id) ?? [])];
           const projection = ctx.sessionController.projections ? await ctx.sessionController.projections({ sessionId: id }, signal()) : null;
           for (const question of projection?.values.userQuestions?.active ?? []) {
             if (question.state === 'continued') pending.push({ id: `continued:${question.callId}`, sessionId: id,
@@ -426,6 +426,12 @@ export async function startServer(ctx, config, native = {}) {
           }
           return reply(interactions.answer(id, requestId, body));
         }
+        if (method === 'POST' && suffix.startsWith('/dsh/environment/')) {
+          if (!native.environment) throw failure('宿主尚未提供私密变量填写功能。', 503);
+          const body = await json(req, 512 * 1024);
+          if (body.version !== id) throw failure('对话版本已改变，请刷新后重新填写。', 409);
+          return reply(await native.environment.answer(id, suffix.split('/').at(-1), body));
+        }
         if (method === 'PUT' && suffix === '/dsh/files') {
           await resolve(id);
           const args = { sessionId: id, data: req, name: url.searchParams.get('name') || 'file' };
@@ -435,7 +441,7 @@ export async function startServer(ctx, config, native = {}) {
         throw failure('接口不存在。', 404);
         };
         // Stream uploads and human responses must not delay stopping a running tool.
-        const independent = method === 'GET' || suffix === '/dsh/cancel' || suffix.startsWith('/dsh/answers/') || (method === 'PUT' && suffix === '/dsh/files');
+        const independent = method === 'GET' || suffix === '/dsh/cancel' || suffix.startsWith('/dsh/answers/') || suffix.startsWith('/dsh/environment/') || (method === 'PUT' && suffix === '/dsh/files');
         return await (independent ? handle() : serial(root, handle));
       }
       if (businessPath(path)) {
