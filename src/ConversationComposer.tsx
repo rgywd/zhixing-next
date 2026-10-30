@@ -15,6 +15,7 @@ type Props = {
   unlimitedText?: boolean;
   text: string; placeholder?: string; onText: (text: string) => void; onSend: () => void; onFiles: () => void;
   onPhotos?: () => void;
+  onConversationFiles?: () => void; onMessageOptions?: () => void;
   editable: boolean; canSend: boolean; busy: boolean; pending?: boolean; attachmentLocked?: boolean;
   kind: "chat" | "task"; kindLocked?: boolean; onKind: (kind: "chat" | "task") => void;
   connection?: Connection; model?: ModelInfo; depth?: ReasoningEffort; searchId?: string | null;
@@ -110,7 +111,12 @@ export function ConversationComposer(props: Props) {
         <Pressable accessibilityRole="button" accessibilityLabel="选择文件" style={styles.addOption} onPress={() => { nextAttachment.current = onFiles; setShowAttachments(false); }}>
           <Ionicons name="document-attach-outline" size={28} color={colors.ink} /><Text style={styles.addLabel}>文件</Text>
         </Pressable>
+        {props.onConversationFiles ? <Pressable accessibilityRole="button" accessibilityLabel="本对话文件" style={styles.addOption} onPress={() => { nextAttachment.current = props.onConversationFiles!; setShowAttachments(false); }}>
+          <Ionicons name="folder-open-outline" size={28} color={colors.ink} /><Text style={styles.addLabel}>本对话文件</Text>
+        </Pressable> : null}
       </View>
+      {props.onMessageOptions ? <Pressable accessibilityRole="button" accessibilityLabel="发送方式" style={[styles.smallAction, { alignSelf: "center", width: "100%" }]}
+        onPress={() => { nextAttachment.current = props.onMessageOptions!; setShowAttachments(false); }}><Text style={styles.addLabel}>发送方式</Text></Pressable> : null}
     </BottomSheet>
     {expanded ? <ChatTextEditor text={text} onText={onText} editable={editable} maxLength={props.unlimitedText ? undefined : 20000}
       initialSelection={expanded}

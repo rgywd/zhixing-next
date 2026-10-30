@@ -21,7 +21,7 @@ function SearchSnippet({ text, query }: { text: string; query: string }) {
 
 export function AiDrawer({
   visible, connection, name, conversations, selectedId, hasMore, busy,
-  onClose, onOpen, onMore, onNew,
+  onClose, onOpen, onMore, onNew, onExit, exitLabel,
 }: {
   visible: boolean;
   connection: Connection;
@@ -34,6 +34,7 @@ export function AiDrawer({
   onOpen: (id: string, messageSeq?: number, version?: string) => void;
   onMore: () => void;
   onNew: () => void;
+  onExit?: () => void; exitLabel?: string;
 }) {
   const { s, colors } = useUi();
   const styles = useThemedStyles(createStyles);
@@ -149,6 +150,9 @@ export function AiDrawer({
                   {hasMore ? <Pressable accessibilityRole="button" accessibilityState={{ disabled: busy }} disabled={busy} onPress={onMore} style={styles.more}><Text style={styles.moreText}>{busy ? "加载中…" : "查看更早的对话"}</Text></Pressable> : null}
                 </ScrollView>
                 <Pressable accessibilityRole="button" accessibilityLabel="新建对话" onPress={() => { reset(); onNew(); }} style={({ pressed }) => [styles.newButton, pressed && s.pressed]}><Ionicons name="add" size={23} color={colors.onPrimary} /><Text style={styles.newText}>新建对话</Text></Pressable>
+                {onExit ? <Pressable accessibilityRole="button" accessibilityLabel={exitLabel ?? "返回首页"} onPress={() => { reset(); onExit(); }} style={({ pressed }) => [styles.historyRow, pressed && s.pressed]}>
+                  <Ionicons name="arrow-back-outline" size={18} color={colors.muted} /><Text style={styles.historyTitle}>{exitLabel ?? "返回首页"}</Text>
+                </Pressable> : null}
               </View>
             )}
           </SafeAreaView>

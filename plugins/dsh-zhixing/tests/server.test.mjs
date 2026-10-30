@@ -4,6 +4,34 @@ import { Buffer } from 'node:buffer';
 import { startServer, createInteractions } from '../server.mjs';
 
 const table = () => { const values = new Map(); return { get: id => values.get(id), entries: () => values.entries(), put: async (id, value) => values.set(id, structuredClone(value)) }; };
+
+test('conversation deletion waits for native stopping, persists only successful removal, and cannot expose removed histories', async t => {
+  const f = fixture(), archived = []; let failed = true, finish, started;
+  f.native.metadata.deleted = table();
+  const stopping = new Promise(resolve => { started = resolve; });
+  f.ctx.get = name => name === 'workspaceRegistry' ? { async archiveSession(id, options) {
+    if (failed) throw new Error('archive failed');
+    assert.equal(options.stopActivity, true); archived.push(id);
+  } } : undefined;
+  const server = await startServer(f.ctx, { token: 'delete-test', port: 0 }, f.native); t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address.port}/v1`, headers = { Authorization: 'Bearer delete-test' };
+  const chat = await (await fetch(`${base}/conversations`, { method: 'POST', headers, body: '{}' })).json();
+  f.agents.get(chat.id).whenIdle = async () => { started(); await new Promise(resolve => { finish = resolve; }); };
+  const path = `${base}/conversations/${chat.id}`;
+  assert.equal((await fetch(path, { method: 'DELETE', headers })).status, 400);
+  assert.equal((await fetch(path, { headers })).status, 200); assert.equal(f.native.metadata.deleted.get(chat.id), undefined);
+  failed = false;
+  const deleting = fetch(path, { method: 'DELETE', headers });
+  await stopping; assert.equal(f.native.metadata.deleted.get(chat.id), undefined, 'a stop request is not a stop receipt');
+  finish(); assert.deepEqual(await (await deleting).json(), { deleted: true });
+  assert.ok(f.native.metadata.deleted.get(chat.id));
+  assert.equal((await fetch(path, { headers })).status, 404);
+  assert.equal((await fetch(`${path}/dsh`, { headers })).status, 404);
+  assert.equal((await fetch(`${path}/messages`, { method: 'POST', headers, body: '{}' })).status, 404);
+  assert.deepEqual((await (await fetch(`${base}/conversations`, { headers })).json()).items, []);
+  assert.deepEqual(await (await fetch(path, { method: 'DELETE', headers })).json(), { deleted: true });
+  assert.deepEqual(archived, [chat.id]);
+});
 function fixture() {
   const listeners = new Map(), rows = [], records = new Map(), agents = new Map();
   const ctx = {

@@ -62,7 +62,7 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
       return { items: [], next_cursor: null, previous_cursor: null };
     } },
   };
-  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "Notice", "ChatPanel", "BottomSheet", "DshChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel", "DshHostSettings"].map((key) => [key, key]));
+  for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "ConversationMenu", "Notice", "ChatPanel", "BottomSheet", "DshChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel", "DshHostSettings"].map((key) => [key, key]));
   dependencies["./chatPreferences"] = { ChatPreferencesProvider: "ChatPreferencesProvider" };
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
@@ -80,7 +80,7 @@ test("DSH uses the existing shell with its own renderer and host settings", asyn
   find(app, "HomePanel").props.onOpenConversation("main-history"); await settle();
   assert.ok(find(app, "DshChatPanel")); assert.equal(app.render().some(n => n.type === "ChatPanel"), false);
   assert.ok(find(app, "AgentChatHeader"));
-  find(app, "AgentChatHeader").props.onClose();
+  find(app, "AiDrawer").props.onExit();
   app.renderTabs().find(node => node.props.accessibilityLabel === "设置").props.onPress();
   find(app, "SettingsHome").props.onOpen("host");
   assert.ok(find(app, "DshHostSettings")); assert.equal(find(app, "ProvidersPanel"), undefined);
@@ -160,7 +160,7 @@ test("chat preferences are available locally and each agent can open them and re
     const app = appHarness(); app.render(); await settle(); openLifeService(app, agent);
     find(app, agent === "finance" ? "FinanceDashboard" : "HealthPage").props.onChat(); await settle();
     const id = find(app, "DshChatPanel").props.conversation.id;
-    find(app, "AgentChatHeader").props.onSettings(); assert.equal(find(app, "DshChatPanel").props.settingsOpen, true);
+    find(app, "DshChatPanel").props.onMessageOptions(); assert.equal(find(app, "DshChatPanel").props.settingsOpen, true);
     find(app, "DshChatPanel").props.onSettingsClose(); assert.equal(find(app, "DshChatPanel").props.conversation.id, id); assert.equal(find(app, "DshChatPanel").props.settingsOpen, false);
     assert.equal(app.calls.some((call) => call.method === "POST"), false); app.unmount();
   }
@@ -173,7 +173,7 @@ test("life services open their own agent chats and return to the exact service b
     service.props.onChat(); await settle();
     const chat = find(app, "DshChatPanel"); assert.equal(chat.props.conversation.agent_id, agent); assert.equal(chat.props.conversation.id, `${agent}-history`);
     assert.equal(app.tabsVisible(), false);
-    find(app, "AgentChatHeader").props.onClose();
+    find(app, "AiDrawer").props.onExit();
     assert.ok(find(app, pageName));
     find(app, pageName).props.onChat(); await settle(); assert.ok(find(app, "DshChatPanel"));
     assert.equal(app.back(), true); assert.ok(find(app, pageName));
@@ -315,17 +315,17 @@ test("welcome, main and child conversations share one header with the correct id
   assert.equal(typeof header().status, "string"); assert.equal(header().onPin, undefined);
   header().onMenu(); assert.equal(find(app, "AiDrawer").props.visible, true);
   find(app, "AiDrawer").props.onClose(); assert.equal(find(app, "AiDrawer").props.visible, false);
-  header().onClose(); assert.ok(find(app, "HomePanel"));
-  for (const [agent, title, pinned] of [[null, "知行", false], ["finance", "财务助手", true], ["health", "健康助手", false]]) {
+  find(app, "AiDrawer").props.onExit(); assert.ok(find(app, "HomePanel"));
+  for (const [agent, title] of [[null, "知行"], ["finance", "财务助手"], ["health", "健康助手"]]) {
     const id = `${agent ?? "main"}-history`;
     find(app, "HomePanel").props.onOpenConversation(id); await settle();
     assert.equal(find(app, "DshChatPanel").props.conversation.id, id);
     assert.equal(header().title, title); assert.equal(header().subtitle, `${agent ?? "main"} history`);
     assert.equal(header().status, undefined, "a conversation must not inherit the welcome readiness badge");
-    assert.equal(header().pinned, pinned); assert.equal(header().pinReady, true);
-    header().onPin(); assert.deepEqual(JSON.parse(JSON.stringify(app.toggled.at(-1))), { kind: "conversation", id, title: `${agent ?? "main"} history` });
+    header().onOptions(); assert.equal(find(app, "ConversationMenu").props.title, `${agent ?? "main"} history`);
+    find(app, "ConversationMenu").props.onClose();
     header().onMenu(); assert.equal(find(app, "AiDrawer").props.visible, true);
-    find(app, "AiDrawer").props.onClose(); header().onClose(); assert.ok(find(app, "HomePanel"));
+    find(app, "AiDrawer").props.onClose(); find(app, "AiDrawer").props.onExit(); assert.ok(find(app, "HomePanel"));
   }
   assert.equal(app.calls.some((call) => call.method === "POST"), false);
   app.unmount();
@@ -345,7 +345,7 @@ test("a child header creates one empty conversation for the current agent and re
     assert.equal(find(app, "AiHome"), undefined);
     assert.equal(app.welcome.value.text, "hello", "starting a child conversation preserves the main agent draft");
     assert.equal(find(app, "AgentChatHeader").props.status, undefined);
-    find(app, "AgentChatHeader").props.onClose(); assert.ok(find(app, pageName));
+    find(app, "AiDrawer").props.onExit(); assert.ok(find(app, pageName));
     app.back(); assert.ok(find(app, "LifePanel")); app.unmount();
   }
 });
@@ -360,44 +360,42 @@ test("new from the welcome or a main conversation returns to the preserved main 
     assert.equal(find(app, "AiHome").props.draft, "hello"); assert.equal(app.render().some(n => n.type === "ChatPanel"), false);
     assert.equal(find(app, "AgentChatHeader").props.onPin, undefined);
     assert.equal(app.calls.some((call) => call.method === "POST"), false);
-    find(app, "AgentChatHeader").props.onClose(); assert.ok(find(app, "HomePanel")); app.unmount();
+    find(app, "AiDrawer").props.onExit(); assert.ok(find(app, "HomePanel")); app.unmount();
   }
 });
 
-test("the shared header exposes readable identity and moves secondary actions into its menu", () => {
+test("the shared header keeps the topic prominent, with assistant and model underneath", () => {
   for (const colors of [theme.lightColors, theme.darkColors]) {
-    const actions = [], life = hooks();
+    const actions = [];
     const { AgentChatHeader } = load("AgentChatHeader.tsx", {
-      react: life.react, "react/jsx-runtime": jsxRuntime, "./BottomSheet": { BottomSheet: "BottomSheet" },
+      "react/jsx-runtime": jsxRuntime,
       "react-native": { View: "View", Text: "Text", Pressable: "Pressable", StyleSheet: { create: value => value, hairlineWidth: 1 } },
-      "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" }, "./AppearanceControl": { AppearanceControl: "AppearanceControl" },
+      "@react-native-vector-icons/ionicons": { Ionicons: "Ionicons" },
       "./ThemeProvider": { useThemedStyles: factory => factory(colors) }, "./theme": theme,
-      "./ui": { useUi: () => ({ s: {}, colors }), ActionLink: "ActionLink" },
+      "./ui": { useUi: () => ({ colors }) },
     });
-    const props = { title: "财务助手", subtitle: "这个月的收支", onMenu: () => actions.push("menu"), onNew: () => actions.push("new"), onClose: () => actions.push("close"), onSettings: () => actions.push("settings"), onFiles: () => actions.push("files") };
-    const render = () => walk(life.render(() => AgentChatHeader(props)));
-    let nodes = render();
-    assert.equal(nodes.find(n => n.props?.accessibilityRole === 'header').props.children, '这个月的收支');
-    props.modelName = 'DeepSeek-V4.1-Flash';
-    nodes = render();
-    assert.equal(nodes.find(n => n.props?.accessibilityRole === 'header').props.children, 'DeepSeek-V4.1-Flash');
-    assert.ok(nodes.some(n => n.type === 'Text' && n.props.children === '这个月的收支'));
-    assert.ok(nodes.some(n => n.props?.accessibilityLabel?.includes('当前模型DeepSeek-V4.1-Flash，财务助手')));
+    const props = { title: "知行", subtitle: "研究插件并整理接入方案", modelName: "DeepSeek-V4.1-Flash", onMenu() {}, onNew() {}, onClose() {}, onOptions: () => actions.push("options") };
+    const nodes = walk(AgentChatHeader(props));
+    assert.equal(nodes.find(n => n.props?.accessibilityRole === 'header').props.children, props.subtitle);
+    assert.ok(nodes.some(n => n.type === 'Text' && n.props.children === '知行：DeepSeek-V4.1-Flash'));
+    assert.ok(nodes.some(n => n.props?.accessibilityLabel?.includes('当前模型DeepSeek-V4.1-Flash，知行')));
     nodes.find(n => n.props?.accessibilityLabel === '对话菜单').props.onPress();
-    nodes = render(); assert.equal(nodes.find(n => n.type === 'BottomSheet').props.visible, true);
-    nodes.find(n => n.type === 'ActionLink' && n.props.children === '本对话文件').props.onPress();
-    assert.deepEqual(actions, []); render().find(n => n.type === 'BottomSheet').props.onDismiss();
-    assert.deepEqual(actions, ['files']);
-    render().find(n => n.props?.accessibilityLabel === '对话菜单').props.onPress();
-    nodes = render();
-    nodes.find(n => n.type === 'ActionLink' && n.props.children === '返回上一页').props.onPress();
-    assert.deepEqual(actions, ['files']); render().find(n => n.type === 'BottomSheet').props.onDismiss();
-    assert.deepEqual(actions, ['files', 'close']);
-    const withoutFiles = { ...props, onFiles: undefined };
-    const openMenu = () => walk(life.render(() => AgentChatHeader(withoutFiles)));
-    openMenu().find(n => n.props?.accessibilityLabel === '对话菜单').props.onPress();
-    assert.equal(openMenu().some(n => n.type === 'ActionLink' && n.props.children === '本对话文件'), false);
+    assert.deepEqual(actions, ['options']);
+    assert.equal(nodes.some(n => n.type === 'Modal' || n.type === 'BottomSheet'), false);
   }
+});
+
+ test("the conversation box routes search and share to the current chat and removes only an acknowledged deletion", async () => {
+  const app = appHarness(); app.render(); await settle();
+  find(app, "HomePanel").props.onOpenConversation("main-history"); await settle();
+  const open = () => { find(app, "AgentChatHeader").props.onOptions(); return find(app, "ConversationMenu").props; };
+  let menu = open(); assert.equal(menu.title, 'main history'); assert.equal(menu.existing, true);
+  menu.onSearch(); assert.equal(find(app, 'DshChatPanel').props.menuAction.type, 'search');
+  menu.onShare(); assert.equal(find(app, 'DshChatPanel').props.menuAction.type, 'share');
+  const deleted = menu.onDelete(); assert.ok(find(app, 'DshChatPanel')); await deleted; await settle();
+  assert.ok(find(app, 'AiHome')); assert.equal(find(app, 'AiDrawer').props.conversations.some(chat => chat.id === 'main-history'), false);
+  assert.ok(app.calls.some(call => call.method === 'DELETE' && call.path === '/conversations/main-history'));
+  app.unmount();
 });
 
 test("every welcome suggestion keeps chat mode and the composer exposes no task switch", () => {

@@ -146,7 +146,7 @@ export async function startServer(ctx, config, native = {}) {
   };
   const list = async () => {
     const all = (await ctx.sessionController.list({}, signal())).items;
-    return Promise.all(all.filter(row => own(row.sessionId)).map(async root => {
+    return Promise.all(all.filter(row => own(row.sessionId) && !native.metadata.deleted?.get(row.sessionId)).map(async root => {
       const activeId = await revisions.active(root.sessionId);
       const active = all.find(row => row.sessionId === activeId);
       return active ? { ...active, sessionId: root.sessionId, projections: { values: { ...active.projections?.values, title: root.projections?.values.title } } } : root;
@@ -234,7 +234,8 @@ export async function startServer(ctx, config, native = {}) {
       if (method === 'GET' && path === '/v1/agents') return reply(page(native.business ? ['finance', 'health'].map(id => ({ id,
         kind: 'service', service: id, name: id === 'finance' ? '财务助手' : '健康助手', description: 'DSH · 知行业务服务',
         instructions: '', tools: [], visible: true })) : []));
-      if (method === 'GET' && ['/v1/conversations', '/v1/conversations/recent'].includes(path)) return reply(page((await list()).map(conversation)));
+      if (method === 'GET' && ['/v1/conversations', '/v1/conversations/recent'].includes(path)) return reply({ ...page((await list()).map(conversation)),
+        deleted_ids: [...native.metadata.deleted?.entries() ?? []].map(([id]) => id) });
       if (method === 'GET' && path === '/v1/conversations/search') {
         const needle = (url.searchParams.get('q') ?? '').trim().toLocaleLowerCase();
         if (!needle) return reply(page([]));
@@ -276,9 +277,27 @@ export async function startServer(ctx, config, native = {}) {
       if (match && own(match[1])) {
         const [, root, suffix] = match;
         const handle = async () => {
+        if (method === 'DELETE' && !suffix && native.metadata.deleted?.get(root)) return reply({ deleted: true });
         await get(root);
         const history = await revisions.summary(root);
         const id = history.active;
+        if (method === 'DELETE' && !suffix) {
+          const workspace = ctx.get?.('workspaceRegistry');
+          if (!workspace || !native.metadata.deleted) throw failure('当前宿主未提供对话移除能力。', 503);
+          const ledger = await revisions.load(root);
+          for (const sessionId of new Set([root, ...ledger.entries.map(entry => entry.child)])) {
+            // A revision's durable reservation may precede its native creation.
+            if (sessionId !== root && !ctx.agents.get(sessionId) && !await ctx.sessionPersistence.stat(sessionId)) continue;
+            const agent = ctx.agents.get(sessionId);
+            await workspace.archiveSession(sessionId, { stopActivity: true });
+            // Archive admission requests native cancellation. A cold session has
+            // no turn to cancel; live agents must actually finish before the ACK.
+            if (agent) await agent.whenIdle();
+            await flush(sessionId);
+          }
+          await native.metadata.deleted.put(root, { deletedAt: new Date().toISOString() });
+          return reply({ deleted: true });
+        }
         if (method === 'GET' && !suffix) return reply(await get(root));
         if (method === 'POST' && suffix === '/dsh/revisions') return reply(await revisions.revise(root, await json(req)));
         if (method === 'PUT' && suffix === '/dsh/version') return reply(await revisions.select(root, await json(req)));

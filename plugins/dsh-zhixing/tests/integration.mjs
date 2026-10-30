@@ -304,6 +304,27 @@ try {
   await stop(); await start();
   assert.equal((await permissionState()).permissions.current, 'read-only');
   console.log('PASS permissions: denied write, workspace write, actual approval/rejection/cancellation, full access, restart, revision inheritance and stale-version rejection');
+  // Removing a chat archives every native history, waits for process exit, and
+  // cannot reappear through another App read route or a host restart.
+  const preservedPermissionFile = await readFile(permissionFile);
+  await api(`${pp}/dsh/version`, { expected: restricted.id, version: permissionEdit.active }, 'PUT');
+  await api(`${pp}/messages`, { id: 'delete-running', content: 'CANCEL-SHELL' });
+  const deletionPid = await until(async () => {
+    try { const value = Number(await readFile(join(workspace, 'running.pid'), 'utf8')); process.kill(value, 0); return value; } catch { return null; }
+  }, Boolean, 'native process before deletion');
+  await api(pp, undefined, 'DELETE');
+  assert.throws(() => process.kill(deletionPid, 0), 'deletion acknowledges actual process exit');
+  await rejected(pp, undefined, 404, 'GET');
+  await rejected(`${pp}/dsh`, undefined, 404, 'GET');
+  assert.equal((await api('/conversations')).items.some(chat => chat.id === restricted.id), false);
+  await api(pp, undefined, 'DELETE');
+  await stop(); await start();
+  assert.equal((await api('/conversations')).items.some(chat => chat.id === restricted.id), false);
+  assert.equal((await api('/conversations/search?q=PERMISSION')).items.some(chat => chat.conversation_id === restricted.id), false);
+  await rejected(`${pp}/messages`, { id: 'deleted-cannot-send', content: 'READ-WRITE-CHECK' }, 404);
+  await rejected(`${pp}/dsh/version`, { expected: permissionEdit.active, version: restricted.id }, 404, 'PUT');
+  assert.deepEqual(await readFile(permissionFile), preservedPermissionFile, 'removing the conversation preserves workspace files');
+  console.log('PASS chat removal: native cancellation, durable deletion, all histories inaccessible, retry and restart, workspace files preserved');
   await writeFile(join(root, 'final-events.json'), JSON.stringify(await snapshot(), null, 2));
   console.log(`Evidence: ${root}`);
 } finally { await stop(); }

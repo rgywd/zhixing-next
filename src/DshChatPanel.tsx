@@ -1,7 +1,7 @@
 import { PermissionPicker } from "./PermissionPicker";
 import type { DshPermission, DshPermissions } from "./dshPermissions";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AppState, FlatList, Linking, Pressable, ScrollView, Text, TextInput, View, type ViewToken } from "react-native";
+import { AppState, BackHandler, FlatList, Keyboard, Linking, Pressable, ScrollView, Share, Text, TextInput, View, type ViewToken } from "react-native";
 import * as Clipboard from "expo-clipboard";
 import * as Crypto from "expo-crypto";
 import * as DocumentPicker from "expo-document-picker";
@@ -145,8 +145,9 @@ export function DshHostSettings({ webUrl }: { webUrl?: string | null }) {
 }
 
 export function DshChatPanel({ connection, conversation, assistantName, catalog, onRefresh, onConversationChanged,
-  startWithFiles, onFilesOpened, startWithSend, onSendStarted, settingsOpen, onSettingsClose, filesOpen, onFilesClose, onFilesOpen, webUrl,
+  startWithFiles, onFilesOpened, startWithSend, onSendStarted, settingsOpen, onSettingsClose, filesOpen, onFilesClose, onFilesOpen,
   focusMessageSeq, focusMessageVersion, onFocusHandled,
+  menuAction, onMessageOptions,
 }: {
   connection: Connection; conversation: Conversation; assistantName: string; catalog: ModelCatalog | null;
   onRefresh: () => void; onConversationChanged: (conversation: Conversation) => void;
@@ -154,6 +155,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   settingsOpen?: boolean; onSettingsClose?: () => void; filesOpen?: boolean; onFilesClose?: () => void; onFilesOpen?: () => void; webUrl?: string | null;
   focusMessageSeq?: number | null; onFocusHandled?: (seq: number) => void;
   focusMessageVersion?: string;
+  menuAction?: { id: number; type: "share" | "search" }; onMessageOptions?: () => void;
 }) {
   const { s, colors } = useUi();
   const notice = useNotice();
@@ -178,9 +180,14 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const [previewFile, setPreviewFile] = useState<DshAttachment | null>(null);
   const [previewFromFiles, setPreviewFromFiles] = useState(false);
   const [pendingPreview, setPendingPreview] = useState<DshAttachment | null>(null);
-  const [renaming, setRenaming] = useState(false);
-  const [title, setTitle] = useState("");
-  const [titleError, setTitleError] = useState("");
+  const [closedSearchId, setClosedSearchId] = useState<number | null>(null);
+  const searchOpen = menuAction?.type === "search" && menuAction.id !== closedSearchId;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchCursor, setSearchCursor] = useState(0);
+  const lastMenuAction = useRef<number | null>(null);
+  const sharing = useRef(false);
+  const searchMatches = useMemo(() => searchQuery.trim() ? rows.filter(row => rowText(row).toLocaleLowerCase().includes(searchQuery.trim().toLocaleLowerCase())) : [], [rows, searchQuery]);
+  const searchIndex = searchCursor % Math.max(searchMatches.length, 1);
   const [revisionError, setRevisionError] = useState("");
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [queueOpen, setQueueOpen] = useState(false);
@@ -215,6 +222,27 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const onRefreshRef = useRef(onRefresh);
   useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
   const currentModel = catalog?.items.find(m => m.id === (conversation.model_id ?? catalog.roles.chat));
+  useEffect(() => {
+    if (!menuAction || lastMenuAction.current === menuAction.id) return;
+    lastMenuAction.current = menuAction.id;
+    if (menuAction.type === "search") return;
+    if (sharing.current) return;
+    if (!snapshot || snapshot.hasMore) { notice.show({ message: "对话还在读取，请稍后分享。" }); return; }
+    const messages = rows.map(row => {
+      const text = [rowText(row), ...row.attachments.map(file => `[${file.type === "image" ? "图片" : "文件"}：${file.name}]`)].filter(Boolean).join("\n");
+      return text ? `${row.role === "user" ? "我" : assistantName}\n${text}` : "";
+    }).filter(Boolean);
+    if (!messages.length) { notice.show({ message: "这段对话还没有可分享的消息。" }); return; }
+    sharing.current = true;
+    void Share.share({ title: conversation.title, message: `${conversation.title}\n\n${messages.join("\n\n")}` })
+      .catch(e => { if (alive.current) notice.show({ message: humanError(e), tone: "error" }); })
+      .finally(() => { sharing.current = false; });
+  }, [menuAction, snapshot, rows, assistantName, conversation.title, notice]);
+  useEffect(() => {
+    if (!searchOpen) return;
+    const handler = BackHandler.addEventListener("hardwareBackPress", () => { Keyboard.dismiss(); setClosedSearchId(menuAction?.id ?? null); setHighlighted(null); return true; });
+    return () => handler.remove();
+  }, [searchOpen, menuAction?.id]);
   const update = async (value: DshDraft) => {
     draftRef.current = value; if (alive.current) setDraft(value); await saveDraft(key, value);
   };
@@ -461,8 +489,9 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     }
   }, [focusMessageSeq, focusVersionMatches, snapshot?.history?.active, notice]);
   const editingTarget = draft.revision?.kind === "edit" && draft.revision.version === historyId ? draft.revision : undefined;
-  const editingId = editingTarget?.id;
-  const targetSeq = editingTarget?.seq ?? (focusVersionMatches ? focusMessageSeq : null);
+  const editingId = searchOpen ? undefined : editingTarget?.id;
+  const targetSeq = searchOpen ? searchMatches[searchIndex] ? revisionSeq(searchMatches[searchIndex]) : null
+    : editingTarget?.seq ?? (focusVersionMatches ? focusMessageSeq : null);
   const focusIndex = targetSeq == null ? -1 : rows.findIndex(row => rowHasMessage(row, targetSeq));
   const focusRowId = rows[focusIndex]?.id;
   useEffect(() => {
@@ -480,6 +509,15 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const scrollToLatest = (animated: boolean) => list.current?.scrollToOffset({ offset: contentHeight.current, animated });
   const followLatest = () => { if (nearBottom.current) scrollToLatest(false); };
   return <View style={{ flex: 1 }}>
+    {searchOpen ? <View style={[s.row, { paddingHorizontal: space.md, borderBottomWidth: 1, borderBottomColor: colors.line, gap: space.xs }]}>
+      <TextInput accessibilityLabel="在聊天中查找" placeholder="在聊天中查找" placeholderTextColor={colors.muted} autoFocus
+        value={searchQuery} onChangeText={value => { setSearchQuery(value); setSearchCursor(0); setHighlighted(null); }}
+        style={{ flex: 1, minWidth: 0, minHeight: layout.touchTarget, color: colors.ink }} returnKeyType="search" />
+      <Text accessibilityLiveRegion="polite" style={s.small}>{searchQuery.trim() ? searchMatches.length ? `${searchIndex + 1}/${searchMatches.length} 条` : "无匹配" : ""}</Text>
+      <IconAction icon="chevron-up" label="上一个匹配" disabled={!searchMatches.length} onPress={() => setSearchCursor((searchIndex + searchMatches.length - 1) % searchMatches.length)} />
+      <IconAction icon="chevron-down" label="下一个匹配" disabled={!searchMatches.length} onPress={() => setSearchCursor(searchIndex + 1)} />
+      <IconAction icon="close" label="关闭聊天查找" onPress={() => { Keyboard.dismiss(); setClosedSearchId(menuAction?.id ?? null); setHighlighted(null); }} />
+    </View> : null}
     <View style={{ flex: 1 }}>
     <FlatList key={historyId} ref={list} data={rows} keyExtractor={row => row.id} keyboardShouldPersistTaps="handled" removeClippedSubviews={false}
       onViewableItemsChanged={viewable}
@@ -523,7 +561,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       ListFooterComponent={<>
         {snapshot?.pending.map(p => <InputCard key={p.id} pending={p} busy={busy} answer={value => { void action(`/dsh/answers/${p.id}`, value); }} />)}
       </>} />
-    {awayFromLatest && !draft.revision ? <Pressable accessibilityRole="button" accessibilityLabel="回到最新消息"
+    {awayFromLatest && !draft.revision && !searchOpen ? <Pressable accessibilityRole="button" accessibilityLabel="回到最新消息"
       onPress={() => { nearBottom.current = true; setAwayFromLatest(false); scrollToLatest(true); }}
       style={{ position: "absolute", bottom: 12, alignSelf: "center", minHeight: 44, paddingHorizontal: 16,
         justifyContent: "center", borderRadius: 22, backgroundColor: colors.surfaceRaised, borderWidth: 1, borderColor: colors.line }}>
@@ -533,12 +571,13 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     {error ? <Text accessibilityRole="alert" style={[s.error, { marginHorizontal: 20 }]}>{error}</Text> : null}
     {!ready && error ? <Button secondary onPress={() => setDraftAttempt(value => value + 1)}>重新读取草稿</Button> : null}
     {revisionError ? <Text accessibilityRole="alert" style={[s.error, { marginHorizontal: 20 }]}>{revisionError}</Text> : null}
-    <ConversationComposer unlimitedText text={draft.revision?.kind === "edit" ? draft.revision.text : draft.text}
+    {!searchOpen ? <ConversationComposer unlimitedText text={draft.revision?.kind === "edit" ? draft.revision.text : draft.text}
       onText={text => { const value = draftRef.current; void update(value.revision?.kind === "edit" ? { ...value, revision: { ...value.revision, text } } : { ...value, text }).catch(e => setError(humanError(e))); }}
       editing={draft.revision ? { id: draft.revision.id, label: draft.revision.kind === "retry" ? "重新回答" : "编辑消息", onCancel: () => {
         void update({ ...draftRef.current, revision: undefined }).then(() => { setRevisionError(""); refresh(); }).catch(e => setError(humanError(e)));
       } } : undefined}
       editable={ready && !busy && !draft.pending && !draft.revision?.submitted} onSend={() => { void (draft.revision ? submitRevision() : send()); }} onFiles={() => { void files(); }} onPhotos={() => { void photos(); }}
+      onConversationFiles={onFilesOpen} onMessageOptions={onMessageOptions}
       attachmentLocked={!ready || busy || !!draft.pending || !!draft.revision} busy={busy}
       canSend={draft.revision ? !busy && !!(draft.revision.kind === "retry" || draft.revision.text.trim() || draft.revision.attachments.length) : canSend}
       pending={!!draft.pending || !!draft.revision?.submitted}
@@ -568,35 +607,20 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
             .catch(e => setError(humanError(e))); }} />
       {(draft.files ?? []).filter(f => !f.mediaType?.startsWith("image/")).map(file => <ActionLink key={file.id} disabled={busy || !!draft.pending} onPress={() => { void update({ ...draftRef.current, files: draftRef.current.files?.filter(f => f.id !== file.id) }).then(() => discardFile(file)).catch(e => setError(humanError(e))); }}>{`移除 · ${file.name}`}</ActionLink>)}
       </> : null}
-    </ConversationComposer>
+    </ConversationComposer> : null}
     <ModelPicker visible={models} title="选择模型" connectionUrl={connection.url} models={catalog?.items ?? []} selectedId={currentModel?.id ?? null}
       onSelect={id => selectModel(id, null)} onClose={() => setModels(false)} />
     <ReasoningPicker visible={reasoning} model={currentModel} selected={conversation.reasoning_effort}
       onSelect={value => selectModel(conversation.model_id, value)} onClose={() => setReasoning(false)} />
     <PermissionPicker visible={permissionOpen} permissions={snapshot?.permissions} onSelect={selectPermission} onClose={() => setPermissionOpen(false)} />
-    <BottomSheet visible={!!settingsOpen} title={renaming ? "修改对话名称" : "对话设置"} onClose={() => { setRenaming(false); onSettingsClose?.(); }}>
+    <BottomSheet visible={!!settingsOpen} title="发送方式" onClose={() => onSettingsClose?.()}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
-        {renaming ? <>
-          <TextInput accessibilityLabel="对话名称" autoFocus style={s.input} value={title} onChangeText={setTitle} editable={!busy} placeholder="填写对话名称" placeholderTextColor={colors.muted} />
-          {titleError ? <Text accessibilityRole="alert" style={s.error}>{titleError}</Text> : null}
-          <Button disabled={busy || !title.trim()} onPress={() => {
-            if (working.current) return;
-            working.current = true; setBusy(true); setTitleError("");
-            void request<Conversation>(connection, `${base}/title`, { method: "PUT", body: { title: title.trim() } })
-              .then(updated => { if (alive.current) { onConversationChanged(updated); onRefresh(); setRenaming(false); onSettingsClose?.(); } })
-              .catch(e => { if (alive.current) setTitleError(humanError(e)); })
-              .finally(() => { working.current = false; if (alive.current) setBusy(false); });
-          }}>{busy ? "正在保存…" : "保存名称"}</Button>
-        </> : <>
-        <ActionLink icon="create-outline" onPress={() => { setTitle(conversation.title); setTitleError(""); setRenaming(true); }}>修改对话名称</ActionLink>
         <Text style={s.label}>这条消息的发送方式</Text>
         <ActionLink disabled={busy || !!draft.pending} onPress={() => setIntent(intent === "queue" ? "steer" : "queue")}>{intent === "queue" ? "接着处理" : "补充当前回复"}</ActionLink>
         <Text style={s.description}>{intent === "queue" ? "当前回复完成后，按顺序处理新消息。" : "执行过程中加入新要求；空闲时直接开始回复。"}</Text>
         {snapshot?.running ? <ActionLink disabled={busy} onPress={() => { void action("/dsh/cancel"); }}>停止回复</ActionLink> : null}
         <ActionLink icon="git-branch-outline" onPress={() => { onSettingsClose?.(); setRevisionError(""); setVersionsOpen(true); }}>查看对话版本</ActionLink>
         <ActionLink icon="receipt-outline" onPress={() => { onSettingsClose?.(); setRecords("all"); }}>查看完整处理记录</ActionLink>
-        <DshHostSettings webUrl={webUrl} />
-        </>}
       </ScrollView>
     </BottomSheet>
     <BottomSheet visible={!!messageMenu} title="消息操作" onClose={() => setMessageMenu(null)} onDismiss={() => { const next = afterMenu.current; afterMenu.current = null; next?.(); }}>

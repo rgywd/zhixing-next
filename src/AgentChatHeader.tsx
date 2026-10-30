@@ -1,44 +1,31 @@
-import { useRef, useState } from "react";
-import { BottomSheet } from "./BottomSheet";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { Ionicons } from "@react-native-vector-icons/ionicons";
-import { AppearanceControl } from "./AppearanceControl";
 import { useThemedStyles } from "./ThemeProvider";
 import { radius, space, typography, type ThemeColors } from "./theme";
-import { ActionLink, useUi } from "./ui";
+import { useUi } from "./ui";
 
 /** All agents share this chrome; identity and navigation remain caller-owned. */
-export function AgentChatHeader({ title, subtitle, modelName, status, pinned = false, pinReady = true, busy = false, onMenu, onNew, onClose, onPin, onSettings, onFiles }: {
+export function AgentChatHeader({ title, subtitle, modelName, status, busy = false, onMenu, onNew, onOptions, menuOpen, onLayout }: {
   modelName?: string;
-  title: string; subtitle: string; status?: string; pinned?: boolean; pinReady?: boolean; busy?: boolean;
-  onMenu: () => void; onNew: () => void; onClose: () => void; onPin?: () => void; onSettings?: () => void; onFiles?: () => void;
+  title: string; subtitle: string; status?: string; busy?: boolean;
+  onMenu: () => void; onNew: () => void;
+  onOptions: () => void; menuOpen?: boolean; onLayout?: (event: LayoutChangeEvent) => void;
 }) {
-  const { s, colors } = useUi();
-  const [menu, setMenu] = useState(false);
-  const afterMenu = useRef<(() => void) | null>(null);
+  const { colors } = useUi();
   const styles = useThemedStyles(createStyles);
-  return <View style={styles.header}>
+  return <View style={styles.header} onLayout={onLayout}>
     <Pressable accessibilityRole="button" accessibilityLabel="打开对话侧边栏" onPress={onMenu} style={styles.menu}>
       <Ionicons name="menu-outline" size={22} color={colors.ink} />
     </Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel={`${modelName ? `当前模型${modelName}，` : ""}${title}，${subtitle}，打开对话侧边栏`} onPress={onMenu} style={styles.copy}>
       <View style={styles.titleRow}>
-        <Text accessibilityRole="header" numberOfLines={1} style={styles.name}>{modelName ?? (status ? title : subtitle || title)}</Text>
+        <Text accessibilityRole="header" numberOfLines={1} style={styles.name}>{status ? title : subtitle || title}</Text>
         {status ? <View style={[styles.status, status !== "待命中" && styles.statusMuted]}><View accessible={false} style={[styles.dot, status !== "待命中" && { backgroundColor: colors.muted }]} /><Text numberOfLines={1} style={[styles.statusText, status !== "待命中" && { color: colors.muted }]}>{status}</Text></View> : null}
       </View>
-      <Text numberOfLines={1} style={styles.subtitle}>{modelName ? status ? title : subtitle : status ? subtitle : title}</Text>
+      <Text numberOfLines={1} style={styles.subtitle}>{modelName ? `${title}：${modelName}` : status ? subtitle : title}</Text>
     </Pressable>
     <Pressable accessibilityRole="button" accessibilityLabel="新建对话" accessibilityState={{ disabled: busy }} disabled={busy} onPress={onNew} style={[styles.action, busy && styles.disabled]}><Ionicons name="create-outline" size={23} color={colors.ink} /></Pressable>
-    <Pressable accessibilityRole="button" accessibilityLabel="对话菜单" onPress={() => setMenu(true)} style={styles.action}><Ionicons name="ellipsis-horizontal" size={22} color={colors.ink} /></Pressable>
-    <BottomSheet visible={menu} title="对话" onClose={() => setMenu(false)} onDismiss={() => { const next = afterMenu.current; afterMenu.current = null; next?.(); }}>
-      <View style={s.content}>
-        {onFiles ? <ActionLink icon="folder-open-outline" onPress={() => { afterMenu.current = onFiles; setMenu(false); }}>本对话文件</ActionLink> : null}
-        {onSettings ? <ActionLink icon="options-outline" onPress={() => { afterMenu.current = onSettings; setMenu(false); }}>对话设置</ActionLink> : null}
-        {onPin ? <ActionLink icon="bookmark-outline" disabled={!pinReady} onPress={() => { onPin(); setMenu(false); }}>{pinned ? "取消固定" : "固定对话"}</ActionLink> : null}
-        <View style={s.row}><AppearanceControl /><Text style={s.description}>外观</Text></View>
-        <ActionLink icon="arrow-back-outline" onPress={() => { afterMenu.current = onClose; setMenu(false); }}>返回上一页</ActionLink>
-      </View>
-    </BottomSheet>
+    <Pressable accessibilityRole="button" accessibilityLabel="对话菜单" accessibilityState={{ expanded: !!menuOpen }} onPress={onOptions} style={styles.action}><Ionicons name="ellipsis-horizontal" size={22} color={colors.ink} /></Pressable>
   </View>;
 }
 
