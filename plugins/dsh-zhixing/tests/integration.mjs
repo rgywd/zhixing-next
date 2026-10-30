@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, mkdir, writeFile, readFile, rm, readdir, stat } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -360,11 +360,14 @@ try {
   await api(`${pv}/messages`, { id: 'private-restart', content: 'PRIVATE-RESTART' });
   const privateRestored = await until(privateState, s => !s.running && s.events.some(e => e.type === 'user/message' && e.data.source?.rpcId === 'private-restart'), 'persisted private execution');
   assert.match(JSON.stringify(privateRestored.events.filter(e => e.seq >= privateDone.next)), new RegExp(privateHash));
-  for (const filename of await readdir(join(root, 'home'), { recursive: true })) {
-    if (!filename.endsWith('.jsonl')) continue;
-    const text = await readFile(join(root, 'home', filename), 'utf8');
-    assert.ok(!text.includes(privateValue) && !text.includes(secondValue), `private value leaked into native log: ${filename}`);
-  }
+  // The snapshot uses native sessionPersistence.open/read after a host restart.
+  // Inspect every decoded event rather than silently missing .jsonl.zstd files
+  // or depending on the host's multi-frame storage codec.
+  assert.equal(privateRestored.hasMore, false, 'all persisted private-input events must be inspected');
+  const persistedPrivateEvents = JSON.stringify(privateRestored.events);
+  assert.ok(privateRestored.events.some(e => e.type === 'tool/result' && JSON.stringify(e.data).includes('DSH_SECRET_RENAMED_TOKEN')),
+    'the restored native log must contain the submitted variable-name receipt');
+  assert.ok(!persistedPrivateEvents.includes(privateValue) && !persistedPrivateEvents.includes(secondValue), 'private values must not survive in the native session log');
   console.log('PASS private variables: editable multi-field card, authenticated version/session binding, exact native env bytes, retry, output guard, cancellation, private credential storage, restart and no values in model/session logs');
   await writeFile(join(root, 'final-events.json'), JSON.stringify(await snapshot(), null, 2));
   console.log(`Evidence: ${root}`);
