@@ -3,8 +3,8 @@ import { useSessionData } from "./useSessionData";
 import { ThemeProvider } from "./ThemeProvider";
 import { AgentChatHeader } from "./AgentChatHeader";
 import { ConversationMenu } from "./ConversationMenu";
-import { ChatPreferencesProvider } from "./chatPreferences";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
+import { useDshSettings } from "./useDshSettings";
 import { useUi, BackLink, Button, humanError, PageHeading, PageScrollView } from "./ui";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -68,7 +68,7 @@ type LifePage = "overview" | "finance" | "health";
 type ChatReturn = { tab: Exclude<Tab, "chat">; lifePage: LifePage };
 
 export default function AssistantApp() {
-  return <ThemeProvider><ChatPreferencesProvider><ThemedApp /></ChatPreferencesProvider></ThemeProvider>;
+  return <ThemeProvider><ThemedApp /></ThemeProvider>;
 }
 
 function ThemedApp() {
@@ -239,6 +239,7 @@ function ConnectedSession({
   const [settingsView, setSettingsView] = useState<"overview" | SettingsDestination>("overview");
   const navigation = useRef(0);
   const home = useHomePreferences(connection.url);
+  const dshSettings = useDshSettings(connection);
   const { assistant, status, lastSyncFailed, conversations, setConversations, removeConversation, agents, catalog,
      selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive } = useSessionData(connection);
   const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number; version?: string } | null>(null);
@@ -430,7 +431,7 @@ function ConnectedSession({
   }
   const welcomeControls = {
     connection, catalog, modelId: welcomePreference.modelId, effort: welcomePreference.effort,
-    permissions: status?.permissions ? { ...status.permissions, current: welcome.value.permission ?? status.permissions.current } : null,
+    permissions: status?.permissions ? { ...status.permissions, current: welcome.value.permission ?? dshSettings.snapshot?.settings.permission?.value ?? status.permissions.current } : null,
     onPermission: (value: DshPermission) => welcome.setPermission(value),
     draftReady: welcome.ready, draftError: welcome.error, onRetryDraft: welcome.retry,
     photos: welcome.value.photos, pickingPhotos: welcomePhotoPicker.picking,
@@ -513,6 +514,7 @@ function ConnectedSession({
             <AiHome name={assistant?.name ?? "知行"} draft={welcomeDraft} kind={welcomeKind} busy={busy} onDraft={setWelcomeDraft} onKind={setWelcomeKind} onSend={submitWelcome} {...welcomeControls} />
           ) : selected ? (
             <DshChatPanel key={selected.id} connection={connection} conversation={selected} assistantName={chatAssistantName}
+              defaultBusyBehavior={dshSettings.snapshot?.settings.busy?.value}
               menuAction={chatAction?.conversationId === selected.id ? chatAction : undefined}
               onMessageOptions={() => setChatSettingsFor(selected.id)}
               focusMessageVersion={focusMessage?.conversationId === selected.id ? focusMessage.version : undefined}
@@ -538,7 +540,7 @@ function ConnectedSession({
           {settingsView === "host" ? (
             <DshHostSettings webUrl={status?.web_url} />
           ) : settingsView === "chat" ? (
-            <ChatSettingsPanel />
+            <ChatSettingsPanel controller={dshSettings} />
           ) : settingsView === "device" ? (
             <DeviceCapabilitiesPanel onUseLocation={(text) => {
               setWelcomeDraft((old) => `${old.trimEnd()}${old.trim() ? "\n\n" : ""}${text}\n\n`);

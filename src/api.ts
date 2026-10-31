@@ -135,7 +135,8 @@ export type MessageInput = {
   id: string;
   content: string;
   attachments?: string[];
-  intent: "queue" | "steer";
+  /** Omit to use DSH's current busy-send preference. Legacy callers send an explicit mode. */
+  intent?: "queue" | "steer";
   kind: "chat" | "task";
   target_run_id?: string;
   model_id?: string;

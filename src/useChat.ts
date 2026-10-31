@@ -133,7 +133,7 @@ export function useChat({
           setDraftReady(true);
           if (value.pending) {
             setKind(value.pending.kind);
-            setIntentValue(value.pending.intent);
+            setIntentValue(value.pending.intent ?? "queue");
             setTargetValue(value.pending.target_run_id ?? null);
           } else {
             setIntentValue(value.delivery?.intent ?? "queue");

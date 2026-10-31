@@ -73,6 +73,13 @@ try {
   assert.equal(chat.model_id, selectedModel, 'creation honors the selected native model');
   const path = `/conversations/${chat.id}`;
   const snapshot = () => api(`${path}/dsh`);
+  const initialSettings = await api('/settings/chat');
+  assert.equal(initialSettings.writable, true);
+  assert.equal(initialSettings.busy.value, 'queue');
+  const configure = async (key, value) => {
+    const current = await api('/settings/chat');
+    return api('/settings/chat', { key, value, revision: current[key].revision }, 'PUT');
+  };
   await api(`${path}/messages`, { id: 'read-write-check', content: 'READ-WRITE-CHECK' });
   let state = await until(snapshot, s => !s.running && s.events.some(e => e.type === 'turn/end'), 'code loop');
   assert.equal(await readFile(join(workspace, 'sample.js'), 'utf8'), 'export const answer = 42;\n');
@@ -172,6 +179,26 @@ try {
   await api(`${path}/dsh/queue/${queued.id}`, { kind: 'remove' });
   assert.equal((await snapshot()).queue.some(item => item.id === queued.id), false);
   console.log('PASS native queue inspection, steering and withdrawal');
+  await configure('busy', 'steer');
+  await api(`${path}/messages`, { id: 'default-steer', content: 'DEFAULT-STEER' });
+  state = await snapshot();
+  const steered = state.queue.find(item => item.rpcId === 'default-steer');
+  assert.equal(steered?.placement, 'steering', 'omitted intent uses the live native default');
+  await api(`${path}/dsh/queue/${steered.id}`, { kind: 'remove' });
+  await rejected('/settings/chat', { key: 'busy', value: 'queue', revision: initialSettings.busy.revision }, 409, 'PUT');
+  await configure('busy', 'queue');
+  await api(`${path}/messages`, { id: 'default-queue', content: 'DEFAULT-QUEUE' });
+  state = await snapshot();
+  const queuedDefault = state.queue.find(item => item.rpcId === 'default-queue');
+  assert.equal(queuedDefault?.placement, 'queued');
+  await api(`${path}/dsh/queue/${queuedDefault.id}`, { kind: 'remove' });
+  await api(`${path}/messages`, { id: 'override-steer', content: 'OVERRIDE', intent: 'steer' });
+  const overridden = (await snapshot()).queue.find(item => item.rpcId === 'override-steer');
+  assert.equal(overridden?.placement, 'steering');
+  await api(`${path}/dsh/queue/${overridden.id}`, { kind: 'remove' });
+  await configure('busy', 'steer');
+  const beforeSettingsRestart = await api('/settings/chat');
+  console.log('PASS native settings write, stale-editor refusal, default queue/steer admission and per-message override');
   await api(`${path}/dsh/cancel`, {});
   assert.throws(() => process.kill(pid, 0));
   state = await snapshot(); assert.equal(state.running, false);
@@ -179,6 +206,11 @@ try {
   console.log('PASS cancellation waits for actual shell exit');
   const count = state.events.filter(e => e.type === 'user/message' && e.data.source?.rpcId === 'read-write-check').length;
   await stop(); await start();
+  const afterSettingsRestart = await api('/settings/chat');
+  assert.equal(afterSettingsRestart.busy.value, 'steer', 'configuration is durable across host restart');
+  assert.notEqual(afterSettingsRestart.busy.revision, beforeSettingsRestart.busy.revision);
+  await rejected('/settings/chat', { key: 'busy', value: 'queue', revision: beforeSettingsRestart.busy.revision }, 409, 'PUT');
+  await configure('busy', 'queue');
   state = await snapshot(); assert.equal(state.active, false);
   assert.deepEqual(state.statistics[0], originalMetrics[0], 'native snapshots survive host restart');
   assert.deepEqual((await compactSnapshot()).statistics.slice(0, 3), beforeCompact.statistics);
@@ -324,7 +356,20 @@ try {
   const permissionModes = ['read-only', 'workspace-write', 'danger-full-access'];
   assert.deepEqual((await api('/status')).permissions.options, permissionModes);
   await rejected('/conversations', { permission: 'invented' }, 400);
-  const restricted = await api('/conversations', { permission: 'read-only' });
+  const existingPermission = (await snapshot()).permissions.current;
+  await configure('permission', 'read-only');
+  assert.equal((await api('/status')).permissions.current, 'read-only');
+  assert.equal((await snapshot()).permissions.current, existingPermission, 'default edits must not alter existing conversations');
+  const restricted = await api('/conversations', {});
+  for (const agent_id of ['finance', 'health']) {
+    const child = await api('/conversations', { agent_id });
+    assert.equal((await api(`/conversations/${child.id}/dsh`)).permissions.current, 'read-only');
+  }
+  const explicit = await api('/conversations', { permission: 'workspace-write' });
+  assert.equal((await api(`/conversations/${explicit.id}/dsh`)).permissions.current, 'workspace-write');
+  await stop(); await start();
+  assert.equal((await api('/settings/chat')).permission.value, 'read-only');
+  await configure('permission', initialSettings.permission.value);
   const pp = `/conversations/${restricted.id}`;
   const permissionState = () => api(`${pp}/dsh`);
   const choosePermission = async permission => api(`${pp}/dsh/permissions`, { permission,

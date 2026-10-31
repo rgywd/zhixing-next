@@ -256,6 +256,7 @@ function welcomeSendHarness({ failModel = false, post, saveDraft, consumeText, s
   }
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./chatPreferences"] = { ChatPreferencesProvider: "ChatPreferencesProvider" };
+  dependencies["./useDshSettings"] = { useDshSettings: () => ({ snapshot: null, refresh() {}, select() {} }) };
   dependencies["./useHealthReminders"] = { useHealthReminders() {} };
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
   dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };

@@ -64,6 +64,7 @@ function appHarness({ connected = true, modelPage = { items: [], roles: { chat: 
   };
   for (const name of ["ThemeProvider", "AppearanceControl", "AgentChatHeader", "ConversationMenu", "Notice", "ChatPanel", "BottomSheet", "DshChatPanel", "AiHome", "AiDrawer", "FinanceDashboard", "HealthPage", "LifeSummary", "LifePanel", "ConstructionPage", "ResourcesPanel", "ModelsPanel", "ProvidersPanel", "ResourcePreview", "OverviewPanels", "SettingsPanel", "SettingsHome", "PasswordVaultPanel", "ChatSettingsPanel", "SearchPicker", "AgentsPanel", "DeviceCapabilitiesPanel"]) dependencies[`./${name}`] = Object.fromEntries([name, "NoticeProvider", "HomePanel", "ConstructionPage", "ConnectionSettingsPanel", "PersonaSettingsPanel", "DshHostSettings"].map((key) => [key, key]));
   dependencies["./chatPreferences"] = { ChatPreferencesProvider: "ChatPreferencesProvider" };
+  dependencies["./useDshSettings"] = { useDshSettings: () => ({ snapshot: null, refresh() {}, select() {} }) };
   dependencies["./ThemeProvider"].useThemedStyles = (factory) => factory(theme.lightColors);
   dependencies["./TodayHomePanel"] = { TodayHomePanel: "HomePanel" };
   dependencies["./useTodayDeviceContext"] = { useTodayDeviceContext() { return {}; } };

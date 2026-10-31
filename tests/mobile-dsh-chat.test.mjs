@@ -123,6 +123,25 @@ test('permissions change only after native acknowledgement, survive refresh, and
   app.unmount();
 });
 
+test('DSH follows the host default, preserves explicit send choices across restart/retry, then resets for the next message', async () => {
+  const normal = harness(); normal.props.defaultBusyBehavior = 'steer'; normal.snapshot.running = true;
+  normal.render(); await settle(); normal.composer().onSend(); await settle();
+  assert.equal(Object.hasOwn(normal.calls.find(call => call.path.endsWith('/messages')).body, 'intent'), false);
+  normal.unmount();
+  const store = { draft: { text: 'override', pending: null } };
+  const first = harness({ store }); first.render(); await settle();
+  first.render().find(node => node.type === 'ActionLink' && node.props.children === '插话发送').props.onPress(); await settle();
+  assert.equal(store.draft.sendIntent, 'steer'); first.unmount();
+  const restored = harness({ store, post: async () => { throw new Error('lost reply'); } });
+  restored.snapshot.running = true; restored.render(); await settle(); restored.composer().onSend(); await settle();
+  assert.equal(store.draft.pending.intent, 'steer'); const id = store.draft.pending.id; restored.unmount();
+  const retry = harness({ store }); retry.props.defaultBusyBehavior = 'queue'; retry.render(); await settle();
+  retry.composer().onSend(); await settle();
+  assert.equal(retry.calls.find(call => call.path.endsWith('/messages')).body.intent, 'steer');
+  assert.equal(retry.calls.find(call => call.path.endsWith('/messages')).body.id, id);
+  assert.equal(store.draft.sendIntent, undefined); retry.unmount();
+});
+
 test('DSH attachment retries survive remount and send native receipts with the same request ID', async () => {
   const store = { draft: { text: 'photo', pending: null, files: [{ id: 'aaaa', name: 'photo.png', uri: 'file:///private/dsh-drafts/aaaa/attachment', mediaType: 'image/png' }] } };
   const first = harness({ store, post: async () => { throw new Error('lost reply'); } });

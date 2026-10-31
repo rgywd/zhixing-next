@@ -7,6 +7,7 @@ import { createRevisions } from './revisions.mjs';
 import { declaredFile, deliveryBytes } from './deliveries.mjs';
 import { businessPath } from './business/service.mjs';
 import { createMetrics, contextSnapshot } from './metrics.mjs';
+import { createChatSettings } from './settings.mjs';
 
 const page = items => ({ items, next_cursor: null, previous_cursor: null });
 const own = id => /^zhixing-(main|finance|health)-[a-f0-9-]+$/.test(id);
@@ -102,6 +103,7 @@ export async function startServer(ctx, config, native = {}) {
   const children = new Set([...native.metadata.revisions.entries()].flatMap(([, state]) => state.entries.map(entry => entry.child)));
   const owns = id => own(id) || children.has(id);
   const interactions = createInteractions(ctx, owns);
+  const chatSettings = createChatSettings(ctx);
   const metrics = createMetrics(ctx);
   const compactions = new Map();
   const nativeCompactions = new Set();
@@ -206,11 +208,12 @@ export async function startServer(ctx, config, native = {}) {
   };
   const send = (id, body) => {
     if (typeof body.id !== 'string' || !body.id) throw failure('消息缺少请求编号。');
+    if (body.intent !== undefined && !['queue', 'steer'].includes(body.intent)) throw failure('无效的发送方式。');
     // Serialize admission as well as using DSH's durable rpcId deduplication.
     const previous = sends.get(id) ?? Promise.resolve();
     const operation = previous.catch(() => {}).then(async () => {
       const result = await ctx.sessionController.prompt({ sessionId: id, requestId: body.id,
-        mode: body.intent === 'steer' ? 'steer' : 'queue',
+        mode: body.intent ?? chatSettings.busyBehavior(),
         content: body.parts ?? [{ type: 'text', text: body.content ?? '' }] }, signal());
       await flush(id);
       return result;
@@ -227,6 +230,11 @@ export async function startServer(ctx, config, native = {}) {
       const url = new URL(req.url, 'http://localhost');
       const path = url.pathname;
       const method = req.method;
+      if (method === 'GET' && path === '/v1/settings/chat') return reply(chatSettings.read());
+      if (method === 'PUT' && path === '/v1/settings/chat') {
+        const body = await json(req);
+        return reply(await serial('settings/chat', () => chatSettings.write(body)));
+      }
       if (method === 'GET' && path === '/v1/status') {
         const catalog = await ctx.sessionController.modelCatalog();
         return reply({ runtime: 'dsh', model_ready: catalog.routableProviders.includes(catalog.default.provider) && catalog.groups.some(g => g.id === catalog.default.provider && g.models.some(m => m.id === catalog.default.model)), worker_online: true,
