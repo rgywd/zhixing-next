@@ -23,8 +23,9 @@ function hooks() {
     useMemo(fn, deps) { const i = cursor++; if (changed(slots[i]?.deps, deps)) slots[i] = { deps, value: fn() }; return slots[i].value; },
   }, render(fn) { cursor = 0; effects = []; const result = fn(); effects.forEach(effect => effect()); return result; }, unmount() { slots.forEach(slot => slot?.cleanup?.()); } };
 }
-function harness({ store = { draft: { text: 'fix this', pending: null } }, post = async () => {}, clear = async () => {}, cacheValue = null } = {}) {
-  const lifecycle = hooks(), calls = [], uploads = [], removed = [], cache = [], shares = [], exports = {};
+function harness({ store = { draft: { text: 'fix this', pending: null } }, post = async () => {}, clear = async () => {}, cacheValue = null,
+  prepare, upload, save = async () => {}, pick = async () => ({ canceled: true }), keep } = {}) {
+  const lifecycle = hooks(), calls = [], uploads = [], removed = [], cache = [], shares = [], preparations = [], selections = [], exports = {};
   let uuid = 0, tick;
   const snapshot = { events: [], next: 0, hasMore: false, running: false, active: true, queue: [], pending: [], live: null };
   const report = () => {};
@@ -33,18 +34,21 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
     react: lifecycle.react, 'react/jsx-runtime': jsxRuntime,
     'react-native': { ...Object.fromEntries(['FlatList', 'Pressable', 'ScrollView', 'Text', 'TextInput', 'View'].map(n => [n, n])), Linking: {}, Keyboard: { dismiss() {} }, Share: { share: async value => shares.push(value) }, BackHandler: { addEventListener: () => ({ remove() {} }) }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) } },
     'expo-clipboard': { setStringAsync: async () => {} }, './Notice': { useNotice: () => ({ show() {} }) }, './theme': theme,
-    'expo-crypto': { randomUUID: () => `request-${++uuid}` }, 'expo-document-picker': {}, 'expo-image-picker': {},
-    'expo-file-system': { Paths: { document: 'file:///private/' }, Directory: class { constructor(...parts) { this.uri = parts.map(p => p.replace(/\/$/, '')).join('/'); this.exists = true; } delete() { removed.push(this.uri); } }, File: class { async bytes() { return new Uint8Array([1, 2]); } } },
-    'expo/fetch': { fetch: async (url, options) => { uploads.push({ url, options }); return { ok: true, json: async () => ({ receiptId: `upload-${uploads.length}` }) }; } },
+    'expo-crypto': { randomUUID: () => `request-${++uuid}` }, 'expo-document-picker': {},
+    'expo-image-picker': { UIImagePickerPreferredAssetRepresentationMode: { Compatible: 'compatible' }, launchImageLibraryAsync: async options => { selections.push(options); return pick(); } },
+    'expo-file-system': { Paths: { document: 'file:///private/' }, Directory: class { constructor(...parts) { this.uri = parts.map(p => p.replace(/\/$/, '')).join('/'); this.exists = true; } delete() { removed.push(this.uri); } }, File: class { constructor(uri) { this.uri = uri; } async bytes() { return new Uint8Array(this.uri.includes('prepared') ? [3, 4] : [1, 2]); } } },
+    'expo/fetch': { fetch: async (url, options) => { uploads.push({ url, options }); return await upload?.(url, options) ?? { ok: true, json: async () => ({ receiptId: `upload-${uploads.length}` }) }; } },
     './api': { request: async (_connection, path, options) => {
       calls.push({ path, ...options });
       if (path.includes('/dsh?')) return plain(snapshot);
       return await post(path, options) ?? {};
     } },
-    './storage': { draftKey: () => 'draft', readDraft: async () => plain(store.draft), saveDraft: async (_key, value) => { store.draft = plain(value); },
+    './storage': { draftKey: () => 'draft', readDraft: async () => plain(store.draft), saveDraft: async (_key, value) => { await save(value); store.draft = plain(value); },
       clearDraft: async (_key, id) => { await clear(id); if (store.draft.pending?.id === id) store.draft = { text: '', pending: null }; } },
     './localCache': { readCache: async () => plain(cacheValue), writeCache: async (_connection, _key, value) => cache.push(plain(value)) },
-    './ConnectionStatus': { useSyncStatus: () => report }, './dshProtocol': protocol, './chatPhotos': { discardDraftPhotos() {} },
+    './ConnectionStatus': { useSyncStatus: () => report }, './dshProtocol': protocol,
+    './chatPhotos': { discardDraftPhotos: photos => removed.push(...photos.map(p => p.uri)), keepDraftPhoto: keep ?? (async (asset, id) => ({ id, uri: `file:///private/chat-photos/${id}/original.jpg`, name: asset.fileName, width: asset.width, height: asset.height })) },
+    './photoOptimization': { preparePhotoCopy: async file => { preparations.push(plain(file)); return await prepare?.(file) ?? { uri: file.uri, name: file.name, size: 2 }; } },
     './conversationFiles': conversationFiles, './dshMetrics': metrics,
     './ChatMetrics': { ChatMetricBox: 'ChatMetricBox', ContextRing: 'ContextRing', TurnMetrics: 'TurnMetrics' },
     './ui': { useUi: () => ({ s: {}, colors: {} }), humanError: e => e.message, ActionLink: 'ActionLink', Button: 'Button', IconAction: 'IconAction' },
@@ -58,8 +62,69 @@ function harness({ store = { draft: { text: 'fix this', pending: null } }, post 
   } });
   const props = { connection: { url: 'https://example.test', token: 'test' }, conversation: { id: 'zhixing-main-aaaa', model_id: null }, assistantName: '知行', catalog: null, onRefresh() {}, onConversationChanged() {} };
   const render = () => walk(lifecycle.render(() => exports.DshChatPanel(props)));
-  return { render, props, store, calls, uploads, removed, cache, shares, snapshot, tick: () => tick(), composer: () => render().find(n => n.type === 'ConversationComposer').props, unmount: lifecycle.unmount };
+  return { render, props, store, calls, uploads, removed, cache, shares, preparations, selections, snapshot, tick: () => tick(), composer: () => render().find(n => n.type === 'ConversationComposer').props, unmount: lifecycle.unmount };
 }
+
+test('DSH photo selection retains original dimensions and waits until sending to optimize', async () => {
+  const app = harness({ pick: async () => ({ canceled: false, assets: [{ uri: 'file:///album/photo.jpg', fileName: 'IMG.jpg', width: 6000, height: 4000 }] }) });
+  app.render(); await settle(); await app.composer().onPhotos(); await settle();
+  assert.equal(app.store.draft.photos[0].width, 6000); assert.equal(app.store.draft.photos[0].height, 4000);
+  assert.equal(app.preparations.length, 0); assert.equal(app.uploads.length, 0);
+  assert.equal(app.selections[0].quality, 1); assert.equal(app.selections[0].allowsEditing, false);
+  app.unmount();
+});
+
+test('DSH persists optimized bytes before PUT, retries after restart without re-encoding, and skips acknowledged photos', async () => {
+  const store = { draft: { text: 'two photos', pending: null, photos: [1, 2].map(id => ({ id: String(id), name: 'screen.png', uri: `file:///private/chat-photos/${id}/original.png`, width: 1440, height: 3200 })) } };
+  const first = harness({ store, prepare: async file => ({ uri: file.uri.replace('original.png', 'prepared.webp'), name: 'screen.webp', size: 2 }),
+    upload: async url => { assert.ok(store.draft.photos.every(p => p.id !== String(first.uploads.length) || p.prepared)); if (first.uploads.length === 2) throw new Error('network failed'); } });
+  first.render(); await settle(); await first.composer().onSend(); await settle();
+  assert.equal(first.uploads.length, 2); assert.equal(first.preparations.length, 2);
+  assert.equal(first.calls.some(call => call.path.endsWith('/messages')), false);
+  assert.match(first.uploads[0].url, /name=screen.webp&mediaType=image%2Fwebp/);
+  assert.deepEqual([...first.uploads[1].options.body], [3, 4]);
+  const id = store.draft.pending.id; first.unmount();
+  const restored = harness({ store }); restored.render(); await settle(); await restored.composer().onSend(); await settle();
+  assert.equal(restored.preparations.length, 0); assert.equal(restored.uploads.length, 1);
+  assert.equal(restored.uploads[0].url, first.uploads[1].url); assert.deepEqual([...restored.uploads[0].options.body], [3, 4]);
+  const sent = restored.calls.find(call => call.path.endsWith('/messages'));
+  assert.equal(sent.body.id, id); assert.equal(sent.body.parts.length, 3); assert.equal(store.draft.pending, null);
+  restored.unmount();
+});
+
+test('ordinary file images remain original, while extensionless photo drafts from the prior version are optimized', async () => {
+  const store = { draft: { text: '', pending: null, files: [
+    { id: 'a', uri: 'file:///private/dsh-drafts/a/attachment', name: 'original.png', mediaType: 'image/png', original: true },
+    { id: 'b', uri: 'file:///private/dsh-drafts/b/attachment', name: 'old.png', mediaType: 'image/png' },
+  ] } };
+  const app = harness({ store, prepare: async file => ({ uri: file.uri + '/prepared.webp', name: 'old.webp', size: 2 }) });
+  app.render(); await settle(); await app.composer().onSend(); await settle();
+  assert.equal(app.preparations.length, 1); assert.equal(app.preparations[0].id, 'b');
+  assert.deepEqual([...app.uploads[0].options.body], [1, 2]); assert.deepEqual([...app.uploads[1].options.body], [3, 4]); app.unmount();
+});
+
+test('a failed prepared-draft save stops PUT; retry persists the same preparation before sending', async () => {
+  let fail = true;
+  const app = harness({ store: { draft: { text: '', pending: null, photos: [{ id: 'p', uri: 'original.jpg', name: 'IMG.jpg', width: 4000, height: 3000 }] } },
+    prepare: async () => ({ uri: 'prepared.jpg', name: 'IMG.jpg', size: 2 }),
+    save: async value => { if (value.photos?.[0].prepared && fail) { fail = false; throw new Error('disk busy'); } } });
+  app.render(); await settle(); await app.composer().onSend(); await settle();
+  assert.equal(app.uploads.length, 0); assert.equal(app.preparations.length, 1);
+  await app.composer().onSend(); await settle(); assert.equal(app.preparations.length, 1); assert.equal(app.uploads.length, 1); app.unmount();
+});
+
+test('leaving during photo preparation stops transmission and leaving during PUT aborts it', async () => {
+  let finish;
+  const store = { draft: { text: '', pending: null, photos: [{ id: 'p', uri: 'original.jpg', name: 'IMG.jpg', width: 4000, height: 3000 }] } };
+  const app = harness({ store, prepare: () => new Promise(resolve => { finish = resolve; }) });
+  app.render(); await settle(); const sending = app.composer().onSend(); await settle(); app.unmount();
+  finish({ uri: 'prepared.jpg', name: 'IMG.jpg', size: 2 }); await sending; await settle(); assert.equal(app.uploads.length, 0);
+  const restored = harness({ store, upload: () => new Promise(resolve => { finish = resolve; }) });
+  restored.render(); await settle(); const retry = restored.composer().onSend(); await settle(); restored.unmount();
+  assert.equal(restored.uploads[0].options.signal.aborted, true);
+  finish({ ok: true, json: async () => ({ receiptId: 'late' }) }); await retry; await settle();
+  assert.equal(restored.calls.some(call => call.path.endsWith('/messages')), false); assert.equal(store.draft.receipts, undefined);
+});
 
 test('private variable writes use their dedicated version-bound endpoint and never become chat messages, cached events or drafts', async () => {
   const app = harness();
