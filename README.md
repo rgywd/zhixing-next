@@ -8,7 +8,7 @@
 
 手机入口为“首页、生活、知行、施工中、设置”。生活页保留账本、预算、饮食、体重、身体限制与本机健康提醒；同一餐的明确付款和实际饮食可以一起保存、纠正。金额使用十进制计算，不确定日期和未提供的健康事实保持未知。本机密码库、设备权限和只读日历保持独立，不把密码交给 AI。
 
-本版为 **[0.2.12](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.12)**，整理对话页头与内联菜单，接入三种 DSH 权限及私密变量填写卡，沿用原签名覆盖升级。安装和验证边界见 [发布说明](docs/RELEASE-0.2.12.md)；正式产物以对应 Release 的回执为准。Python 源码保留用于历史参考、一次性迁移和回滚，不再作为新版本运行时依赖。
+本版为 **[0.2.13](https://github.com/rgywd/zhixing-next/releases/tag/v0.2.13)**，加入 DSH 对话设置与 24 小时缓存、照片传输优化、上下文及会话统计，整合 TG 陪伴与跨会话记忆。沿用原签名覆盖升级，安装与验证边界见 [发布说明](docs/RELEASE-0.2.13.md)；正式产物以对应 Release 的回执为准。Python 源码保留用于历史参考、一次性迁移和回滚，不再作为新版本运行时依赖。
 
 手机缓存只用于离线阅读及未发送草稿恢复，不成为另一份业务数据或资料库。服务器模型密钥不进入 App。Android 模拟器、正式签名包、实体手机与 iOS 验证分别记录。
 
@@ -21,6 +21,8 @@
 ```sh
 npm ci
 npm ci --prefix plugins/dsh-zhixing
+npm ci --prefix plugins/dsh-messenger-persona
+npm ci --prefix plugins/dsh-tg-companion
 npm start
 ```
 

@@ -34,7 +34,10 @@ jobs:
           enable-cache: true
       - run: npm ci
       - name: Install locked DSH plugin dependencies
-        run: npm ci --prefix plugins/dsh-zhixing
+        run: |
+          npm ci --prefix plugins/dsh-zhixing
+          npm ci --prefix plugins/dsh-messenger-persona
+          npm ci --prefix plugins/dsh-tg-companion
       - run: npm run typecheck
       - run: npm run lint
       - run: npm run test:mobile
