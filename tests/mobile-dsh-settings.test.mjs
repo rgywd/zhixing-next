@@ -17,32 +17,34 @@ const settings = (mode = 'queue', revision = 'host:0') => ({ writable: true,
   busy: { value: mode, options: ['queue', 'steer'], revision } });
 const deferred = () => { let resolve, reject; const promise = new Promise((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; };
 const settle = () => new Promise(resolve => setImmediate(resolve));
-function load(file, dependencies) {
+function load(file, dependencies, globals = {}) {
   const exports = {};
   runInNewContext(ts.transpileModule(readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX },
-  }).outputText, { exports, Date, Error, require: name => { assert.ok(name in dependencies, name); return dependencies[name]; } });
+  }).outputText, { exports, Date, Error, ...globals, require: name => { assert.ok(name in dependencies, name); return dependencies[name]; } });
   return exports;
 }
-function harness({ cache = cacheHarness(), read = async () => settings(), write = async () => settings('steer', 'host:1') } = {}) {
+function harness({ cache = cacheHarness(), read = async () => settings(), write = async () => settings('steer', 'host:1'), clock = Date } = {}) {
   const calls = [];
   const api = { request: async (target, path, options) => {
     calls.push({ target, path, ...options });
     return options?.method === 'PUT' ? write(options.body) : read();
   } };
-  const exported = load('dshSettings.ts', { './api': api, './localCache': cache });
+  const exported = load('dshSettings.ts', { './api': api, './localCache': cache }, { Date: clock });
   const create = (target = connection) => exported.createDshSettingsStore(target);
   return { ...exported, cache, calls, create, store: create() };
 }
 
-test('fresh persistent settings restore after process restart without fetching, then expire and revalidate', async t => {
+test('twelve-hour settings restore after restart without fetching, then revalidate after one day', async t => {
   const root = mkdtempSync(join(tmpdir(), 'settings-cache-')); t.after(() => rmSync(root, { recursive: true, force: true }));
   const filename = join(root, 'cache.db'), first = harness({ cache: cacheHarness(filename) });
-  await first.store.refresh(); first.cache.close();
+  await first.store.refresh();
+  await first.cache.writeCache(connection, first.settingsCacheKey, { settings: settings(), checkedAt: Date.now() - 12 * 60 * 60 * 1000 });
+  first.cache.close();
   const second = harness({ cache: cacheHarness(filename) }); t.after(() => second.cache.close());
   await second.store.refresh(); await second.store.refresh();
   assert.equal(second.calls.length, 0); assert.equal(second.store.getSnapshot().snapshot.settings.busy.value, 'queue');
-  await second.cache.writeCache(connection, second.settingsCacheKey, { settings: settings(), checkedAt: Date.now() - second.settingsMaxAge - 1 });
+  await second.cache.writeCache(connection, second.settingsCacheKey, { settings: settings(), checkedAt: Date.now() - 24 * 60 * 60 * 1000 - 1 });
   const expired = second.create(); await expired.refresh();
   assert.equal(second.calls.length, 1); assert.ok(expired.getSnapshot().snapshot.checkedAt > Date.now() - 1000);
 });
@@ -142,4 +144,42 @@ test('settings panel shows cloud options, inline errors, unavailable and disconn
   controller.saving = 'busy'; nodes = walk(ChatSettingsPanel({ controller }));
   assert.ok(nodes.filter(n => n.props.accessibilityRole === 'radio').every(n => n.props.disabled));
   assert.equal(walk(ChatSettingsPanel({})).filter(n => n.props.accessibilityRole === 'radio').length, 0);
+});
+
+test('refreshes expired settings on opening or foregrounding without polling; saves and manual refresh take effect immediately', async t => {
+  const day = 24 * 60 * 60 * 1000; let now = Date.now();
+  class Clock extends Date { static now() { return now; } }
+  let cloud = settings();
+  const app = harness({ clock: Clock, read: () => cloud, write: () => (cloud = settings('steer', 'host:1')) });
+  t.after(() => app.cache.close());
+  const slots = [], listeners = new Set(); let cursor = 0, effects = [];
+  const changed = (a, b) => !a || b.some((v, i) => v !== a[i]);
+  const react = {
+    useState(initial) { const i = cursor++; if (!(i in slots)) slots[i] = typeof initial === 'function' ? initial() : initial; return [slots[i], value => { slots[i] = value; }]; },
+    useMemo(fn, deps) { const i = cursor++; if (changed(slots[i]?.deps, deps)) slots[i] = { deps, value: fn() }; return slots[i].value; },
+    useEffect(fn, deps) { const i = cursor++, old = slots[i]; if (changed(old?.deps, deps)) { slots[i] = { deps }; effects.push(() => { old?.cleanup?.(); slots[i].cleanup = fn(); }); } },
+  };
+  const { useDshSettings } = load('useDshSettings.ts', { react, './dshSettings': app,
+    'react-native': { AppState: { currentState: 'active', addEventListener: (_type, fn) => { listeners.add(fn); return { remove: () => listeners.delete(fn) }; } } },
+  }, { setInterval: () => assert.fail('settings must not schedule polling') });
+  function SettingsProbe({ open }) { return useDshSettings(connection, open); }
+  const render = (open = false) => { cursor = 0; effects = []; const value = SettingsProbe({ open }); effects.forEach(fn => fn()); return value; };
+  t.after(() => slots.forEach(slot => slot?.cleanup?.()));
+  render(); await settle(); await settle(); assert.equal(app.calls.length, 1);
+  now += 12 * 60 * 60 * 1000;
+  render(true); listeners.forEach(fn => fn('active')); await settle(); assert.equal(app.calls.length, 1);
+  await render(true).select('busy', 'steer');
+  assert.equal(render(true).snapshot.settings.busy.value, 'steer');
+  assert.equal(render(true).snapshot.checkedAt, now);
+  now += 13 * 60 * 60 * 1000; render(false); render(true); await settle();
+  assert.equal(app.calls.filter(call => call.method !== 'PUT').length, 1, 'saving renews the full day');
+  now += 12 * 60 * 60 * 1000;
+  render(false); render(true); await settle(); await settle();
+  assert.equal(app.calls.filter(call => call.method !== 'PUT').length, 2, 'opening after expiry refreshes');
+  now += day; listeners.forEach(fn => fn('background')); await settle();
+  assert.equal(app.calls.filter(call => call.method !== 'PUT').length, 2);
+  listeners.forEach(fn => fn('active')); await settle(); await settle();
+  assert.equal(app.calls.filter(call => call.method !== 'PUT').length, 3);
+  cloud = settings('queue', 'host:2'); await render(true).refresh(true);
+  assert.equal(render(true).snapshot.settings.busy.value, 'queue', 'manual refresh bypasses a fresh cache');
 });

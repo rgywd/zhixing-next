@@ -239,7 +239,7 @@ function ConnectedSession({
   const [settingsView, setSettingsView] = useState<"overview" | SettingsDestination>("overview");
   const navigation = useRef(0);
   const home = useHomePreferences(connection.url);
-  const dshSettings = useDshSettings(connection);
+  const dshSettings = useDshSettings(connection, tab === "settings" && settingsView === "chat");
   const { assistant, status, lastSyncFailed, conversations, setConversations, removeConversation, agents, catalog,
      selectedId, setSelectedId, selectedRef, conversationCursor, setConversationCursor, loading, refresh, alive } = useSessionData(connection);
   const [focusMessage, setFocusMessage] = useState<{ conversationId: string; seq: number; version?: string } | null>(null);

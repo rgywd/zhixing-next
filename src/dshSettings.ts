@@ -7,7 +7,7 @@ export type DshSettingKey = "permission" | "busy";
 type Snapshot = { settings: DshChatSettings; checkedAt: number };
 export type DshSettingsState = { snapshot: Snapshot | null; loading: boolean; saving: DshSettingKey | null; error: string; cacheWarning: string };
 export const settingsCacheKey = "dsh:chat-settings:v1";
-export const settingsMaxAge = 60_000;
+export const settingsMaxAge = 24 * 60 * 60 * 1000;
 
 export function validDshChatSettings(value: unknown): value is DshChatSettings {
   if (!value || typeof value !== "object") return false;
