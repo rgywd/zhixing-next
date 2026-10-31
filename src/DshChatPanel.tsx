@@ -38,7 +38,7 @@ import { ChatMetricBox, ContextRing, TurnMetrics, type MetricPopup } from "./Cha
 import { mergeTurnMetrics, type DshTurnMetrics } from "./dshMetrics";
 
 type LocalFile = { id: string; uri: string; name: string; mediaType?: string; original?: boolean; prepared?: PreparedPhoto };
-type DshDraft = Draft & { revision?: MessageRevision; sendVersion?: string; files?: LocalFile[]; receipts?: Record<string, string> };
+type DshDraft = Draft & { revision?: MessageRevision; sendVersion?: string; sendIntent?: "queue" | "steer"; files?: LocalFile[]; receipts?: Record<string, string> };
 type DshCache = { historyId: string; events: DshEvent[]; statistics?: DshTurnMetrics[] } & Pick<DshSnapshot, "history" | "context">;
 const imageType = (uri: string, name: string) => {
   const suffix = (uri.match(/\.([a-z]+)(?:[?#]|$)/i)?.[1] ?? name.split(".").at(-1) ?? "jpeg").toLowerCase();
@@ -153,7 +153,7 @@ export function DshHostSettings({ webUrl }: { webUrl?: string | null }) {
 export function DshChatPanel({ connection, conversation, assistantName, catalog, onRefresh, onConversationChanged,
   startWithFiles, onFilesOpened, startWithSend, onSendStarted, settingsOpen, onSettingsClose, filesOpen, onFilesClose, onFilesOpen,
   focusMessageSeq, focusMessageVersion, onFocusHandled,
-  menuAction, onMessageOptions,
+  menuAction, onMessageOptions, defaultBusyBehavior,
 }: {
   connection: Connection; conversation: Conversation; assistantName: string; catalog: ModelCatalog | null;
   onRefresh: () => void; onConversationChanged: (conversation: Conversation) => void;
@@ -162,6 +162,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   focusMessageSeq?: number | null; onFocusHandled?: (seq: number) => void;
   focusMessageVersion?: string;
   menuAction?: { id: number; type: "share" | "search" }; onMessageOptions?: () => void;
+  defaultBusyBehavior?: string;
 }) {
   const { s, colors } = useUi();
   const notice = useNotice();
@@ -205,7 +206,6 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
   const [reasoning, setReasoning] = useState(false);
   const [permissionOpen, setPermissionOpen] = useState(false);
   const permissionRevision = useRef(0);
-  const [intent, setIntent] = useState<"queue" | "steer">("queue");
   const list = useRef<FlatList<DshChatRow>>(null);
   const contentHeight = useRef(0);
   const nearBottom = useRef(focusMessageSeq == null);
@@ -369,7 +369,10 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     const check = () => { if (controller.signal.aborted) throw new Error("照片发送已中断，草稿已保留。"); };
     try {
       const current = draftRef.current;
-      const pending = current.pending ?? { id: Crypto.randomUUID(), content: current.text, kind: "chat" as const, intent: snapshot?.running ? intent : "queue" };
+      // Omission follows the live host default, including changes made on another device.
+      // A per-message override and an unconfirmed request survive retries/restarts.
+      const pending = current.pending ?? { id: Crypto.randomUUID(), content: current.text, kind: "chat" as const,
+        ...(current.sendIntent ? { intent: current.sendIntent } : {}) };
       const sendVersion = current.sendVersion ?? snapshot?.history?.active ?? conversation.id;
       await update({ ...current, pending, sendVersion });
       const parts: ({ type: "text"; text: string } | { type: "file"; receiptId: string })[] = pending.content.trim() ? [{ type: "text", text: pending.content }] : [];
@@ -677,8 +680,11 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     <BottomSheet visible={!!settingsOpen} title="发送方式" onClose={() => onSettingsClose?.()}>
       <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.content}>
         <Text style={s.label}>这条消息的发送方式</Text>
-        <ActionLink disabled={busy || !!draft.pending} onPress={() => setIntent(intent === "queue" ? "steer" : "queue")}>{intent === "queue" ? "接着处理" : "补充当前回复"}</ActionLink>
-        <Text style={s.description}>{intent === "queue" ? "当前回复完成后，按顺序处理新消息。" : "执行过程中加入新要求；空闲时直接开始回复。"}</Text>
+        {([{ value: undefined, label: `跟随云端默认${defaultBusyBehavior === "queue" ? " · 排队发送" : defaultBusyBehavior === "steer" ? " · 插话发送" : ""}` },
+          { value: "queue" as const, label: "排队发送" }, { value: "steer" as const, label: "插话发送" }]).map(option =>
+          <ActionLink key={option.value ?? "default"} disabled={!ready || busy || !!draft.pending} icon={draft.sendIntent === option.value ? "checkmark-circle" : "ellipse-outline"}
+            onPress={() => { void update({ ...draftRef.current, sendIntent: option.value }).catch(e => setError(humanError(e))); }}>{option.label}</ActionLink>)}
+        <Text style={s.description}>排队会等待当前回复完成；插话会在执行过程中加入新要求。仅对这条消息生效。</Text>
         {snapshot?.running ? <ActionLink disabled={busy} onPress={() => { void action("/dsh/cancel"); }}>停止回复</ActionLink> : null}
         <ActionLink icon="git-branch-outline" onPress={() => { onSettingsClose?.(); setRevisionError(""); setVersionsOpen(true); }}>查看对话版本</ActionLink>
         <ActionLink icon="receipt-outline" onPress={() => { onSettingsClose?.(); setRecords("all"); }}>查看完整处理记录</ActionLink>

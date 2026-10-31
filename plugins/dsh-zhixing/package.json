@@ -12,6 +12,7 @@
     "storage.mjs",
     "environment.mjs",
     "metrics.mjs",
+    "settings.mjs",
     "business",
     "cordis.patch.yml",
     "README.md"

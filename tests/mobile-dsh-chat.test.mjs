@@ -75,7 +75,7 @@ test('DSH photo selection retains original dimensions and waits until sending to
 });
 
 test('DSH persists optimized bytes before PUT, retries after restart without re-encoding, and skips acknowledged photos', async () => {
-  const store = { draft: { text: 'two photos', pending: null, photos: [1, 2].map(id => ({ id: String(id), name: 'screen.png', uri: `file:///private/chat-photos/${id}/original.png`, width: 1440, height: 3200 })) } };
+  const store = { draft: { text: 'two photos', pending: null, sendIntent: 'steer', photos: [1, 2].map(id => ({ id: String(id), name: 'screen.png', uri: `file:///private/chat-photos/${id}/original.png`, width: 1440, height: 3200 })) } };
   const first = harness({ store, prepare: async file => ({ uri: file.uri.replace('original.png', 'prepared.webp'), name: 'screen.webp', size: 2 }),
     upload: async url => { assert.ok(store.draft.photos.every(p => p.id !== String(first.uploads.length) || p.prepared)); if (first.uploads.length === 2) throw new Error('network failed'); } });
   first.render(); await settle(); await first.composer().onSend(); await settle();
@@ -88,7 +88,8 @@ test('DSH persists optimized bytes before PUT, retries after restart without re-
   assert.equal(restored.preparations.length, 0); assert.equal(restored.uploads.length, 1);
   assert.equal(restored.uploads[0].url, first.uploads[1].url); assert.deepEqual([...restored.uploads[0].options.body], [3, 4]);
   const sent = restored.calls.find(call => call.path.endsWith('/messages'));
-  assert.equal(sent.body.id, id); assert.equal(sent.body.parts.length, 3); assert.equal(store.draft.pending, null);
+  assert.equal(sent.body.id, id); assert.equal(sent.body.intent, 'steer'); assert.equal(sent.body.parts.length, 3);
+  assert.equal(store.draft.pending, null); assert.equal(store.draft.sendIntent, undefined);
   restored.unmount();
 });
 
@@ -186,6 +187,25 @@ test('permissions change only after native acknowledgement, survive refresh, and
   app.snapshot.permissions = null; app.tick(); await settle();
   assert.equal(app.composer().permission, undefined); assert.equal(app.composer().permissionLocked, true);
   app.unmount();
+});
+
+test('DSH follows the host default, preserves explicit send choices across restart/retry, then resets for the next message', async () => {
+  const normal = harness(); normal.props.defaultBusyBehavior = 'steer'; normal.snapshot.running = true;
+  normal.render(); await settle(); normal.composer().onSend(); await settle();
+  assert.equal(Object.hasOwn(normal.calls.find(call => call.path.endsWith('/messages')).body, 'intent'), false);
+  normal.unmount();
+  const store = { draft: { text: 'override', pending: null } };
+  const first = harness({ store }); first.render(); await settle();
+  first.render().find(node => node.type === 'ActionLink' && node.props.children === '插话发送').props.onPress(); await settle();
+  assert.equal(store.draft.sendIntent, 'steer'); first.unmount();
+  const restored = harness({ store, post: async () => { throw new Error('lost reply'); } });
+  restored.snapshot.running = true; restored.render(); await settle(); restored.composer().onSend(); await settle();
+  assert.equal(store.draft.pending.intent, 'steer'); const id = store.draft.pending.id; restored.unmount();
+  const retry = harness({ store }); retry.props.defaultBusyBehavior = 'queue'; retry.render(); await settle();
+  retry.composer().onSend(); await settle();
+  assert.equal(retry.calls.find(call => call.path.endsWith('/messages')).body.intent, 'steer');
+  assert.equal(retry.calls.find(call => call.path.endsWith('/messages')).body.id, id);
+  assert.equal(store.draft.sendIntent, undefined); retry.unmount();
 });
 
 test('DSH attachment retries survive remount and send native receipts with the same request ID', async () => {

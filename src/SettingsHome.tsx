@@ -11,7 +11,7 @@ export function SettingsHome({ connectionUrl, onOpen }: {
   return <PageScrollView tabs>
     <PageHero eyebrow="SETTINGS" title="设置" description="把知行调成你习惯的样子。" />
     <SettingsGroup title="通用"><AppearanceControl row />
-      <ActionRow icon="chatbubbles-outline" title="对话设置" description="回复中的消息发送方式" tone="gold" compact onPress={() => onOpen("chat")} />
+      <ActionRow icon="chatbubbles-outline" title="对话设置" description="默认权限与繁忙时的发送行为" tone="gold" compact onPress={() => onOpen("chat")} />
       <ActionRow icon="phone-portrait-outline" title="手机能力" description="通知、系统日历与一次定位" tone="blue" compact last onPress={() => onOpen("device")} />
     </SettingsGroup>
     <SettingsGroup title="工具箱">
