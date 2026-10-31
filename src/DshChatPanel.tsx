@@ -8,7 +8,7 @@ import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
 import { Directory, File, Paths } from "expo-file-system";
 import { fetch as expoFetch } from "expo/fetch";
-import { request, type Connection, type Conversation, type Draft, type ModelCatalog, type ReasoningEffort } from "./api";
+import { request, type Connection, type Conversation, type Draft, type DraftPhoto, type ModelCatalog, type ReasoningEffort } from "./api";
 import { clearDraft, draftKey, readDraft, saveDraft } from "./storage";
 import { readCache, writeCache } from "./localCache";
 import { ActionLink, Button, IconAction, humanError, useUi } from "./ui";
@@ -20,7 +20,8 @@ import { ReasoningPicker } from "./ReasoningPicker";
 import { chatRows, contentText, eventPresentation, rowText, rowHasMessage, revisionSeq, deliveredFileForLink, messageVersions, dshFilePath, mergeDshEvents, type DshAttachment, type DshChatRow, type DshEvent, type DshPending, type DshSnapshot } from "./dshProtocol";
 import { useSyncStatus } from "./ConnectionStatus";
 import { DraftAttachments, MessagePhotos } from "./PhotoAttachments";
-import { discardDraftPhotos } from "./chatPhotos";
+import { discardDraftPhotos, keepDraftPhoto } from "./chatPhotos";
+import { preparePhotoCopy, type PreparedPhoto } from "./photoOptimization";
 import { ReplyContent } from "./ReplyContent";
 import { useNotice } from "./Notice";
 import { layout, radius, space } from "./theme";
@@ -36,7 +37,7 @@ import { PrivateVariablesCard, type PrivateVariableSubmission } from "./PrivateV
 import { ChatMetricBox, ContextRing, TurnMetrics, type MetricPopup } from "./ChatMetrics";
 import { mergeTurnMetrics, type DshTurnMetrics } from "./dshMetrics";
 
-type LocalFile = { id: string; uri: string; name: string; mediaType?: string };
+type LocalFile = { id: string; uri: string; name: string; mediaType?: string; original?: boolean; prepared?: PreparedPhoto };
 type DshDraft = Draft & { revision?: MessageRevision; sendVersion?: string; sendIntent?: "queue" | "steer"; files?: LocalFile[]; receipts?: Record<string, string> };
 type DshCache = { historyId: string; events: DshEvent[]; statistics?: DshTurnMetrics[] } & Pick<DshSnapshot, "history" | "context">;
 const imageType = (uri: string, name: string) => {
@@ -224,6 +225,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
     if (!target.editing) handled.current?.(target.seq);
   }, []);
   const alive = useRef(true);
+  const uploadAbort = useRef<AbortController | null>(null);
   const working = useRef(false);
   const refreshRef = useRef<() => void>(() => {});
   const refresh = useCallback(() => refreshRef.current(), []);
@@ -262,7 +264,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       if (saved.revision?.kind === "edit") nearBottom.current = false;
       draftRef.current = saved; setDraft(saved); setReady(true); setError("");
     } }).catch(e => { if (alive.current) setError(humanError(e)); });
-    return () => { alive.current = false; };
+    return () => { alive.current = false; uploadAbort.current?.abort(); };
   }, [key, draftAttempt]);
   useEffect(() => {
     let active = true, polling = false, cursor = 0, wasRunning = false;
@@ -337,7 +339,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         const id = Crypto.randomUUID();
         const dir = new Directory(Paths.document, "dsh-drafts", id); dir.create({ intermediates: true, idempotent: true });
         const local = new File(dir, "attachment"); await new File(asset.uri).copy(local);
-        added.push({ id, uri: local.uri, name: asset.name, mediaType: asset.mimeType });
+        added.push({ id, uri: local.uri, name: asset.name, mediaType: asset.mimeType, original: true });
       }
       await update({ ...draftRef.current, files: [...(draftRef.current.files ?? []), ...added] });
     } catch (e) { if (alive.current) setError(humanError(e)); }
@@ -351,20 +353,20 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
         orderedSelection: true, allowsEditing: false, quality: 1,
         preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible });
       if (picked.canceled || !alive.current) return;
-      const added: LocalFile[] = [];
+      const added: DraftPhoto[] = [];
       for (const asset of picked.assets) {
-        const id = Crypto.randomUUID();
-        const dir = new Directory(Paths.document, "dsh-drafts", id); dir.create({ intermediates: true, idempotent: true });
-        const local = new File(dir, "attachment"); await new File(asset.uri).copy(local);
-        added.push({ id, uri: local.uri, name: asset.fileName ?? "photo.jpg", mediaType: asset.mimeType ?? "image/jpeg" });
+        added.push(await keepDraftPhoto(asset, Crypto.randomUUID()));
       }
-      await update({ ...draftRef.current, files: [...(draftRef.current.files ?? []), ...added] });
+      if (!alive.current) { discardDraftPhotos(added); return; }
+      await update({ ...draftRef.current, photos: [...(draftRef.current.photos ?? []), ...added] });
     } catch (e) { if (alive.current) setError(humanError(e)); }
     finally { working.current = false; if (alive.current) setBusy(false); }
   }
   async function send() {
     if (working.current || !ready || draftRef.current.revision) return;
     working.current = true; setBusy(true); setError("");
+    const controller = new AbortController(); uploadAbort.current = controller;
+    const check = () => { if (controller.signal.aborted) throw new Error("照片发送已中断，草稿已保留。"); };
     try {
       const current = draftRef.current;
       // Omission follows the live host default, including changes made on another device.
@@ -374,20 +376,36 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       const sendVersion = current.sendVersion ?? snapshot?.history?.active ?? conversation.id;
       await update({ ...current, pending, sendVersion });
       const parts: ({ type: "text"; text: string } | { type: "file"; receiptId: string })[] = pending.content.trim() ? [{ type: "text", text: pending.content }] : [];
-      const attachments = [...(current.files ?? []), ...(current.photos ?? []).map(p => ({ id: p.id, uri: p.prepared?.uri ?? p.uri, name: p.prepared?.name ?? p.name,
-        mediaType: imageType(p.prepared?.uri ?? p.uri, p.prepared?.name ?? p.name) }))];
+      const attachments = [...(current.files ?? []).map(file => ({ ...file, width: 0, height: 0 })),
+        ...(current.photos ?? []).map(photo => ({ ...photo, mediaType: imageType(photo.uri, photo.name), original: false }))];
       for (const file of attachments) {
+        check();
         const saved = draftRef.current.receipts?.[file.id];
         if (saved) { parts.push({ type: "file", receiptId: saved }); continue; }
-        const response = await expoFetch(`${connection.url}/v1${base}/dsh/files?name=${encodeURIComponent(file.name)}${file.mediaType ? `&mediaType=${encodeURIComponent(file.mediaType)}` : ""}`, {
+        let prepared = file.prepared;
+        if (!file.original && file.mediaType?.startsWith("image/") && !prepared) {
+          prepared = await preparePhotoCopy(file);
+          check();
+          await update({ ...draftRef.current,
+            files: draftRef.current.files?.map(item => item.id === file.id ? { ...item, prepared } : item),
+            photos: draftRef.current.photos?.map(item => item.id === file.id ? { ...item, prepared } : item) });
+        }
+        check();
+        const upload = prepared ?? file;
+        const mediaType = prepared ? imageType("", prepared.name) : file.mediaType;
+        const body = await new File(upload.uri).bytes();
+        check();
+        const response = await expoFetch(`${connection.url}/v1${base}/dsh/files?name=${encodeURIComponent(upload.name)}${mediaType ? `&mediaType=${encodeURIComponent(mediaType)}` : ""}`, {
           method: "PUT", headers: { Authorization: `Bearer ${connection.token}`, "Content-Type": "application/octet-stream" },
-          body: await new File(file.uri).bytes(), redirect: "error",
+          body, redirect: "error", signal: controller.signal,
         });
         const receipt = await response.json();
+        check();
         if (!response.ok) throw new Error(receipt.error?.message ?? "文件发送失败。");
         await update({ ...draftRef.current, receipts: { ...draftRef.current.receipts, [file.id]: receipt.receiptId } });
         parts.push({ type: "file", receiptId: receipt.receiptId });
       }
+      check();
       await request(connection, `${base}/messages`, { method: "POST", body: { ...pending, parts, version: sendVersion } });
       // Keep the request ID until clearing is durable, including after a lost ACK.
       await clearDraft(key, pending.id);
@@ -399,7 +417,7 @@ export function DshChatPanel({ connection, conversation, assistantName, catalog,
       discardDraftPhotos(current.photos ?? []);
       nearBottom.current = true; setAwayFromLatest(false); refresh(); onRefreshRef.current();
     } catch (e) { if (alive.current) setError(humanError(e)); }
-    finally { working.current = false; if (alive.current) setBusy(false); }
+    finally { if (uploadAbort.current === controller) uploadAbort.current = null; working.current = false; if (alive.current) setBusy(false); }
   }
   async function action(path: string, body?: unknown) {
     if (working.current) return;
