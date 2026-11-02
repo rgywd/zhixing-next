@@ -59,7 +59,7 @@ test('existing, new and restored sessions mount once and dispose cleanly', t => 
   function agent(id) {
     const lifecycle = {};
     return { session: { id, header: {} }, lifecycle, ctx: {
-      on: (event, fn) => { lifecycle[event] = fn; },
+      on: (event, fn) => { lifecycle[event] = fn; return () => { delete lifecycle[event]; }; },
       systemPrompt: {
         getSectionOrder: () => 0,
         section: value => {
@@ -71,6 +71,7 @@ test('existing, new and restored sessions mount once and dispose cleanly', t => 
   }
   const existing = agent('msgw-existing');
   apply({ agents: { list: () => [existing, agent('zhixing-main-test')] },
+    provide: () => {},
     on: (event, fn) => { handlers[event] = fn; }, effect: fn => cleanups.push(fn()) }, { personaFile: file });
   handlers['agent/created']({ agent: existing });
   assert.equal(sections.length, 2);

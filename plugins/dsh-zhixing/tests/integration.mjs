@@ -33,7 +33,20 @@ await writeFile(patch, `- id: agent-default-model
       config:
         token: ${JSON.stringify(token)}
         port: ${appPort}
+    - id: zhixing-messenger-persona
+      name: ${JSON.stringify(fileURLToPath(new URL('../../dsh-messenger-persona/index.mjs', import.meta.url)))}
+      config:
+        personaFile: ${JSON.stringify(join(root, 'march-seven.md'))}
+    - id: persona-acceptance
+      name: ${JSON.stringify(fileURLToPath(new URL('../../dsh-messenger-persona/tests/host-probe.mjs', import.meta.url)))}
+      config:
+        token: ${JSON.stringify(token)}
+        workspace: ${JSON.stringify(workspace)}
+        personaFile: ${JSON.stringify(join(root, 'march-seven.md'))}
+        provider: zhixing-fixture
+        model: fixture
 `);
+await writeFile(join(root, 'march-seven.md'), await readFile(new URL('../../dsh-messenger-persona/personas/march-seven.md', import.meta.url)));
 let host;
 const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
 async function api(path, body, method) {
@@ -66,8 +79,29 @@ async function start() {
   }, s => s?.model_ready, 'DSH startup').catch(e => { throw new Error(`${e.message}\n${logs}`); });
 }
 async function stop() { if (host && host.exitCode === null) { host.kill('SIGTERM'); await once(host, 'exit'); } }
+async function persona(body) {
+  const response = await fetch(`http://127.0.0.1:${webPort}/persona-acceptance`, { method: 'POST', headers, body: JSON.stringify(body) });
+  const result = await response.json(); assert.ok(response.ok, JSON.stringify(result)); return result;
+}
 try {
   await start();
+  assert.equal((await persona({})).ok, true);
+  await persona({ action: 'talk', legacy: true, text: '历史消息' });
+  await persona({ action: 'talk', text: '继续聊天' });
+  const migrated = await persona({ action: 'inspect' });
+  assert.equal(migrated.rawLegacy, 1);
+  assert.equal(migrated.replacements, 1);
+  assert.deepEqual(migrated.userTexts, ['历史消息', 'Channel: Telegram.\n\n继续聊天']);
+  const tgModel = JSON.parse(await readFile(join(root, 'model.json')));
+  assert.ok(tgModel.system.includes('你以“三月七”的身份'));
+  assert.equal(tgModel.system.includes('You are a coding agent'), false);
+  assert.equal(tgModel.system.includes('你是知行，在知行 Next'), false);
+  assert.equal(tgModel.userTexts.some(t => t.includes('不要说自己是 AI')), false);
+  await stop(); await start();
+  assert.deepEqual((await persona({ action: 'inspect' })).userTexts, migrated.userTexts);
+  await persona({ action: 'talk', text: '重启后继续' });
+  assert.equal((await persona({ action: 'inspect' })).replacements, 1);
+  console.log('PASS Telegram native history migration, original log retained, restart idempotence, persona scope and hot reload');
   const selectedModel = JSON.stringify(['zhixing-fixture', 'fixture-other']);
   const chat = await api('/conversations', { title: 'Native DSH acceptance', model_id: selectedModel });
   assert.equal(chat.model_id, selectedModel, 'creation honors the selected native model');
@@ -87,9 +121,12 @@ try {
   assert.equal(toolResults.length, 3); assert.ok(toolResults.every(e => !e.data.message.isError));
   assert.match(JSON.stringify(toolResults), /CHECK_PASSED/);
   const model = JSON.parse(await readFile(join(root, 'model.json')));
+  assert.ok(model.system.includes('你是知行，在知行 Next'));
+  assert.equal(model.system.includes('You are a coding agent'), false);
+  assert.equal(model.system.includes('你以“三月七”的身份'), false);
   for (const tool of ['bash', 'write', 'read', 'subagent', 'plugin_manager', 'schedule_create']) assert.ok(model.tools.includes(tool), tool);
   await writeFile(join(root, 'code-loop.json'), JSON.stringify(state, null, 2));
-  console.log('PASS native read → write → shell check, host tools retained');
+  console.log('PASS native read → write → shell check, Zhixing persona replaces coding identity, host tools retained');
   const originalMetrics = structuredClone(state.statistics);
   assert.equal(originalMetrics.length, 1);
   const nativeStats = JSON.parse((await readFile(join(root, 'model.json.stats.jsonl'), 'utf8')).trim().split('\n').at(-1));

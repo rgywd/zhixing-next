@@ -14,7 +14,7 @@ export async function apply(ctx, config) {
   ctx.provide('zhixingCompanion', companion);
   const { Gateway } = await import(config.gatewayPath);
   const gateway = new Gateway(ctx, { telegram: { enabled: false, allowedUserIds: [config.targetUserId], progressEnabled: false },
-    agent: { cwd: config.workspace, provider: 'deepseek-official', model: 'deepseek-flash', sessionScope: 'user', idleTimeoutMs: 3_600_000 }, media: {} });
+    agent: { cwd: config.workspace, provider: 'deepseek-official', model: 'deepseek-flash', instructionPrefix: 'Channel: Telegram.', sessionScope: 'user', idleTimeoutMs: 3_600_000 }, media: {} });
   await gateway.start();
   gateway.adapters.set('telegram', { call: async (method, args) => {
     if (method !== 'sendMessage' || args.chat_id !== config.targetUserId) throw new Error('Unexpected delivery');

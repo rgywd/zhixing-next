@@ -6,6 +6,9 @@ import { openChatStorage } from './storage.mjs';
 import { openBusinessStorage } from './business/service.mjs';
 import { toolBody } from './business/tool-context.mjs';
 import { createEnvironment } from './environment.mjs';
+import { readFileSync } from 'node:fs';
+
+const persona = readFileSync(new URL('./personas/zhixing.md', import.meta.url), 'utf8').trim();
 
 export const name = 'zhixing-app';
 export const inject = ['sessionController', 'sessionPersistence', 'sessions', 'agents', 'tools', 'fileUploads', 'attachments', 'userQuestions', 'systemPrompt', 'llm', 'storageDomain', 'fs', 'workingDirectory', 'workspaceFiles', 'sandboxPolicy', 'credentials', 'shellEnv'];
@@ -58,15 +61,32 @@ export async function apply(ctx, config) {
     },
   });
   ctx.effect(() => () => server.close());
-  ctx.on('agent/created', ({ agent }) => {
-    if (!server.owns(agent.id)) return;
-    agent.ctx.systemPrompt.section({ name: 'zhixing-outlet', order: 10000, interpolate: false,
+  const mounted = new Map();
+  const mount = agent => {
+    if (!server.owns(agent.id) || mounted.has(agent) || agent.session.header?.origin === 'subagent' || agent.session.header?.delegationDepth > 0) return;
+    const personaOff = agent.ctx.systemPrompt.section({ name: 'deployment:persona-prefix',
+      order: agent.ctx.systemPrompt.getSectionOrder('DEPLOYMENT_PERSONA_PREFIX'), interpolate: false, text: persona });
+    const outletOff = agent.ctx.systemPrompt.section({ name: 'zhixing-outlet', order: 10000, interpolate: false,
       text: '当前对话来自知行 Next App。你是知行，使用 DSH 宿主实际提供的模型、工具、插件和工作目录执行用户请求。App 展示你的正文、工具调用、执行结果和问题；没有自动提供手机屏幕或其他设备上下文。' +
         '需要交付工作区文件时，使用宿主原生 present 工具声明最终文件，App 会显示文件卡片并提供预览和分享。' +
         '需要用户提供密钥、token 或其他私密值时，用 zhixing_request_variables 发起填写卡，一次可以请求多个变量。不要让用户把密钥发进聊天或明文工作区文件；只提出用途和 DSH_SECRET_ 前缀的变量名，用户可以改名。保存后根据返回的实际变量名通过原生 bash/pwsh 环境使用，不打印值、不把值拼进工具参数，不关闭权限审批。' +
         '知行财务和健康记录通过 zhixing_service 读写，保存在宿主原生存储中；需要这些数据时先读取相应业务 schema，使用实际记录和接口回执回答。搜索、记忆、会话和文件使用宿主原生能力与已安装插件。' +
-        '日常回复简明说明替用户完成了什么、实际金额和必要的下一步；内部编号、原子性、档案版本和接口路径留在工具详情，除非用户主动问实现细节。',
+        '执行记账、健康记录或其他任务后，简明说明实际完成的内容，涉及金额时核对金额，有必要才提下一步。闲聊按当前话题回应，不套用任务汇报格式；内部编号、原子性、档案版本和接口路径留在工具详情，除非用户主动问实现细节。',
     });
+    const dialogueOff = agent.ctx.systemPrompt.section({ name: 'zhixing:app-dialogue', order: 10210, interpolate: false,
+      text: '回到当前这句话：回应具体内容，用日常中文。闲聊、补充和纠正通常只需一小段；详细问题按需要展开。' +
+        '只凭已知事实说话，用户没说原因就不替他分析心理。知识问题围绕所问内容，不读取无关的个人记录来劝用户做另一件事。' +
+        '给完所需信息就停，不附加安慰金句、能力介绍或邀请下一项任务。报告用事实差别和具体理由收尾，不另加感悟或拔高主旨。已明确交办的事照常用工具完成，有实际歧义才问。',
+    });
+    const off = () => { personaOff(); outletOff(); dialogueOff(); };
+    mounted.set(agent, off);
+    agent.ctx.on('dispose', () => { off(); mounted.delete(agent); });
+  };
+  ctx.on('agent/created', ({ agent }) => mount(agent));
+  for (const agent of ctx.agents.list()) mount(agent);
+  ctx.effect(() => () => {
+    for (const off of mounted.values()) off();
+    mounted.clear();
   });
   ctx.tools.register(defineTool({
     name: 'zhixing_request_variables',
