@@ -1,10 +1,10 @@
 {
   "name": "@zhixing/dsh-messenger-persona",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "exports": "./index.mjs",
-  "files": ["index.mjs", "persona-file.mjs", "personas", "README.md", "cordis.patch.yml"],
+  "files": ["index.mjs", "persona-file.mjs", "legacy-relay.mjs", "personas", "README.md", "cordis.patch.yml"],
   "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
   "peerDependencies": {
     "@deepseek-ai/dsh-system-prompt": "0.2.2-alpha.2",

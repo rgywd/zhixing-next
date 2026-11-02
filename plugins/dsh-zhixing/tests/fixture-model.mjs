@@ -35,6 +35,7 @@ export function apply(ctx, config) {
       const prompt = messages[lastUser]?.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
       const results = messages.slice(lastUser + 1).filter(m => m.role === 'tool');
       await writeFile(config.evidence, JSON.stringify({ tools: options.tools?.map(t => t.name), prompt, results,
+        system: messages.filter(m => m.role === 'system').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)).join('\n'),
         userTexts: messages.filter(m => m.role === 'user').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)) }, null, 2));
       let block;
       const call = (name, args) => ({ type: 'tool-call', id: randomUUID(), name, arguments: JSON.stringify(args) });

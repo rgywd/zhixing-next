@@ -24,6 +24,10 @@ DSH 0.2.2-alpha.2 的原生 `agent/created` 是串行创建钩子，首轮模型
 
 第一次启用由宿主重新加载 patch；修改人格本身不用重启宿主。不要再把整份人设塞进网关 `agent.instructionPrefix`，也不要改第三方 `node_modules` 内的人格枚举。不要使用 `complete: true`，它会吞掉其他系统指导。
 
+网关只保留渠道标记，例如 `agent.instructionPrefix: 'Channel: Telegram.'`。0.1.1 会在旧 TG 会话下一次进入原生步骤时，清理已知的 2026-11-02 之前旧人设前缀：同时匹配 Telegram 网关来源、首文本块、完整前缀和分隔符，使用原生 `user/message` 单节点 `surfaceOp: replace` 并引用原事件。原始记录、用户正文、附件、消息 ID 与顺序保留；重启不会重复迁移。未匹配的文本、其他渠道和其他人格不处理。不在 `llm/stream` 中改写不可变请求。
+
+陪伴插件的原话回顾复用同一清理函数，但跳过模型专用的替换事件，保持原来的发言时间，也能清理未唤醒旧会话中的前缀。回滚插件时不覆盖会话日志或投递账本；已记录的替换仍是 DSH 能独立重放的原生事件。
+
 自定义安装目录的 DSH 配合“鱼的记忆”1.4.3 时，服务应设置 `DSH_HOST_MODULES=/opt/zhixing-next/runtimes/dsh-0.2.2-alpha.2/node_modules/@deepseek-ai`。否则它可能找不到宿主 `defineTool`，退回不兼容的参数格式，导致 DeepSeek 拒绝整个请求。该配置由宿主服务维护，不在插件中修改进程环境。
 
 ## 人格表达

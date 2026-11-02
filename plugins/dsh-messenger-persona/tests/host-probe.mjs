@@ -4,9 +4,11 @@ import { readFileSync, writeFileSync, renameSync } from 'node:fs';
 import { createUserMessage } from '@deepseek-ai/dsh-llm';
 import { assembleContextFor, installModelSelection } from '@deepseek-ai/dsh-agent';
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt';
+import { LEGACY_RELAY_PREFIX } from '../legacy-relay.mjs';
 
-export const inject = ['agents', 'systemPrompt', 'webServer', 'sessionPersistence', 'sessionController'];
+export const inject = ['agents', 'agentPresets', 'sessions', 'systemPrompt', 'webServer', 'sessionPersistence', 'sessionController'];
 export function apply(ctx, config) {
+  const selection = { provider: config.provider || 'deepseek-official', model: config.model || 'deepseek-flash' };
   const handles = new Map();
   const ensure = async id => {
     if (!handles.has(id) && await ctx.sessionPersistence.stat(id)) {
@@ -14,9 +16,10 @@ export function apply(ctx, config) {
       if (restored.error) throw restored.error;
       handles.set(id, { agent: restored.agent });
     }
-    if (!handles.has(id)) handles.set(id, await ctx.agents.create({ sessionId: id, meta: { cwd: config.workspace },
-      agentOptions: { provider: 'deepseek-official', model: 'deepseek-flash' },
-      setup: agentCtx => { installModelSelection(agentCtx, { current: { provider: 'deepseek-official', model: 'deepseek-flash' } }); },
+    if (!handles.has(id)) handles.set(id, await ctx.agents.create({ sessionId: id,
+      meta: { cwd: config.workspace, agentPreset: ctx.agentPresets.defaultId },
+      agentOptions: selection,
+      setup: async agentCtx => { installModelSelection(agentCtx, { current: selection }); await ctx.agentPresets.mount(agentCtx); },
     }));
     return handles.get(id).agent;
   };
@@ -33,8 +36,8 @@ export function apply(ctx, config) {
         // Fish-memory 1.4.3 mounts through its own 500ms tick.
         await new Promise(resolve => setTimeout(resolve, 700));
         const before = agent.session.snapshotEvents().length;
-        agent.followup(createUserMessage({ content: [{ type: 'text', text: body.text }],
-          source: { kind: 'user', plugin: 'persona-acceptance', form: 'relay', origin: 'telegram' } }));
+        agent.followup(createUserMessage({ content: [{ type: 'text', text: (body.legacy ? LEGACY_RELAY_PREFIX + '\n\n' : 'Channel: Telegram.\n\n') + body.text }],
+          source: { kind: 'user', plugin: 'dsh-messenger-gateway', form: 'relay', origin: 'telegram' } }));
         await agent.whenIdle();
         const events = agent.session.snapshotEvents().slice(before);
         const texts = events.filter(e => e.type === 'assistant/message').flatMap(e =>
@@ -44,6 +47,13 @@ export function apply(ctx, config) {
           (e.data.message?.content || []).filter(b => b.type === 'tool-call').map(b => b.name)),
         end: events.filter(e => e.type === 'turn/end').at(-1)?.data,
         memoryContext: (await assemble(agent)).contexts.find(c => c.name === 'memory')?.text || '' };
+        await ctx.sessions.flush(agent.session);
+      } else if (body.action === 'inspect') {
+        const events = agent.session.snapshotEvents();
+        output = { id, rawLegacy: events.filter(e => e.type === 'user/message' && e.surfaceOp === 'append' && e.data.content?.[0]?.text?.startsWith(LEGACY_RELAY_PREFIX)).length,
+          replacements: events.filter(e => e.type === 'user/message' && e.surfaceOp?.op === 'replace').length,
+          userTexts: agent.session.deriveMessages().filter(m => m.role === 'user' && m.source?.kind === 'user').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)),
+          system: renderPrompt(await assemble(agent)) };
       } else {
         const original = readFileSync(config.personaFile, 'utf8');
         const web = await ensure('web-persona-acceptance');
