@@ -1,5 +1,7 @@
 # 文档入口
 
+- [0.2.14 云端模型控制](RELEASE-0.2.14.md)：知行默认与 TG 后台独立选择、服务器新增模型自动同步，versionCode 16。
+
 - [DSH 模型控制与 OpenAI Responses](DSH-MODELS.md)：知行默认模型、当前对话与 TG 后台模型，原生配置和实际工具调用验证。
 
 - [知行与 TG 表达修正](DSH-NATURAL-DIALOGUE-2026-11-02.md)：独立人格、旧人设前缀迁移、隔离真实模型试聊与服务器更新。

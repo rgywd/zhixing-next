@@ -75,6 +75,19 @@ function response(path) {
   return { items: path.startsWith("/conversations") ? [conversation] : [], previous_cursor: "older", next_cursor: null };
 }
 
+test("a server model added after startup replaces the cached chat catalog on the next poll", async () => {
+  const cache = cacheHarness();
+  let catalog = { items: [{ id: 'old-model', name: 'Old' }] };
+  const app = session(cache, path => path === '/models' ? catalog : response(path));
+  try {
+    assert.equal((await app.ready()).catalog.items[0].id, 'old-model');
+    catalog = { items: [{ id: '["future-provider","future-model"]', name: 'New' }] };
+    app.intervals.forEach(poll => poll()); await settle();
+    assert.deepEqual(plain(app.render().catalog), catalog);
+    assert.deepEqual(plain((await cache.readCache(connection, 'app')).catalog), catalog);
+  } finally { app.unmount(); cache.close(); }
+});
+
 test("session restores conversation list before a blocked network read; offline failures preserve it", async () => {
   const cache = cacheHarness();
   const online = session(cache, response); assert.equal((await online.ready()).conversations[0].title, "已缓存会话"); online.unmount();
