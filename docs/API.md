@@ -2,6 +2,8 @@
 
 DSH 对话配置：`GET /v1/settings/chat` 返回新会话默认权限、繁忙发送方式和写入版本；`PUT` 接收 `{ key, value, revision }`，仅更新一项原生字段。版本冲突返回 409，具体投影、缓存和生效范围见 [DSH 对话配置](DSH-SETTINGS.md)。
 
+DSH 模型控制：`GET /v1/settings/models` 返回宿主默认与 Telegram 的模型选择、实际模型、可写状态及版本；`PUT` 接收 `{ key: "default" | "telegram", model_id, revision }`。TG 的 `model_id: null` 表示跟随默认，模型标识取自 `/v1/models`。无效模型、旧版本或 TG 正在回复时拒绝相应切换；保存及回读成功后确认。`/v1/models` 对已知适配器返回真实协议，无法确定时为 `unknown`。详见[模型控制](DSH-MODELS.md)。
+
 上下文与统计：聊天快照增加原生 `statistics`（当前事件页中每轮结束的累计值）、`context` 和 `compaction`。`POST /v1/conversations/{id}/dsh/compact {version}` 调用当前 Agent 的原生 `/compact`，等待命令和持久化回执；版本失效／重复或失败为 409，宿主缺少命令为 503。执行期间允许原生消息接收与取消。字段和计算口径见 [DSH 上下文与会话统计](DSH-CONTEXT-STATS.md)。
 
 2026-10-30 私密变量：原生工具 `zhixing_request_variables` 发起 `kind: environment` 的填写卡。`POST /v1/conversations/{id}/dsh/environment/{requestId}` 独立接收已认证的多字段提交或取消，校验当前版本与会话归属，只返回变量名和保存状态；不写入普通答案或聊天消息。字段、回执和凭据边界见[私密变量](PRIVATE-VARIABLES.md)。

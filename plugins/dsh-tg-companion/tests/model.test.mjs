@@ -1,0 +1,30 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { createCompanion } from '../index.mjs';
+
+test('an existing Telegram chat uses the current configured route without recreating its session or resetting contact state', async () => {
+  const state = { targetId: 123, sessionId: 'msgw-test', sessionIds: ['msgw-test'], memoryId: 'memory-keep', inboundVersion: 0, enabled: false, deliveries: [{ text: 'keep' }] };
+  let selected = { provider: 'old', model: 'old-model', reasoningEffort: 'high' }, configured = { provider: 'openai', model: 'gpt-6-luna' };
+  let writes = 0, flushes = 0;
+  const agent = { id: 'msgw-test', status: 'idle', session: {}, model: { current: () => selected, select: value => { selected = value; writes++; } } };
+  const ctx = { agents: { get: () => agent }, llm: { resolveCallConfig: async () => {} }, sessions: { flush: async () => { flushes++; } } };
+  const companion = createCompanion(ctx, {}, { get: () => state, change: action => { action(state); return state; } });
+  const gateway = { chats: new Map([['private', { agent }]]), isUserAllowed: () => true, resolveAgentModel: () => configured };
+  const input = { platform: 'telegram', chatId: 123, userId: 123, chatType: 'private', text: '继续', reply: async () => assert.fail('no unsolicited receipt') };
+  assert.equal(await companion.beforeMessage(gateway, 'private', input), false);
+  assert.deepEqual(selected, configured);
+  assert.equal(flushes, 1);
+  await companion.beforeMessage(gateway, 'private', input);
+  assert.equal(writes, 1, 'unchanged selections do not append duplicate records');
+  configured = { provider: 'openai', model: 'gpt-6.1-terra' };
+  await companion.beforeMessage(gateway, 'private', input);
+  assert.deepEqual(selected, configured);
+  assert.deepEqual(state.sessionIds, ['msgw-test']);
+  assert.equal(state.memoryId, 'memory-keep');
+  assert.equal(state.enabled, false);
+  assert.deepEqual(state.deliveries, [{ text: 'keep' }]);
+  ctx.llm.resolveCallConfig = async () => { throw new Error('unavailable'); };
+  configured = { provider: 'broken', model: 'no' };
+  await assert.rejects(companion.beforeMessage(gateway, 'private', input), /unavailable/);
+  assert.equal(selected.model, 'gpt-6.1-terra');
+});

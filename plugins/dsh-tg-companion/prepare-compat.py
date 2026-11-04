@@ -7,8 +7,8 @@ import shutil
 
 EXPECTED = {
     '@goodandready/dsh-messenger-gateway/lib/index.js': 'facca6f932d81ee3427ddb3ed56915a2f2500485921bfa7fc4f85f2822d8c28a',
-    '@goodandready/dsh-messenger-gateway/lib/gateway.js': 'c61acedb138d714a9ce61894ff320b8faf940030266ffe314a6a9c4a59ce6935',
-    'dsh-fish-memory/lib/index.js': '2b2df8b4debd2656e10653dd52caa39bc9f2df26162e55c4dcac84a05db204ae',
+    '@goodandready/dsh-messenger-gateway/lib/gateway.js': 'b4f5972d22e9a7797861f20e795860a5ab1ba36b52673219e7799cf33a22ba4f',
+    'dsh-fish-memory/lib/index.js': 'cccef0812a9f6f74900e55f34557dcdb78c54e5906b2c5bea08b7611ea132e1b',
 }
 
 def replace_one(text, before, after):
@@ -38,6 +38,12 @@ def build(modules, output, host_modules):
                 shutil.copy2(path, target / part)
     gateway = output / 'gateway/lib/gateway.js'
     text = gateway.read_text()
+    # Keep the existing deployment's preset fix, now applied reproducibly to
+    # the pristine npm package rather than requiring an already patched input.
+    text = replace_one(text, '    const targetSessionId = existingSessionId ?', '''    let presetId
+    try { presetId = this.ctx.get?.('agentPresets')?.defaultId } catch {}
+    const targetSessionId = existingSessionId ?''')
+    text = replace_one(text, '      meta: { cwd },', '      meta: { cwd, ...(presetId ? { agentPreset: presetId } : {}) },')
     text = replace_one(text, '  async start() {\n', "  async start() {\n    this.ctx.get('zhixingCompanion')?.connect(this)\n")
     text = replace_one(text, '    const key = this.sessionKeyFor(input)\n    const body =',
         "    const key = this.sessionKeyFor(input)\n    if (await this.ctx.get('zhixingCompanion')?.beforeMessage(this, key, input)) return\n    const body =")
@@ -45,7 +51,17 @@ def build(modules, output, host_modules):
         "  async createChat(key, input, existingSessionId) {\n    const companion = this.ctx.get('zhixingCompanion')\n    if (companion?.matches(input)) {\n      const cwd = resolveEffectiveCwd(this.config.agent?.cwd, this.ctx.logger)\n      const chat = await companion.openChat(this, key, input, existingSessionId, cwd)\n      await registerSessionInWorkspace(this.ctx, chat.agent.id, cwd, this.ctx.logger)\n      return chat\n    }\n")
     gateway.write_text(text)
     entry = output / 'gateway/lib/index.js'
-    entry.write_text(replace_one(entry.read_text(), "export const inject = ['agentDefaultModel'", "export const inject = ['zhixingCompanion', 'agentDefaultModel'"))
+    text = replace_one(entry.read_text(), "export const inject = ['agentDefaultModel'", "export const inject = ['zhixingCompanion', 'agentDefaultModel'")
+    text = replace_one(text, '    if (gateway) { gateway.stop(); gateway = undefined }', '''    // Model-only edits apply to the next turn. Keep chats, polling offsets,
+    // pending media and approvals; do not reconnect Telegram for this setting.
+    const withoutModel = value => JSON.stringify({ ...value,
+      agent: { ...value.agent, provider: '', model: '' } })
+    if (gateway && withoutModel(gateway.config) === withoutModel(effective)) {
+      gateway.config = effective
+      return
+    }
+    if (gateway) { gateway.stop(); gateway = undefined }''')
+    entry.write_text(text)
     fish = output / 'fish-memory/lib/index.js'
     text = fish.read_text()
     text = replace_one(text, "export const inject = ['systemPrompt'", "export const inject = ['zhixingCompanion', 'systemPrompt'")

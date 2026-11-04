@@ -4,6 +4,7 @@ import { ThemeProvider } from "./ThemeProvider";
 import { AgentChatHeader } from "./AgentChatHeader";
 import { ConversationMenu } from "./ConversationMenu";
 import { ChatSettingsPanel } from "./ChatSettingsPanel";
+import { ModelSettingsPanel } from "./ModelSettingsPanel";
 import { useDshSettings } from "./useDshSettings";
 import { useUi, BackLink, Button, humanError, PageHeading, PageScrollView } from "./ui";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -539,6 +540,8 @@ function ConnectedSession({
           <BackLink label="设置" onPress={() => { navigation.current++; setSettingsView("overview"); }} />
           {settingsView === "host" ? (
             <DshHostSettings webUrl={status?.web_url} />
+          ) : settingsView === "models" ? (
+            <ModelSettingsPanel connection={connection} onChanged={serviceChanged} />
           ) : settingsView === "chat" ? (
             <ChatSettingsPanel controller={dshSettings} />
           ) : settingsView === "device" ? (

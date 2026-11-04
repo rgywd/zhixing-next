@@ -17,12 +17,14 @@ await writeFile(join(workspace, 'sample.js'), 'export const answer = 0;\n');
 const token = randomUUID();
 const port = async () => { const s = createServer(); s.listen(0, '127.0.0.1'); await once(s, 'listening'); const p = s.address().port; await new Promise(r => s.close(r)); return p; };
 const appPort = await port(), webPort = await port();
-const patch = join(root, 'fixture.patch.yml');
-await writeFile(patch, `- id: agent-default-model
+await mkdir(join(root, 'home', 'profiles', 'web'), { recursive: true });
+await writeFile(join(root, 'home', 'profiles', 'web', 'cordis.patch.yml'), `- id: agent-default-model
   config:
     provider: zhixing-fixture
     model: fixture
-- insert:
+`);
+const patch = join(root, 'fixture.patch.yml');
+await writeFile(patch, `- insert:
     - id: zhixing-fixture
       name: ${JSON.stringify(fileURLToPath(new URL('./fixture-model.mjs', import.meta.url)))}
       config:
@@ -85,6 +87,24 @@ async function persona(body) {
 }
 try {
   await start();
+  const baseModel = JSON.stringify(['zhixing-fixture', 'fixture']);
+  const alternateModel = JSON.stringify(['zhixing-fixture', 'fixture-other']);
+  const setDefault = async id => {
+    const settings = await api('/settings/models');
+    return api('/settings/models', { key: 'default', model_id: id, revision: settings.default.revision }, 'PUT');
+  };
+  assert.equal((await api('/settings/models')).default.model_id, baseModel);
+  await setDefault(alternateModel);
+  const defaultChat = await api('/conversations', { title: 'New default model' });
+  await api(`/conversations/${defaultChat.id}/messages`, { id: 'default-model-consumer', content: 'MODEL-CHOICE' });
+  await until(() => api(`/conversations/${defaultChat.id}/dsh`), s => !s.running && s.events.some(e => e.type === 'turn/end'), 'new default model consumed');
+  assert.equal(JSON.parse(await readFile(join(root, 'model.json'))).model, 'fixture-other');
+  await api(`/conversations/${defaultChat.id}/model`, { model_id: baseModel }, 'PUT');
+  assert.equal((await api('/settings/models')).default.model_id, alternateModel, 'session picker cannot change the host default');
+  await stop(); await start();
+  assert.equal((await api('/settings/models')).default.model_id, alternateModel, 'default survives host restart and deployment patch');
+  await setDefault(baseModel);
+  console.log('PASS native model settings, durable restart, new-session consumer, session/default isolation');
   assert.equal((await persona({})).ok, true);
   await persona({ action: 'talk', legacy: true, text: '历史消息' });
   await persona({ action: 'talk', text: '继续聊天' });

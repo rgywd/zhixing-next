@@ -1,11 +1,23 @@
 {
   "name": "@zhixing/dsh-tg-companion",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "exports": "./index.mjs",
-  "files": ["index.mjs", "state.mjs", "proactive.mjs", "news.mjs", "README.md", "cordis.patch.yml", "prepare-compat.py"],
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "files": [
+    "index.mjs",
+    "state.mjs",
+    "proactive.mjs",
+    "news.mjs",
+    "README.md",
+    "cordis.patch.yml",
+    "prepare-compat.py"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "peerDependencies": {
     "@deepseek-ai/dsh-agent": "0.2.2-alpha.2",
     "@deepseek-ai/dsh-llm": "0.2.2-alpha.2",
@@ -13,5 +25,7 @@
     "@deepseek-ai/dsh-system-prompt": "0.2.2-alpha.2",
     "@deepseek-ai/dsh-tools": "0.2.2-alpha.2"
   },
-  "scripts": { "test": "node --test tests/*.test.mjs" }
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
 }
