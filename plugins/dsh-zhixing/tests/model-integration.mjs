@@ -112,6 +112,38 @@ try {
   receipt.telegram = { actualModels: ['fixture', 'fixture-other', 'fixture', 'fixture-other', 'fixture-other'],
     noGatewayReconnect: true, bindingMemoryAndHistoryPreserved: true, restartPreserved: true, networkDisabled: true };
   console.log('PASS native Telegram config → existing turn, follow-default, idle restoration, restart, retained history, no polling restart');
+  const controlChat = await call('/conversations', { title: 'Shared harness' });
+  await call(`/conversations/${controlChat.id}/messages`, { id: randomUUID(), content: 'COMPANION-APP-REMOVE' });
+  const controlled = await until(() => call(`/conversations/${controlChat.id}/dsh`), s => !s.running && s.events.some(e => e.type === 'turn/end'), 'App contact control');
+  assert.ok(controlled.events.some(e => e.type === 'tool/result' && JSON.stringify(e).includes('GitHub')), 'App model really called shared control');
+  const read = await probe({ action: 'turn', text: 'COMPANION-TG-READ' });
+  assert.deepEqual(read.state.feeds.map(f => f.publisher), ['GitHub']);
+  assert.deepEqual(read.state.excludedTopics, ['NASA']);
+  assert.ok(JSON.stringify(read.replies).includes('excludedTopics'), 'TG model received the shared saved settings');
+  const scheduled = await probe({ action: 'turn', text: 'COMPANION-SCHEDULE' });
+  assert.ok(JSON.stringify(scheduled.replies).includes('Updated through native tool') && JSON.stringify(scheduled.replies).includes('deleted'), 'TG can create, update, list and delete native schedules');
+  const slow = await call('/conversations', { title: 'Slow model isolation' });
+  await call(`/conversations/${slow.id}/messages`, { id: randomUUID(), content: 'SLOW-MODEL' });
+  await until(async () => JSON.parse(await readFile(join(root, 'model.json'))), s => s.prompt?.includes('SLOW-MODEL'), 'slow model started');
+  const began = Date.now();
+  await call('/status');
+  await probe({ action: 'turn', text: 'COMPANION-TG-READ' });
+  assert.ok(Date.now() - began < 5000, 'slow App model must not block TG or host HTTP');
+  await until(() => call(`/conversations/${slow.id}/dsh`), s => !s.running, 'slow model settled');
+  const timedOut = await probe({ action: 'timeout' });
+  assert.equal(timedOut.running, false);
+  assert.equal(timedOut.turnActive, false);
+  assert.equal(timedOut.lastEnd.reason.kind, 'aborted');
+  assert.ok(JSON.stringify(timedOut.replies).includes('回复超时'), 'the failed turn has a visible receipt');
+  const recovered = await probe({ action: 'turn', text: 'COMPANION-TG-READ' });
+  assert.equal(recovered.lastEnd.reason.kind, 'completed');
+  const steered = await probe({ action: 'steer' });
+  assert.equal(steered.lastInbox.target, 'next-step', 'busy Telegram additions use native steering');
+  await stop(); await start();
+  assert.deepEqual((await probe({ action: 'turn', text: 'COMPANION-TG-READ' })).state.excludedTopics, ['NASA']);
+  receipt.harness = { appAndTelegramSharedPreferences: true, nativeScheduleCrud: true, concurrentSlowModel: true, restartPreserved: true,
+    timeoutCancelledUnderlyingTurn: true, nextTurnRecovered: true, nativeSteering: true };
+  console.log('PASS native App → shared contact preferences → TG read, schedule CRUD, concurrent slow model, restart');
   if (process.env.DSH_OPENAI_KEY_FILE) {
     receipt.openai = [];
     const catalog = await call('/models');
@@ -128,6 +160,17 @@ try {
       assert.ok(text.includes('MODEL_TOOL_OK'), model + ' final response');
       receipt.openai.push({ model, protocol: 'responses', nativeToolRoundTrip: true, text });
       console.log(`PASS ${model}: Responses → native bash → tool result → final reply`);
+      if (model === 'gpt-6-luna') {
+        await probe({ action: 'reset-preferences' });
+        const contact = await call('/conversations', { title: 'Real shared contact control', model_id: id, reasoning_effort: 'off' });
+        await call(`/conversations/${contact.id}/messages`, { id: randomUUID(), content: '把 TG 机器人主动新闻里的 NASA 删除，我不看 NASA。请保存修改，再简短告诉我结果。' });
+        const saved = await until(() => call(`/conversations/${contact.id}/dsh`), s => !s.running && s.events.some(e => e.type === 'turn/end'), 'Luna shared contact control', 180000);
+        const state = (await probe()).state;
+        assert.ok(state.feeds && !state.feeds.some(f => /nasa/i.test(f.publisher + f.url)), 'real model persisted NASA removal');
+        assert.ok(saved.events.some(e => e.type === 'tool/call' && JSON.stringify(e).includes('companion_contact')), 'real model discovered shared control');
+        receipt.harness.realLunaContactControl = true;
+        console.log('PASS real Luna: natural App request → shared contact tool → NASA removed');
+      }
     }
   }
   await writeFile(join(root, 'receipt.json'), JSON.stringify(receipt, null, 2));

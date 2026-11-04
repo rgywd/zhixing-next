@@ -1,10 +1,8 @@
 import { digest } from './state.mjs';
 import { Buffer } from 'node:buffer';
+import { DEFAULT_FEEDS } from './preferences.mjs';
 
-export const FEEDS = [
-  { publisher: 'NASA', url: 'https://www.nasa.gov/feed/', domains: ['nasa.gov'] },
-  { publisher: 'GitHub', url: 'https://github.blog/changelog/feed/', domains: ['github.blog', 'github.com'] },
-];
+export const FEEDS = DEFAULT_FEEDS;
 function plain(text) {
   return text.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/<[^>]*>/g, ' ')
     .replace(/&(?:amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/gi, entity => {

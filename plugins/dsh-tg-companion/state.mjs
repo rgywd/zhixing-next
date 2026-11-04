@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, openSync, writeFileSync, fsyncSync, closeSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { preferences, validateSettings } from './preferences.mjs';
 
 export const HOUR = 3_600_000;
 export function localDay(now) { return new Date(now + 8 * HOUR).toISOString().slice(0, 10); }
@@ -31,13 +32,16 @@ export function openState(path, targetId, { seedSessionId, now = Date.now(), wri
     write(path, state);
   }
   if (state.version !== 1 || state.targetId !== targetId || !Array.isArray(state.deliveries) || !Array.isArray(state.sessionIds) ||
-      typeof state.enabled !== 'boolean' || ![1, 2].includes(state.maxPerDay) || !Number.isFinite(state.lastInboundAt) ||
+      typeof state.enabled !== 'boolean' || !Number.isSafeInteger(state.maxPerDay) || state.maxPerDay < 1 || state.maxPerDay > 24 || !Number.isFinite(state.lastInboundAt) ||
       !Number.isSafeInteger(state.inboundVersion) || state.inboundVersion < 0 || !Number.isFinite(state.lastCheckAt) || !validSession(state.memoryId) ||
       state.sessionIds.some(id => !validSession(id)) || new Set(state.sessionIds).size !== state.sessionIds.length ||
       (state.sessionId !== null && !state.sessionIds.includes(state.sessionId)) ||
       state.deliveries.some(d => !d || !Number.isFinite(d.at) || !['sending', 'sent', 'unknown'].includes(d.status))) {
     throw new Error('Companion state identity/schema mismatch');
   }
+  const { timezone: _timezone, noRepeatedUnansweredMessages: _unanswered, revision, ...settings } = preferences(state);
+  validateSettings(settings);
+  if (!Number.isSafeInteger(revision) || revision < 0) throw new Error('Invalid preference revision');
   return {
     get: () => structuredClone(state),
     change(fn) {
@@ -49,7 +53,8 @@ export function openState(path, targetId, { seedSessionId, now = Date.now(), wri
 
 export function eligible(s, now) {
   if (!s.enabled) return 'paused';
-  if (localHour(now) < 10 || localHour(now) >= 22) return 'quiet-hours';
+  const { start, end } = preferences(s).activeHours, hour = localHour(now);
+  if (start < end ? hour < start || hour >= end : hour < start && hour >= end) return 'quiet-hours';
   if (now - s.lastInboundAt < 90 * 60_000) return 'recent-conversation';
   if (now - s.lastCheckAt < 2 * HOUR) return 'check-cooldown';
   const attempts = s.deliveries.filter(d => ['sending', 'sent', 'unknown'].includes(d.status));

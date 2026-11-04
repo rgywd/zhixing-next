@@ -11,6 +11,7 @@ export async function apply(ctx, config) {
   const store = openState(config.stateFile, config.targetUserId, { now });
   const sent = [];
   const companion = createCompanion(ctx, config, store, { clock: () => now, news: () => fetchNews({ now }) });
+  companion.mountControls();
   ctx.provide('zhixingCompanion', companion);
   const { Gateway } = await import(config.gatewayPath);
   const gateway = new Gateway(ctx, { telegram: { enabled: false, allowedUserIds: [config.targetUserId], progressEnabled: false },
