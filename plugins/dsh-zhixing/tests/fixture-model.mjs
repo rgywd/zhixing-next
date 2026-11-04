@@ -3,6 +3,7 @@ import { LlmAdapter } from '@deepseek-ai/dsh-llm';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { appendFileSync } from 'node:fs';
+import { setTimeout as delay } from 'node:timers/promises';
 
 export const inject = ['llm', 'sessionProjections'];
 export function apply(ctx, config) {
@@ -39,7 +40,20 @@ export function apply(ctx, config) {
         userTexts: messages.filter(m => m.role === 'user').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)) }, null, 2));
       let block;
       const call = (name, args) => ({ type: 'tool-call', id: randomUUID(), name, arguments: JSON.stringify(args) });
-      if (prompt.includes('PRIVATE-VALUES') && results.length < 3) {
+      if (prompt.includes('SLOW-MODEL')) await delay(8000, undefined, { signal: options.signal });
+      if (prompt.includes('COMPANION-APP-REMOVE') && !results.length) {
+        block = call('companion_contact', { action: 'configure', settings: { feeds: [
+          { publisher: 'GitHub', url: 'https://github.blog/changelog/feed/', domains: ['github.blog', 'github.com'] },
+        ], excludedTopics: ['NASA'] } });
+      } else if (prompt.includes('COMPANION-TG-READ') && !results.length) {
+        block = call('companion_contact', { action: 'status' });
+      } else if (prompt.includes('COMPANION-SCHEDULE') && results.length < 4) {
+        const first = results[0]?.content?.find(b => b.type === 'text')?.text;
+        const id = first ? JSON.parse(first).id : undefined;
+        block = results.length === 0 ? call('schedule_create', { title: 'Harness acceptance', prompt: 'Do not deliver; deleted in this turn', after_seconds: 3600 })
+          : results.length === 1 ? call('schedule_update', { id, prompt: 'Updated through native tool' })
+            : results.length === 2 ? call('schedule_list', {}) : call('schedule_delete', { id });
+      } else if (prompt.includes('PRIVATE-VALUES') && results.length < 3) {
         if (!results.length) block = call('zhixing_request_variables', { title: '连接测试服务', fields: [
           { name: 'DSH_SECRET_BOT_TOKEN', label: 'Bot Token' }, { name: 'DSH_SECRET_API_KEY', label: 'API Key' },
         ] });

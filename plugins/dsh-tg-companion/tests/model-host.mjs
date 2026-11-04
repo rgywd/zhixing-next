@@ -7,6 +7,7 @@ export const inject = ['agents', 'agentPresets', 'sessions', 'sessionPersistence
 export function apply(ctx, config) {
   const store = openState(join(config.workspace, 'contact.json'), 123);
   const controller = createCompanion(ctx, config, store);
+  controller.mountControls();
   let gateway, connections = 0;
   const connect = controller.connect;
   controller.connect = gw => { gateway = gw; connections++; connect(gw); };
@@ -22,8 +23,23 @@ export function apply(ctx, config) {
       const input = { platform: 'telegram', chatId: 123, userId: 123, threadId: 0, chatType: 'private', attachments: [],
         text: body.text || 'MODEL-CHOICE', reply: async text => { replies.push(text); } };
       const key = gateway.sessionKeyFor(input);
+      if (body.action === 'reset-preferences') store.change(s => { delete s.feeds; delete s.excludedTopics; });
       if (body.action === 'turn') {
         await gateway.handleMessage(input);
+        await gateway.chats.get(key)?.busy;
+      }
+      if (body.action === 'timeout') {
+        const previous = gateway.config.agent.turnTimeoutMs;
+        gateway.config.agent.turnTimeoutMs = 250;
+        try {
+          await gateway.handleMessage({ ...input, text: 'SLOW-MODEL' });
+          await gateway.chats.get(key)?.busy;
+        } finally { gateway.config.agent.turnTimeoutMs = previous; }
+      }
+      if (body.action === 'steer') {
+        await gateway.handleMessage({ ...input, text: 'SLOW-MODEL' });
+        await new Promise(resolve => setTimeout(resolve, 300));
+        await gateway.handleMessage({ ...input, text: 'COMPANION-TG-READ' });
         await gateway.chats.get(key)?.busy;
       }
       if (body.action === 'reap') {
@@ -33,6 +49,9 @@ export function apply(ctx, config) {
       const chat = gateway.chats.get(key);
       if (chat) await ctx.sessions.flush(chat.agent.session);
       const output = { connections, replies, configured: gateway.resolveAgentModel(), current: chat?.agent.model.current(), state: store.get(),
+        running: chat?.agent.status === 'running', turnActive: chat?.turnActive,
+        lastEnd: chat?.agent.session.snapshotEvents().findLast(e => e.type === 'turn/end')?.data,
+        lastInbox: chat?.agent.session.snapshotEvents().findLast(e => e.type === 'agent/inbox/spliced' && e.data.inserted?.length)?.data,
         nativeAgent: ctx.get('settings').describe({ redactSecrets: true }).find(v => v.ns === 'dsh-messenger-gateway')?.value?.agent,
         recent: store.get().sessionId ? await controller.recent(store.get().sessionId, 30) : [] };
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(output));

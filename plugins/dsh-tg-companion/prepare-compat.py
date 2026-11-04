@@ -8,6 +8,7 @@ import shutil
 EXPECTED = {
     '@goodandready/dsh-messenger-gateway/lib/index.js': 'facca6f932d81ee3427ddb3ed56915a2f2500485921bfa7fc4f85f2822d8c28a',
     '@goodandready/dsh-messenger-gateway/lib/gateway.js': 'b4f5972d22e9a7797861f20e795860a5ab1ba36b52673219e7799cf33a22ba4f',
+    '@goodandready/dsh-messenger-gateway/lib/gateway-turn.js': '718d62d1c5c87ccad841ed21c7a74ef443d5e2bf52042a54f58fed9223d7ec3f',
     'dsh-fish-memory/lib/index.js': 'cccef0812a9f6f74900e55f34557dcdb78c54e5906b2c5bea08b7611ea132e1b',
 }
 
@@ -49,7 +50,16 @@ def build(modules, output, host_modules):
         "    const key = this.sessionKeyFor(input)\n    if (await this.ctx.get('zhixingCompanion')?.beforeMessage(this, key, input)) return\n    const body =")
     text = replace_one(text, '  async createChat(key, input, existingSessionId) {\n',
         "  async createChat(key, input, existingSessionId) {\n    const companion = this.ctx.get('zhixingCompanion')\n    if (companion?.matches(input)) {\n      const cwd = resolveEffectiveCwd(this.config.agent?.cwd, this.ctx.logger)\n      const chat = await companion.openChat(this, key, input, existingSessionId, cwd)\n      await registerSessionInWorkspace(this.ctx, chat.agent.id, cwd, this.ctx.logger)\n      return chat\n    }\n")
+    text = replace_one(text, "        chat.agent.followup(createUserMessage({", "        chat.agent.steer(createUserMessage({")
     gateway.write_text(text)
+    turn = output / 'gateway/lib/gateway-turn.js'
+    text = turn.read_text()
+    start = text.index('export function whenIdleWithTimeout(')
+    end = text.index('\nexport async function answerApproval', start)
+    text = text[:start] + "import { whenIdleWithTimeout } from './zhixing-turn-guard.mjs'\nexport { whenIdleWithTimeout }\n" + text[end:]
+    turn.write_text(text)
+    guard = output / 'gateway/lib/zhixing-turn-guard.mjs'
+    shutil.copy2(Path(__file__).with_name('gateway-turn-guard.mjs'), guard)
     entry = output / 'gateway/lib/index.js'
     text = replace_one(entry.read_text(), "export const inject = ['agentDefaultModel'", "export const inject = ['zhixingCompanion', 'agentDefaultModel'")
     text = replace_one(text, '    if (gateway) { gateway.stop(); gateway = undefined }', '''    // Model-only edits apply to the next turn. Keep chats, polling offsets,
@@ -77,7 +87,7 @@ def build(modules, output, host_modules):
             path.chmod(0o755 if path.is_dir() else 0o644)
     (output / 'node_modules').symlink_to(host_modules, target_is_directory=True)
     manifest = {'sources': EXPECTED, 'modified': {str(p.relative_to(output)): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in [gateway, entry, fish]}, 'versions': {'gateway': '0.4.23', 'fish-memory': '1.4.3'}}
+        for p in [gateway, entry, turn, guard, fish]}, 'versions': {'gateway': '0.4.23', 'fish-memory': '1.4.3'}}
     (output / 'compat-manifest.json').write_text(json.dumps(manifest, indent=2))
     (output / 'compat-manifest.json').chmod(0o644)
     print(json.dumps(manifest, indent=2))
