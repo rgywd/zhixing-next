@@ -29,13 +29,13 @@ export type ServiceStatus = {
   worker_online: boolean;
   execution_available: boolean;
 };
-export type ReasoningEffort = "auto" | "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ReasoningEffort = "auto" | "none" | "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type ModelInfo = {
   id: string;
   name: string;
   model: string;
   provider: string;
-  protocol: "chat_completions" | "responses" | "gemini";
+  protocol: "chat_completions" | "responses" | "gemini" | "unknown";
   ready: boolean;
   image_input: boolean;
   reasoning_levels: ReasoningEffort[];
@@ -48,7 +48,7 @@ export type ModelCatalog = {
   items: ModelInfo[];
   roles: Partial<Record<"chat" | "task" | "memory", string | null>>;
 };
-export type ModelProtocol = ModelInfo["protocol"];
+export type ModelProtocol = Exclude<ModelInfo["protocol"], "unknown">;
 export type ManagedModel = ModelInfo & { enabled: boolean; temperature: number | null; timeout: number };
 export type ModelProvider = {
   id: string;

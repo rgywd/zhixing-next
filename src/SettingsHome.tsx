@@ -2,7 +2,7 @@ import { AppearanceControl } from "./AppearanceControl";
 import { AppUpdateSettings } from "./AppUpdateSettings";
 import { ActionRow, PageHero, PageScrollView, SettingsGroup } from "./ui";
 
-export type SettingsDestination = "host" | "connection" | "device" | "vault" | "chat";
+export type SettingsDestination = "host" | "connection" | "device" | "vault" | "chat" | "models";
 
 export function SettingsHome({ connectionUrl, onOpen }: {
   connectionUrl?: string;
@@ -18,6 +18,7 @@ export function SettingsHome({ connectionUrl, onOpen }: {
       <ActionRow icon="lock-closed-outline" title="密码管理" description="本机加密保存账号、密码与密保资料" tone="gold" compact last onPress={() => onOpen("vault")} />
     </SettingsGroup>
     <SettingsGroup title="模型与服务">
+      <ActionRow icon="sparkles-outline" title="模型控制" description="知行默认模型与 TG 后台模型" tone="gold" compact onPress={() => onOpen("models")} />
       <ActionRow icon="extension-puzzle-outline" title="模型与插件" tone="gold" compact last
         description="使用 DSH 的模型、搜索、记忆与其他能力" onPress={() => onOpen("host")} />
     </SettingsGroup>

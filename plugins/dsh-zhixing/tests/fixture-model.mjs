@@ -34,7 +34,7 @@ export function apply(ctx, config) {
       const lastUser = messages.findLastIndex(m => m.role === 'user' && (m.source?.kind === 'user' || m.content?.some(p => p.type === 'text' && /READ-WRITE-CHECK|CANCEL-SHELL|ASK-QUESTION|RESUME-CHECK|BUSINESS-SCHEMA/.test(p.text))));
       const prompt = messages[lastUser]?.content?.filter(p => p.type === 'text').map(p => p.text).join('\n') ?? '';
       const results = messages.slice(lastUser + 1).filter(m => m.role === 'tool');
-      await writeFile(config.evidence, JSON.stringify({ tools: options.tools?.map(t => t.name), prompt, results,
+      await writeFile(config.evidence, JSON.stringify({ provider: options.provider, model: options.model, tools: options.tools?.map(t => t.name), prompt, results,
         system: messages.filter(m => m.role === 'system').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)).join('\n'),
         userTexts: messages.filter(m => m.role === 'user').flatMap(m => m.content.filter(b => b.type === 'text').map(b => b.text)) }, null, 2));
       let block;

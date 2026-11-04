@@ -56,7 +56,10 @@ export async function apply(ctx, config) {
       if (workspaces) for (const workspace of await workspaces.list()) {
         if (workspace.sessionIds.includes(source.id)) { await workspace.attachSession(id); break; }
       }
-      if (selection) await ctx.sessionController.selectModel({ sessionId: id, ...selection });
+      if (selection) {
+        agent.model.select(selection);
+        await ctx.sessions.flush(agent.session);
+      }
       return inheritPermissions(agent);
     },
   });

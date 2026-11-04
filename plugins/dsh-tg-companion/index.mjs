@@ -36,6 +36,15 @@ export function createCompanion(ctx, config, store, services = {}) {
   const isBusy = () => closed || !gateway || gateway.stopped || [...gateway.chats.values()].some(c => matches(c.target) &&
     (c.turnActive || c.agent?.status === 'running')) || state().sessionIds.some(id => ctx.agents.get(id)?.status === 'running');
 
+  async function alignModel(agent, gw) {
+    const selected = gw.resolveAgentModel();
+    const current = agent.model.current();
+    if (current?.provider === selected.provider && current?.model === selected.model) return;
+    await ctx.llm.resolveCallConfig(selected);
+    agent.model.select(selected);
+    await ctx.sessions.flush(agent.session);
+  }
+
   async function recent(id, limit = 14) {
     if (!ownsSession(id)) throw new Error('This session does not belong to the private contact');
     const agent = ctx.agents.get(id);
@@ -138,6 +147,7 @@ export function createCompanion(ctx, config, store, services = {}) {
           : await ctx.agents.create({ ...options, sessionId: id, meta: { cwd, agentPreset: ctx.agentPresets.defaultId } });
       }
       handles.set(id, handle);
+      await alignModel(handle.agent, gw);
       mount(handle.agent);
       const offApproval = gw.tg().approvalsEnabled !== false
         ? handle.agent.ctx.on('approval/request', (req, next) => gw.answerApproval(key, req, next)) : () => {};
@@ -177,6 +187,8 @@ export function createCompanion(ctx, config, store, services = {}) {
       store.change(s => { s.sessionId = null; });
       await input.reply('好，另开一段聊。之前保存的记忆还在。'); return true;
     }
+    const chat = gw.chats.get(key);
+    if (chat) await alignModel(chat.agent, gw);
     return false;
   }
 
@@ -200,7 +212,7 @@ export function createCompanion(ctx, config, store, services = {}) {
       return [...topic, ...await news()];
     },
     generate: async candidates => {
-      const selection = draftContext.agent.model.current() || gateway.resolveAgentModel();
+      const selection = gateway.resolveAgentModel();
       const system = draftContext.persona + '\n你现在只考虑是否值得主动发一条私聊，不执行任务，也没有工具。没有值得说的就安静。' +
         '结合真实上下文，可以轻轻接一个未完的话题，或分享一条与兴趣相关的新闻；不催回复、不盘问、不说“该回复我了”，不装作线下生活。' +
         '尊重对方已完成、取消、纠正和不想再提的事。新闻仅依据提供的标题、摘要和日期，信息不足就跳过，不说自己读过全文。' +
@@ -230,7 +242,7 @@ export function createCompanion(ctx, config, store, services = {}) {
       await ctx.sessions.flush(chat.agent.session);
     },
   });
-  return { matches, memoryId, openChat, beforeMessage, check, state, recent,
+  return { matches, memoryId, openChat, beforeMessage, check, state, recent, isBusy,
     connect: gw => { gateway = gw; }, close: () => { closed = true; },
   };
 }

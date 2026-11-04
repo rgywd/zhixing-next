@@ -1,6 +1,6 @@
 {
   "name": "zhixing-next",
-  "version": "0.2.13",
+  "version": "0.2.14",
   "main": "index.ts",
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
@@ -45,7 +45,8 @@
     "bundle:android": "expo export --platform android --output-dir dist/android",
     "bundle:ios": "expo export --platform ios --output-dir dist/ios",
     "test:dsh": "node --test plugins/dsh-*/tests/*.test.mjs",
-    "test:dsh:integration": "node plugins/dsh-zhixing/tests/integration.mjs"
+    "test:dsh:integration": "node plugins/dsh-zhixing/tests/integration.mjs",
+    "test:dsh:models": "node plugins/dsh-zhixing/tests/model-integration.mjs"
   },
   "private": true
 }

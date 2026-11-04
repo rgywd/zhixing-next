@@ -8,6 +8,7 @@ import { declaredFile, deliveryBytes } from './deliveries.mjs';
 import { businessPath } from './business/service.mjs';
 import { createMetrics, contextSnapshot } from './metrics.mjs';
 import { createChatSettings } from './settings.mjs';
+import { createModelSettings, modelProtocols, resolveSelection } from './models.mjs';
 
 const page = items => ({ items, next_cursor: null, previous_cursor: null });
 const own = id => /^zhixing-(main|finance|health)-[a-f0-9-]+$/.test(id);
@@ -39,10 +40,10 @@ export function conversation(row) {
     blocked: false, updated_at: new Date(row.updatedAt).toISOString() };
 }
 
-export function modelCatalog(catalog, images = new Map()) {
+export function modelCatalog(catalog, images = new Map(), protocols = new Map()) {
   return { items: catalog.groups.flatMap(group => group.models.map(model => ({
     id: routeId({ provider: group.id, model: model.id }), name: model.name, model: model.id, provider: group.id,
-    protocol: 'chat_completions', ready: catalog.routableProviders.includes(group.id), image_input: images.get(routeId({ provider: group.id, model: model.id })) ?? false,
+    protocol: protocols.get(group.id) ?? 'unknown', ready: catalog.routableProviders.includes(group.id), image_input: images.get(routeId({ provider: group.id, model: model.id })) ?? false,
     reasoning_levels: model.reasoning?.efforts.map(e => e.id) ?? [],
     reasoning_labels: Object.fromEntries(model.reasoning?.efforts.map(e => [e.id, e.name]) ?? []),
     default_reasoning_effort: model.reasoning?.defaultEffort ?? null,
@@ -104,6 +105,7 @@ export async function startServer(ctx, config, native = {}) {
   const owns = id => own(id) || children.has(id);
   const interactions = createInteractions(ctx, owns);
   const chatSettings = createChatSettings(ctx);
+  const modelSettings = createModelSettings(ctx);
   const metrics = createMetrics(ctx);
   const compactions = new Map();
   const nativeCompactions = new Set();
@@ -174,16 +176,14 @@ export async function startServer(ctx, config, native = {}) {
     if (result.error) throw result.error;
     return result.agent;
   };
-  const selectModel = async (sessionId, body) => {
-    const defaults = (await ctx.sessionController.modelCatalog()).default;
-    let selected;
-    try { selected = body.model_id ? JSON.parse(body.model_id) : [defaults.provider, defaults.model]; }
-    catch { throw failure('无效的模型标识。'); }
-    if (!Array.isArray(selected) || selected.length !== 2 || selected.some(value => typeof value !== 'string' || !value)) throw failure('无效的模型标识。');
-    const [provider, model] = selected;
-    await ctx.sessionController.selectModel({ sessionId, provider, model,
-      ...(body.reasoning_effort && body.reasoning_effort !== 'auto' ? { reasoningEffort: body.reasoning_effort } : {}) });
-  };
+  const selectModel = (sessionId, body) => serial(`admission:${sessionId}`, async () => {
+    const selected = await resolveSelection(ctx, body.model_id ?? null, body.reasoning_effort);
+    const agent = await resolve(sessionId);
+    // Native selectModel also changes the host default in the background. This
+    // control is session-only. Serialize it with this outlet's image admission.
+    agent.model.select(selected);
+    await ctx.sessions.flush(agent.session);
+  });
   const flush = async id => { const session = ctx.sessions.get(id); if (session) await ctx.sessions.flush(session); };
   async function* records(id) {
     await flush(id);
@@ -212,9 +212,9 @@ export async function startServer(ctx, config, native = {}) {
     // Serialize admission as well as using DSH's durable rpcId deduplication.
     const previous = sends.get(id) ?? Promise.resolve();
     const operation = previous.catch(() => {}).then(async () => {
-      const result = await ctx.sessionController.prompt({ sessionId: id, requestId: body.id,
+      const result = await serial(`admission:${id}`, () => ctx.sessionController.prompt({ sessionId: id, requestId: body.id,
         mode: body.intent ?? chatSettings.busyBehavior(),
-        content: body.parts ?? [{ type: 'text', text: body.content ?? '' }] }, signal());
+        content: body.parts ?? [{ type: 'text', text: body.content ?? '' }] }, signal()));
       await flush(id);
       return result;
     });
@@ -230,6 +230,11 @@ export async function startServer(ctx, config, native = {}) {
       const url = new URL(req.url, 'http://localhost');
       const path = url.pathname;
       const method = req.method;
+      if (method === 'GET' && path === '/v1/settings/models') return reply(modelSettings.read());
+      if (method === 'PUT' && path === '/v1/settings/models') {
+        const body = await json(req);
+        return reply(await serial('settings/models', () => modelSettings.write(body)));
+      }
       if (method === 'GET' && path === '/v1/settings/chat') return reply(chatSettings.read());
       if (method === 'PUT' && path === '/v1/settings/chat') {
         const body = await json(req);
@@ -247,7 +252,7 @@ export async function startServer(ctx, config, native = {}) {
           const info = await ctx.llm.resolveModelInfo(g.id, m.id);
           images.set(routeId({ provider: g.id, model: m.id }), info.inputModalities?.includes('image') ?? false);
         })));
-        return reply(modelCatalog(catalog, images));
+        return reply(modelCatalog(catalog, images, modelProtocols(ctx)));
       }
       if (method === 'GET' && path === '/v1/agents') return reply(page(native.business ? ['finance', 'health'].map(id => ({ id,
         kind: 'service', service: id, name: id === 'finance' ? '财务助手' : '健康助手', description: 'DSH · 知行业务服务',
